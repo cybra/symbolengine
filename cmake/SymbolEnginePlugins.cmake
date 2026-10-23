@@ -96,7 +96,8 @@ set(SYMBOLENGINE_PLUGIN_ENTRY ${PROJECT_SOURCE_DIR}/Modules/plugin/entry/ClapEnt
 #     OUTPUT_NAME <name>              # the plugin's file name, such as "Gain"
 #     BUNDLE_IDENTIFIER <identifier>  # such as com.example.gain
 #     [VERSION <version>]
-#     [FORMATS CLAP VST3 AUV2]        # CLAP alone if not given; AUV2 is built on a Mac only
+#     [FORMATS CLAP VST3 AUV2]        # CLAP is always built, as every other format is built from it; AUV2 is
+#                                     # built on a Mac only, from Objective-C++ as well, which the project enables
 #     [AU_TYPE <code>]                # aufx for an effect (the default), aumf for an effect that takes notes,
 #                                     # aumu for an instrument
 #     [AU_SUBTYPE <code>]             # four characters, the plugin's own among its maker's
@@ -124,8 +125,8 @@ function(symbolengine_add_plugin target)
     if(NOT plugin_VERSION)
         set(plugin_VERSION ${PROJECT_VERSION})
     endif()
-    if(NOT plugin_FORMATS)
-        set(plugin_FORMATS CLAP)
+    if(NOT CLAP IN_LIST plugin_FORMATS)
+        list(PREPEND plugin_FORMATS CLAP)
     endif()
     if(NOT plugin_AU_TYPE)
         set(plugin_AU_TYPE aufx)
@@ -160,6 +161,10 @@ function(symbolengine_add_plugin target)
         endforeach()
         if(NOT plugin_AU_MANUFACTURER_CODE MATCHES "[A-Z]")
             message(FATAL_ERROR "symbolengine_add_plugin(${target}): an Audio Unit's manufacturer code needs a capital letter")
+        endif()
+        if(NOT CMAKE_OBJCXX_COMPILER_LOADED)
+            message(FATAL_ERROR "symbolengine_add_plugin(${target}) builds an Audio Unit, which is built from Objective-C++ "
+                "as well: enable_language(OBJC OBJCXX) in the project on a Mac")
         endif()
 
         symbolengine_fetch_audiounit_sdk()
