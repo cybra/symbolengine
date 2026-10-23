@@ -114,6 +114,16 @@ function(symbolengine_validate_plugin target)
         endif()
     endif()
 
+    # On a Mac, each bundle's signature holds for the whole bundle, as hosts that check it need.
+    if(APPLE)
+        set(bundles)
+        foreach(format IN LISTS formats)
+            string(TOLOWER ${format} suffix)
+            list(APPEND bundles $<TARGET_BUNDLE_DIR:${target}_${suffix}>)
+        endforeach()
+        add_test(NAME "${target}: signatures" COMMAND codesign --verify --strict --verbose=1 ${bundles})
+    endif()
+
     # Every build, whether or not auval runs: the Audio Unit's Info.plist names it, as macOS needs to find it.
     if(APPLE AND AUV2 IN_LIST formats)
         list(GET au_codes 2 manufacturer)

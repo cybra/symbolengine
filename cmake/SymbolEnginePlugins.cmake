@@ -82,6 +82,9 @@ function(symbolengine_fetch_audiounit_sdk)
     set(SYMBOLENGINE_AUDIOUNIT_SDK_ROOT ${symbolengine_audiounit_sdk_SOURCE_DIR} CACHE INTERNAL "")
 endfunction()
 
+set(SYMBOLENGINE_CODESIGN_IDENTITY "-" CACHE STRING
+    "The identity plugin bundles are signed with on a Mac, such as a Developer ID Application; - signs them ad hoc")
+
 set(SYMBOLENGINE_PLUGIN_ENTRY ${PROJECT_SOURCE_DIR}/Modules/plugin/entry/ClapEntry.cpp
     CACHE INTERNAL "The source of the entry point compiled into each plugin")
 
@@ -204,6 +207,28 @@ function(symbolengine_add_plugin target)
             VERBATIM)
         add_dependencies(${target}_auv2_info ${target}_auv2)
         add_dependencies(${target}_all ${target}_auv2_info)
+    endif()
+
+    # On a Mac the linker signs only the binary, and a host that checks the whole bundle, as Live does with a VST3,
+    # refuses it. Each bundle is signed whole after every build, after the Audio Unit's Info.plist is back in place.
+    if(APPLE)
+        set(bundles)
+        foreach(format IN LISTS plugin_FORMATS)
+            string(TOLOWER ${format} suffix)
+            list(APPEND bundles $<TARGET_BUNDLE_DIR:${target}_${suffix}>)
+        endforeach()
+        add_custom_target(${target}_sign ALL
+            COMMAND codesign --force --sign ${SYMBOLENGINE_CODESIGN_IDENTITY} ${bundles}
+            COMMENT "Signing ${target}'s plugins"
+            VERBATIM)
+        foreach(format IN LISTS plugin_FORMATS)
+            string(TOLOWER ${format} suffix)
+            add_dependencies(${target}_sign ${target}_${suffix})
+        endforeach()
+        if(TARGET ${target}_auv2_info)
+            add_dependencies(${target}_sign ${target}_auv2_info)
+        endif()
+        add_dependencies(${target}_all ${target}_sign)
     endif()
 
     set_target_properties(${implementation} PROPERTIES
