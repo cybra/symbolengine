@@ -37,6 +37,8 @@ struct TestHost
                 return &of(h).latency;
             if (std::strcmp(id, CLAP_EXT_GUI) == 0)
                 return &of(h).gui;
+            if (std::strcmp(id, CLAP_EXT_STATE) == 0)
+                return &of(h).state;
             if (std::strcmp(id, CLAP_WRAPPER_WIDE_SPEAKERS) == 0 && of(h).offerWideSpeakers)
                 return &of(h).wideSpeakers;
             return nullptr;
@@ -49,6 +51,7 @@ struct TestHost
         params.clear = [](const clap_host*, clap_id, clap_param_clear_flags) {};
         params.request_flush = [](const clap_host* h) { ++of(h).flushRequests; };
         latency.changed = [](const clap_host* h) { ++of(h).latencyChanges; };
+        state.mark_dirty = [](const clap_host* h) { ++of(h).dirtied; };
         gui.resize_hints_changed = [](const clap_host*) {};
         gui.request_resize = [](const clap_host* h, std::uint32_t w, std::uint32_t height) {
             of(h).resizeRequests.emplace_back(w, height);
@@ -68,6 +71,8 @@ struct TestHost
     clap_host_params params{};
     clap_host_latency latency{};
     clap_host_gui gui{};
+    clap_host_state state{};
+    int dirtied = 0;
     clap_wrapper_wide_speakers wideSpeakers{};
     bool offerWideSpeakers = false;   // as clap-wrapper's VST3 and AU wrappers do
     int restarts = 0;

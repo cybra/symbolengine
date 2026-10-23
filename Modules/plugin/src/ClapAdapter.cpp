@@ -138,6 +138,7 @@ public:
     const clap_host_params* hostParams = nullptr;
     const clap_host_latency* hostLatency = nullptr;
     const clap_host_gui* hostGui = nullptr;
+    const clap_host_state* hostState = nullptr;
     bool hostWideSpeakers = false;   // whether the host names the wide pair, as clap-wrapper's VST3 and AU do
     std::unique_ptr<Plugin> plugin;
     Buses buses;
@@ -163,6 +164,7 @@ public:
             hostParams = static_cast<const clap_host_params*>(host->get_extension(host, CLAP_EXT_PARAMS));
             hostLatency = static_cast<const clap_host_latency*>(host->get_extension(host, CLAP_EXT_LATENCY));
             hostGui = static_cast<const clap_host_gui*>(host->get_extension(host, CLAP_EXT_GUI));
+            hostState = static_cast<const clap_host_state*>(host->get_extension(host, CLAP_EXT_STATE));
             hostWideSpeakers = host->get_extension(host, CLAP_WRAPPER_WIDE_SPEAKERS) != nullptr;
 
             buses = plugin->buses();
@@ -248,6 +250,12 @@ public:
         // Asked again when the host next activates the plugin, which it does at once when asked to restart.
         if (active)
             host->request_restart(host);
+    }
+
+    void stateChanged() override
+    {
+        if (hostState != nullptr)
+            hostState->mark_dirty(host);
     }
 
     void editorSizeChanged() override
@@ -971,6 +979,16 @@ const clap_plugin_configurable_audio_ports configurablePorts{
 // Offered to say the plugin takes the wide pair, which it uses only with a host that offers it too.
 const clap_wrapper_wide_speakers wideSpeakers{0};
 
+// The plugin keeps up with real time when it has to and takes longer when the host renders offline.
+const clap_plugin_render render{
+    .has_hard_realtime_requirement = [](const clap_plugin*) { return false; },
+    .set =
+        [](const clap_plugin* p, clap_plugin_render_mode mode) {
+            detail::Access::setOffline(*Instance::of(p).plugin, mode == CLAP_RENDER_OFFLINE);
+            return true;
+        },
+};
+
 const clap_plugin_latency latencies{
     .get = [](const clap_plugin* p) { return Instance::of(p).latency(); },
 };
@@ -1035,6 +1053,8 @@ const void* Instance::extension(const char* id) const noexcept
         return &configurablePorts;
     if (std::strcmp(id, CLAP_EXT_LATENCY) == 0)
         return &latencies;
+    if (std::strcmp(id, CLAP_EXT_RENDER) == 0)
+        return &render;
     if (std::strcmp(id, CLAP_EXT_TAIL) == 0)
         return &tails;
 #if SYMBOLENGINE_EDITORS

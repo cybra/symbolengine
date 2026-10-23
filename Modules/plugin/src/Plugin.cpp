@@ -114,6 +114,12 @@ void Plugin::latencyChanged()
         host->latencyChanged();
 }
 
+void Plugin::stateChanged()
+{
+    if (host != nullptr)
+        host->stateChanged();
+}
+
 Object Plugin::saveParameters() const
 {
     Object saved;

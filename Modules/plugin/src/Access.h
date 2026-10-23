@@ -42,6 +42,11 @@ struct Access
 
     static void attach(Plugin& plugin, HostLink* host) noexcept { plugin.host = host; }
 
+    static void setOffline(Plugin& plugin, bool offline) noexcept
+    {
+        plugin.offline.store(offline, std::memory_order_relaxed);
+    }
+
     /** Sets the layouts the host chose, while the plugin isn't prepared. */
     static void setLayouts(Plugin& plugin, Layouts layouts) { plugin.current = std::move(layouts); }
 

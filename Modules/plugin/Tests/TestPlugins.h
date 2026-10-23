@@ -206,6 +206,8 @@ public:
         latencyChanged();
     }
 
+    using Plugin::stateChanged;
+
     static inline TestLatency* last = nullptr;
     std::uint32_t frames = 32;
 };

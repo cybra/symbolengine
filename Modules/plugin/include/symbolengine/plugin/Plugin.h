@@ -209,6 +209,7 @@ struct HostLink
     virtual ~HostLink() = default;
     virtual void latencyChanged() = 0;
     virtual void editorSizeChanged() = 0;
+    virtual void stateChanged() = 0;
 };
 
 struct Access;
@@ -297,12 +298,20 @@ public:
     /** A parameter's value now, from any thread; 0 if there is no such parameter. */
     double parameterValue(std::uint32_t id) const noexcept;
 
+    /** Any thread: whether the host is rendering offline, as when it bounces or exports, where the plugin may take as
+        long as it needs instead of keeping up with real time. */
+    bool renderingOffline() const noexcept { return offline.load(std::memory_order_relaxed); }
+
 protected:
     /** Adds a parameter, in the constructor only. Its id must be new; it starts at its default value. */
     ParameterValue addParameter(Parameter parameter);
 
     /** Message thread: tells the host the latency has changed, so it asks latency() again. */
     void latencyChanged();
+
+    /** Message thread: tells the host the plugin's state has changed outside its parameters, as when its page's
+        choices change, so the host knows its project or preset has changed and asks to save it. */
+    void stateChanged();
 
     /** Message thread: the size in points this instance's editor opens at, such as one its saved state held; an
         editor that is open asks the host to resize it. */
@@ -320,6 +329,7 @@ private:
     std::unordered_map<std::uint32_t, std::size_t> indexOf;
     detail::HostLink* host = nullptr;
     Layouts current;
+    std::atomic<bool> offline{false};
     std::uint32_t editorWidth = 0, editorHeight = 0;   // 0 until this instance's editor has a size of its own
 };
 

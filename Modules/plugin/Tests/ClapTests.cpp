@@ -503,6 +503,22 @@ TEST_CASE("A new latency is reported when the host activates the plugin again")
     CHECK(made.extension<clap_plugin_tail>(CLAP_EXT_TAIL).get(made.plugin) == 0);
 }
 
+TEST_CASE("A plugin tells the host its state changed, and hears when the host renders offline")
+{
+    TestHost host;
+    Made made(host, "test.latency");
+    tests::TestLatency::last->stateChanged();
+    CHECK(host.dirtied == 1);
+
+    const auto& render = made.extension<clap_plugin_render>(CLAP_EXT_RENDER);
+    CHECK_FALSE(render.has_hard_realtime_requirement(made.plugin));
+    CHECK_FALSE(tests::TestLatency::last->renderingOffline());
+    REQUIRE(render.set(made.plugin, CLAP_RENDER_OFFLINE));
+    CHECK(tests::TestLatency::last->renderingOffline());
+    REQUIRE(render.set(made.plugin, CLAP_RENDER_REALTIME));
+    CHECK_FALSE(tests::TestLatency::last->renderingOffline());
+}
+
 TEST_CASE("Denormal numbers are flushed to zero while a plugin processes")
 {
     // Outside processing they aren't, so this test can fail.
