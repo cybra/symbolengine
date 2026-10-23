@@ -193,6 +193,19 @@ function(symbolengine_add_plugin target)
         PLUGIN_FORMATS ${plugin_FORMATS}
         ${au_arguments})
 
+    # clap-wrapper puts the Audio Unit's Info.plist, which names it to macOS, into its bundle only when the bundle
+    # links, and configuring the project writes CMake's own over it; until the next link macOS can't find the Audio
+    # Unit. Copying it in after every build keeps it.
+    if(AUV2 IN_LIST plugin_FORMATS)
+        add_custom_target(${target}_auv2_info ALL
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_CURRENT_BINARY_DIR}/${target}_auv2-build-helper-output/auv2_Info.plist
+                $<TARGET_BUNDLE_CONTENT_DIR:${target}_auv2>/Info.plist
+            VERBATIM)
+        add_dependencies(${target}_auv2_info ${target}_auv2)
+        add_dependencies(${target}_all ${target}_auv2_info)
+    endif()
+
     set_target_properties(${implementation} PROPERTIES
         SYMBOLENGINE_FORMATS "${plugin_FORMATS}"
         SYMBOLENGINE_AU_CODES "${plugin_AU_TYPE};${plugin_AU_SUBTYPE};${plugin_AU_MANUFACTURER_CODE}")

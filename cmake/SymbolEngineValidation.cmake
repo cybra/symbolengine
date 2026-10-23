@@ -114,6 +114,14 @@ function(symbolengine_validate_plugin target)
         endif()
     endif()
 
+    # Every build, whether or not auval runs: the Audio Unit's Info.plist names it, as macOS needs to find it.
+    if(APPLE AND AUV2 IN_LIST formats)
+        list(GET au_codes 2 manufacturer)
+        add_test(NAME "${target}: Audio Unit's Info.plist"
+            COMMAND ${CMAKE_COMMAND} -DPLIST=$<TARGET_BUNDLE_CONTENT_DIR:${target}_auv2>/Info.plist
+                -DMANUFACTURER=${manufacturer} -P ${PROJECT_SOURCE_DIR}/cmake/CheckAudioUnitInfo.cmake)
+    endif()
+
     if(APPLE AND SYMBOLENGINE_AUVAL AND AUV2 IN_LIST formats)
         list(GET au_codes 0 type)
         list(GET au_codes 1 subtype)
