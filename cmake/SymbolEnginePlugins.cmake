@@ -98,7 +98,8 @@ set(SYMBOLENGINE_PLUGIN_ENTRY ${PROJECT_SOURCE_DIR}/Modules/plugin/entry/ClapEnt
 #     [AU_MANUFACTURER_NAME <name>]
 #     [LIBRARIES <libraries...>])
 #
-# Builds the plugins listed in the sources' SYMBOLENGINE_PLUGINS. The plugins themselves go in <target>_impl, a
+# Builds the plugins listed in the sources' SYMBOLENGINE_PLUGINS; a build with the sanitizers makes the CLAP build
+# alone. The plugins themselves go in <target>_impl, a
 # static library, and each format's build of it is <target>_clap, <target>_vst3 and <target>_auv2, all in
 # <build>/Plugins/<target>. An Audio Unit's codes are its identity in every host and session, as a VST3 plugin's
 # class ID is, so neither may change once the plugin is released.
@@ -128,6 +129,12 @@ function(symbolengine_add_plugin target)
 
     if(NOT APPLE)
         list(REMOVE_ITEM plugin_FORMATS AUV2)
+    endif()
+
+    # A plugin built with the sanitizers leaves their runtime for the program that loads it to bring, which the
+    # other formats' wrappers refuse to link, so such a build makes the CLAP build alone.
+    if(CMAKE_CXX_FLAGS MATCHES "-fsanitize")
+        set(plugin_FORMATS CLAP)
     endif()
 
     set(au_arguments)
@@ -164,6 +171,13 @@ function(symbolengine_add_plugin target)
     # its own binary except the entry point.
     set_target_properties(${implementation} PROPERTIES
         CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON POSITION_INDEPENDENT_CODE ON)
+
+    # clap-wrapper builds the formats' wrappers here, where they must be position independent too to link into a
+    # plugin, and hidden, as everything in one is.
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+    set(CMAKE_CXX_VISIBILITY_PRESET hidden)
+    set(CMAKE_OBJCXX_VISIBILITY_PRESET hidden)
+    set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 
     # A VST3 plugin on Windows is a folder, as on the other systems, which Steinberg's validator expects.
     make_clapfirst_plugins(

@@ -36,7 +36,7 @@ A plugin is a class derived from `Plugin`, written once, whose static `describe(
 
 A plugin binary lists its plugins with `SYMBOLENGINE_PLUGINS`, and `symbolengine_add_plugin` in CMake builds it as CLAP, VST3 and Audio Units. Every format is built through CLAP, and clap-wrapper turns the CLAP build into each other format, so a fix lands in every format at once. The VST3 SDK and Apple's AudioUnitSDK are fetched, pinned by checksum, only when a plugin is built in a format that needs them. Nothing in a plugin is visible outside it but its entry point, so plugins built on different versions of SymbolEngine load side by side in one host.
 
-Every plugin built in the repository is checked in continuous integration: loaded from its binary as a host loads it, made, run and destroyed, on every system and in the sanitizer build; by CLAP's validator and Steinberg's VST3 validator on Mac, Windows and Linux; by pluginval, run as a separate tool, at its strictest level; and by Apple's auval on the Mac.
+Every plugin built in the repository is checked in continuous integration: loaded from its binary as a host loads it, made, run and destroyed, on every system and in the sanitizer build, which builds plugins as CLAP alone; by CLAP's validator and Steinberg's VST3 validator on Mac, Windows and Linux; by pluginval, run as a separate tool, at its strictest level; and by Apple's auval on the Mac.
 
 ## Moving an existing plugin
 

@@ -41,7 +41,7 @@ function(symbolengine_vst3_validator out)
             list(APPEND arguments -DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET})
         endif()
         if(CMAKE_GENERATOR_PLATFORM)
-            set(platform CMAKE_GENERATOR_PLATFORM ${CMAKE_GENERATOR_PLATFORM})
+            set(platform CMAKE_GENERATOR ${CMAKE_GENERATOR} CMAKE_GENERATOR_PLATFORM ${CMAKE_GENERATOR_PLATFORM})
         endif()
 
         ExternalProject_Add(symbolengine_vst3_validator
