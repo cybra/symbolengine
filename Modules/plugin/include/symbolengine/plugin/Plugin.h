@@ -24,24 +24,24 @@ namespace symbolengine::plugin
 /** What hosts are told about a plugin before they make one. */
 struct Description
 {
-    std::string id;   // never changes once released: hosts save sessions against it, such as
-                      // "com.example.gain"
-    std::string name;
-    std::string vendor;
-    std::string version;   // such as "1.2.0"
-    std::string description;
-    std::string url;
-    std::string manualUrl;
-    std::string supportUrl;
-    std::vector<std::string> features;   // CLAP's feature names, such as "audio-effect", "analyzer" and "stereo"
+    std::string id{};   // never changes once released: hosts save sessions against it, such as
+                        // "com.example.gain"
+    std::string name{};
+    std::string vendor{};
+    std::string version{};   // such as "1.2.0"
+    std::string description{};
+    std::string url{};
+    std::string manualUrl{};
+    std::string supportUrl{};
+    std::vector<std::string> features{};   // CLAP's feature names, such as "audio-effect", "analyzer" and "stereo"
 };
 
 /** One of a plugin's parameters, the settings a host can save, show and automate. */
 struct Parameter
 {
     std::uint32_t id = 0;   // never changes once released: hosts record automation against it
-    std::string name;
-    std::string group;   // where the host lists it, with groups inside groups parted by '/', such as "Band 1"
+    std::string name{};
+    std::string group{};   // where the host lists it, with groups inside groups parted by '/', such as "Band 1"
     double minimum = 0.0;
     double maximum = 1.0;
     double defaultValue = 0.0;
@@ -51,10 +51,10 @@ struct Parameter
     bool bypass = false;   // the plugin's own bypass, which hosts show as theirs: stepped, 0 or 1
 
     /** The value as text, such as "-6.0 dB"; without it, the number to two decimal places. */
-    std::function<std::string(double)> toText;
+    std::function<std::string(double)> toText{};
 
     /** Text typed into a host as a value; without it, the number it starts with. */
-    std::function<std::optional<double>(std::string_view)> fromText;
+    std::function<std::optional<double>(std::string_view)> fromText{};
 };
 
 /** A parameter's value, read from any thread, the audio thread included. */
@@ -78,7 +78,7 @@ private:
 /** A plugin's audio inputs or outputs; the first is its main one. */
 struct Bus
 {
-    std::string name;
+    std::string name{};
     std::uint32_t channels = 2;
 };
 

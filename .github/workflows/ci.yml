@@ -58,7 +58,8 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/clap-validator" && cd "$RUNNER_TEMP/clap-validator"
           curl -sSfL -o validator.zip "https://github.com/free-audio/clap-validator/releases/download/0.4.1/$ASSET"
-          if command -v sha256sum > /dev/null; then echo "$SHA256  validator.zip" | sha256sum -c; else echo "$SHA256  validator.zip" | shasum -a 256 -c; fi
+          if command -v shasum > /dev/null; then actual=$(shasum -a 256 validator.zip | cut -d' ' -f1); else actual=$(sha256sum validator.zip | cut -d' ' -f1); fi
+          [ "$actual" = "$SHA256" ] || { echo "validator.zip has checksum $actual, not $SHA256"; exit 1; }
           unzip -q validator.zip
           for archive in *.tar.gz; do if [ -e "$archive" ]; then tar xzf "$archive"; fi; done
           validator=$(find "$PWD" -type f \( -name clap-validator -o -name clap-validator.exe \) | head -n 1)

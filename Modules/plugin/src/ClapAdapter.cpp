@@ -311,9 +311,14 @@ public:
         const auto& about = plugin->parameters()[index];
         info = {};
         info.id = about.id;
-        info.flags = (about.automatable ? CLAP_PARAM_IS_AUTOMATABLE : 0u) |
-                     (about.stepped ? CLAP_PARAM_IS_STEPPED : 0u) | (about.hidden ? CLAP_PARAM_IS_HIDDEN : 0u) |
-                     (about.bypass ? CLAP_PARAM_IS_BYPASS : 0u);
+        if (about.automatable)
+            info.flags |= CLAP_PARAM_IS_AUTOMATABLE;
+        if (about.stepped)
+            info.flags |= CLAP_PARAM_IS_STEPPED;
+        if (about.hidden)
+            info.flags |= CLAP_PARAM_IS_HIDDEN;
+        if (about.bypass)
+            info.flags |= CLAP_PARAM_IS_BYPASS;
         info.cookie = reinterpret_cast<void*>(static_cast<std::uintptr_t>(index) + 1);
         copyText(info.name, sizeof info.name, about.name);
         copyText(info.module, sizeof info.module, about.group);
@@ -437,7 +442,8 @@ public:
         info = {};
         info.id = index;
         copyText(info.name, sizeof info.name, bus.name);
-        info.flags = index == 0 ? CLAP_AUDIO_PORT_IS_MAIN : 0;
+        if (index == 0)
+            info.flags |= CLAP_AUDIO_PORT_IS_MAIN;
         info.channel_count = bus.channels;
         info.port_type = bus.channels == 1 ? CLAP_PORT_MONO : bus.channels == 2 ? CLAP_PORT_STEREO : nullptr;
         info.in_place_pair = index < other.size() && other[index].channels == bus.channels ? index : CLAP_INVALID_ID;
