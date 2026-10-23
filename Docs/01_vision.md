@@ -33,8 +33,8 @@ SymbolEngine's license is MIT. It is a product of Cyberhost LLC, which holds its
 
 ## Platforms
 
-Mac (Apple Silicon and Intel) and Windows first, with Linux as a first-class platform for the plugins and apps that want it, its continuous integration running from the start, since public repositories get GitHub's own Mac, Windows and Linux runners free.
+Mac (Apple Silicon and Intel, macOS 11 or later) and Windows (10 or later) first, with Linux as a first-class platform for the plugins and apps that want it, its continuous integration running from the start, since public repositories get GitHub's own Mac, Windows and Linux runners free. Linux builds and tests every part that doesn't reach into the system from the first commit; its devices and web view follow the first release.
 
 ## The name
 
-SymbolEngine, one word. Its home is [symbolengine.dev](https://symbolengine.dev), and its code is at [github.com/symbol-engine](https://github.com/symbol-engine).
+SymbolEngine, one word. Its home is [symbolengine.dev](https://symbolengine.dev), and its code is at [github.com/cybra/symbolengine](https://github.com/cybra/symbolengine).

@@ -2,10 +2,49 @@
 
 An open-source C++ framework for audio applications and plugins, free for any use, open or closed source, with no revenue limits, seats or splash screens. It builds plugins in every format, hosts other makers' plugins, runs audio devices and gives desktop apps web-page interfaces. Its first user is Symbol Studio, a commercial audio app in development, so every part is proven in a real product before it is called done.
 
-Status: planning. Its license is MIT, its code is at [github.com/symbol-engine](https://github.com/symbol-engine), and its home will be [symbolengine.dev](https://symbolengine.dev). SymbolEngine is a product of Cyberhost LLC.
+Status: building the foundations. The first release comes when Symbol Studio runs on SymbolEngine alone. Its license is MIT, its code is at [github.com/cybra/symbolengine](https://github.com/cybra/symbolengine), and its home will be [symbolengine.dev](https://symbolengine.dev). SymbolEngine is a product of Cyberhost LLC.
+
+## Using it
+
+Each module is a CMake target. A project takes SymbolEngine in with FetchContent:
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(SymbolEngine
+    GIT_REPOSITORY https://github.com/cybra/symbolengine.git
+    GIT_TAG        main)   # until the first release; then a release's tag
+FetchContent_MakeAvailable(SymbolEngine)
+
+target_link_libraries(my_app PRIVATE SymbolEngine::core)
+```
+
+or, once it is installed, with `find_package(SymbolEngine REQUIRED COMPONENTS core)`.
+
+```cpp
+#include <symbolengine/core.h>
+
+using namespace symbolengine;
+
+SettingsFile settings(paths::systemFolder(paths::Folder::appData) / "My App" / "settings.json");
+settings.set("rate", 48000);
+
+const auto project = json::parse(files::read("take.json"));
+const auto path = project["sources"][0]["path"].stringOr("");
+```
+
+It needs CMake 3.25 or later and a C++20 compiler, and runs on macOS 11 or later, Windows 10 or later, and Linux.
+
+## Modules
+
+| Module | Now |
+|---|---|
+| core | Values with JSON, UTF-8 text, paths and the system's folders, files written safely, settings files |
+
+The [architecture](Docs/02_architecture.md) describes the modules to come: files, devices, ui, app, plugin and host.
 
 ## Docs
 
 - [Vision](Docs/01_vision.md): why it exists, who it is for, what it promises, its license, platforms and name.
 - [Architecture](Docs/02_architecture.md): its modules, what each is built on, its rules for threads and real time, and what real plugins and devices have taught.
 - [ToDo](Docs/ToDo.md): where things stand, the open questions and the phases.
+- [Contributing](CONTRIBUTING.md): building, testing, the rules for code, and signing off.

@@ -1,0 +1,94 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "SYMBOLENGINE_TESTS": "ON",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "mac",
+      "displayName": "Mac",
+      "inherits": "base",
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "11.0"
+      },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" }
+    },
+    {
+      "name": "windows",
+      "displayName": "Windows",
+      "inherits": "base",
+      "architecture": { "value": "x64", "strategy": "set" },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    },
+    {
+      "name": "linux",
+      "displayName": "Linux",
+      "inherits": "base",
+      "generator": "Ninja",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
+    },
+    {
+      "name": "ci-mac",
+      "inherits": "mac",
+      "generator": "Unix Makefiles",
+      "cacheVariables": {
+        "SYMBOLENGINE_WARNINGS_AS_ERRORS": "ON",
+        "CMAKE_OSX_ARCHITECTURES": "arm64;x86_64"
+      }
+    },
+    {
+      "name": "ci-windows",
+      "inherits": "windows",
+      "cacheVariables": { "SYMBOLENGINE_WARNINGS_AS_ERRORS": "ON" }
+    },
+    {
+      "name": "ci-linux",
+      "inherits": "linux",
+      "generator": "Unix Makefiles",
+      "cacheVariables": { "SYMBOLENGINE_WARNINGS_AS_ERRORS": "ON" }
+    },
+    {
+      "name": "ci-linux-sanitizers",
+      "inherits": "ci-linux",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "mac", "configurePreset": "mac" },
+    { "name": "windows", "configurePreset": "windows", "configuration": "Debug" },
+    { "name": "linux", "configurePreset": "linux" },
+    { "name": "ci-mac", "configurePreset": "ci-mac", "jobs": 4 },
+    { "name": "ci-windows", "configurePreset": "ci-windows", "configuration": "Debug" },
+    { "name": "ci-linux", "configurePreset": "ci-linux", "jobs": 4 },
+    { "name": "ci-linux-sanitizers", "configurePreset": "ci-linux-sanitizers", "jobs": 4 }
+  ],
+  "testPresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "output": { "outputOnFailure": true },
+      "execution": { "jobs": 4, "noTestsAction": "error" }
+    },
+    { "name": "mac", "inherits": "base", "configurePreset": "mac" },
+    { "name": "windows", "inherits": "base", "configurePreset": "windows", "configuration": "Debug" },
+    { "name": "linux", "inherits": "base", "configurePreset": "linux" },
+    { "name": "ci-mac", "inherits": "base", "configurePreset": "ci-mac" },
+    { "name": "ci-windows", "inherits": "base", "configurePreset": "ci-windows", "configuration": "Debug" },
+    { "name": "ci-linux", "inherits": "base", "configurePreset": "ci-linux" },
+    { "name": "ci-linux-sanitizers", "inherits": "base", "configurePreset": "ci-linux-sanitizers" }
+  ]
+}

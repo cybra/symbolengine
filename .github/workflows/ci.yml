@@ -1,0 +1,76 @@
+name: Build and test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Mac
+            os: macos-latest
+            preset: ci-mac
+          - name: Windows
+            os: windows-latest
+            preset: ci-windows
+          - name: Linux
+            os: ubuntu-latest
+            preset: ci-linux
+          - name: Linux with sanitizers
+            os: ubuntu-latest
+            preset: ci-linux-sanitizers
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The number tests check writing and reading in a locale with a decimal comma.
+      - name: German locale
+        if: runner.os == 'Linux'
+        run: sudo locale-gen de_DE.UTF-8
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+  sign-off:
+    name: Sign-off
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Every commit is signed off by its author
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          missing=0
+          for commit in $(git rev-list --no-merges "$BASE..$HEAD"); do
+            email=$(git show -s --format=%ae "$commit")
+            if ! git show -s --format='%(trailers:key=Signed-off-by,valueonly)' "$commit" | grep -qiF "<$email>"; then
+              echo "::error::$(git show -s --format='%h %s' "$commit") has no Signed-off-by line from its author, $email"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Sign off each commit with git commit -s, as CONTRIBUTING.md describes."
+          fi
+          exit "$missing"

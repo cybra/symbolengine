@@ -14,6 +14,14 @@ Each module is a CMake target usable on its own, with its own tests, guide and e
 | plugin | Plugins written once against a CLAP-shaped C++ interface (parameters, state, buses, latency, processing, an editor as a web page) and built as CLAP, VST3, AU v2 and v3, AAX and standalone | CLAP, clap-wrapper, VST3 SDK, AudioUnitSDK, the developer's AAX SDK |
 | host | Hosting other makers' plugins: VST3, AU v2 and v3, CLAP; scanning in worker processes; a plugin made in the background or at once, on the message thread or out of process for AU v3; buses, state, parameters, latency, offline rendering, and its editor in a window | VST3 SDK, AudioToolbox, CLAP |
 
+## Layout and conventions
+
+Each module lives in `Modules/<name>`: its public headers in `include/symbolengine/<name>/`, with `symbolengine/<name>.h` including them all, its sources in `src`, and its tests in `Tests`. It builds as the static library `SymbolEngine::<name>`. Everything is in the namespace `symbolengine`, classes at its top and groups of functions in namespaces of their own, such as `symbolengine::json`, `symbolengine::paths` and `symbolengine::files`.
+
+Text is UTF-8 in `std::string`, and paths are `std::filesystem::path`, turned to and from UTF-8 with `paths::fromUtf8` and `paths::toUtf8`, since a path's own `string()` uses the system's code page on Windows. Text written for files and for other programs, numbers included, comes out the same on every system and in every locale. A function that can fail for reasons outside the program, such as a missing file, throws `std::filesystem::filesystem_error` or, given a `std::error_code`, sets it, as `std::filesystem` does. Reading data that may not be there, such as a member of a parsed value, never throws.
+
+Values hold what JSON holds, keeping whole numbers as 64-bit integers so that sample positions stay exact, and objects keep their members in the order they were added. JSON is written as browsers write it, so a page and the native side read each other's numbers exactly. Files that hold a user's work or settings are written beside the old one and moved into its place in one step, so a crash leaves either the old file or the new one whole, and a settings file that can't be read is kept aside instead of being overwritten.
+
 ## Threads and real time
 
 Three kinds of thread, named in every interface: the message thread, which owns windows, web views and plugin editors; the audio thread, which never allocates, locks or waits, and is checked for it in debug builds; and worker threads for everything slow. Every callback says which thread it is on. Nothing is a global singleton the user didn't make; a program creates its message loop, devices and hosts and passes them where they are needed.
@@ -40,7 +48,7 @@ Lessons from recording on real devices are built in: an input runs apart from th
 
 ## Testing
 
-Unit tests for every module, the plugin validators on every example, and integration tests that open real devices where the runner has them. Continuous integration builds and tests on Mac, Windows and Linux on every push. Symbol Studio's own checks, run against each release, are the proof that the parts work together in a real product.
+Unit tests for every module, the plugin validators on every example, and integration tests that open real devices where the runner has them. Continuous integration builds and tests on Mac, Windows and Linux on every push, with warnings as errors; on the Mac for Apple Silicon and Intel together, and on Linux a second time with the address and undefined-behavior sanitizers. On each run a project outside SymbolEngine builds against it both ways a project takes it in, by FetchContent and by find_package after installing. Symbol Studio's own checks, run against each release, are the proof that the parts work together in a real product.
 
 ## Dependencies
 

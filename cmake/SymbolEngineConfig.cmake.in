@@ -1,0 +1,18 @@
+@PACKAGE_INIT@
+
+include("${CMAKE_CURRENT_LIST_DIR}/SymbolEngineTargets.cmake")
+
+set(_symbolengine_modules @SYMBOLENGINE_MODULE_LIST@)
+
+foreach(_symbolengine_component IN LISTS SymbolEngine_FIND_COMPONENTS)
+    if(_symbolengine_component IN_LIST _symbolengine_modules)
+        set(SymbolEngine_${_symbolengine_component}_FOUND TRUE)
+    else()
+        set(SymbolEngine_${_symbolengine_component}_FOUND FALSE)
+    endif()
+endforeach()
+
+unset(_symbolengine_component)
+unset(_symbolengine_modules)
+
+check_required_components(SymbolEngine)

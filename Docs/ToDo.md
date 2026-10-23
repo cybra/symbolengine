@@ -2,20 +2,22 @@
 
 ## Where things stand
 
-- **Planning.** The vision and architecture are written. The name is SymbolEngine, symbolengine.dev is registered, the license is MIT, and its home is the `symbol-engine` organization on GitHub, public from its first commit.
-- **First product on it:** a new Symbol Studio plugin, built on the framework from its first line, so the plugin module is proven by a real product from the start.
+- **Foundations.** The repository, the CMake build and continuous integration on Mac, Windows and Linux are in place, with a contributing guide and issue and pull request templates. The core module has its first parts: values with JSON, UTF-8 text, paths and the system's folders, files written safely, and settings files.
+- **The first release** comes when Symbol Studio runs on SymbolEngine alone, and the phases below follow what it needs, plugins first and hosting other makers' plugins last.
+- **Home.** The name is SymbolEngine, symbolengine.dev is registered, the license is MIT, and the code is public at github.com/cybra/symbolengine. Contributions are signed off under the Developer Certificate of Origin.
 
 ## Open questions
 
-1. **Contributions.** A Developer Certificate of Origin sign-off on each commit, without a contributor agreement, is the recommendation, so contributions come in under the same license they go out under.
-2. **Support.** Whether to accept sponsorship, such as GitHub Sponsors, while everything stays free.
+1. **Support.** Whether to accept sponsorship, such as GitHub Sponsors, while everything stays free.
+2. **Reports.** Where should security reports and code-of-conduct reports go? Recommended: security reports through GitHub's private vulnerability reporting on the repository, and conduct reports to an address used for nothing else. Until this is answered, the repository has no security policy or code of conduct.
 
 ## Phase 0: Foundations
 
-- [x] License: MIT. Home: the `symbol-engine` organization on GitHub.
-- [ ] Repository with the license, a contributing guide, a code of conduct, issue and pull request templates, and the public roadmap.
-- [ ] CMake build that a project takes in with `FetchContent` or `find_package`, each module a target; C++20; warnings as errors in continuous integration.
-- [ ] Continuous integration on Mac, Windows and Linux on every push.
+- [x] License: MIT. Code at github.com/cybra/symbolengine.
+- [x] A contributing guide with the sign-off, and issue and pull request templates.
+- [ ] A code of conduct and a security policy, once reports have somewhere to go (open question 2).
+- [x] CMake build that a project takes in with `FetchContent` or `find_package`, each module a target; C++20; warnings as errors in continuous integration.
+- [x] Continuous integration on Mac, Windows and Linux on every push, with sanitizers on Linux and a project outside SymbolEngine building against it.
 - [ ] Documentation site generated from the guides and the headers.
 
 ## Phase 1: Plugins
@@ -28,13 +30,14 @@
 
 ## Phase 2: Core, files and the app
 
-- [ ] core: text, paths, values and JSON, the message loop, timers, threads and FIFOs, logging, settings.
+- [x] core: values and JSON, UTF-8 text, paths and the system's folders, files written safely, settings files.
+- [ ] core: the message loop, timers, threads and FIFOs, logging, child processes.
 - [ ] files: WAV with BWF and iXML, AIFF, FLAC, Ogg Vorbis, MP3 reading, the systems' decoders for AAC, M4A and CAF, streaming readers.
 - [ ] ui and app: windows, native menus, dialogs, file choosers, drag and drop, clipboard, keyboard, one instance, worker processes.
 
 ## Phase 3: Devices
 
-- [ ] Core Audio, Windows Audio shared and exclusive, ASIO with the developer's SDK, ALSA, PipeWire and JACK.
+- [ ] Core Audio, Windows Audio shared and exclusive, and ASIO with the developer's SDK; ALSA, PipeWire and JACK after the first release.
 - [ ] The recording lessons in the architecture's [devices](02_architecture.md#devices) section built in, and long-take tests on real devices.
 
 ## Phase 4: Hosting

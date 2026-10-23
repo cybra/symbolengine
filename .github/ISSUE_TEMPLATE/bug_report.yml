@@ -1,0 +1,30 @@
+name: Bug report
+description: Something in SymbolEngine doesn't do what its documentation says.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen
+      description: The smallest code or steps that show it.
+      render: cpp
+  - type: input
+    id: version
+    attributes:
+      label: SymbolEngine version or commit
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: System and compiler
+      placeholder: macOS 15.6 with Xcode 26, or Windows 11 with Visual Studio 2022
+    validations:
+      required: true

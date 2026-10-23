@@ -1,0 +1,16 @@
+name: Feature request
+description: Something SymbolEngine should do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What it's for
+      description: The plugin or application that needs it, and what it can't do today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you'd like
+      description: How you'd use it, as code if that's clearest.
