@@ -4,6 +4,7 @@
 // counts what the plugins ask of it.
 
 #include <clap/clap.h>
+#include <clapwrapper/wide_speakers.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -36,6 +37,8 @@ struct TestHost
                 return &of(h).latency;
             if (std::strcmp(id, CLAP_EXT_GUI) == 0)
                 return &of(h).gui;
+            if (std::strcmp(id, CLAP_WRAPPER_WIDE_SPEAKERS) == 0 && of(h).offerWideSpeakers)
+                return &of(h).wideSpeakers;
             return nullptr;
         };
         host.request_restart = [](const clap_host* h) { ++of(h).restarts; };
@@ -65,6 +68,8 @@ struct TestHost
     clap_host_params params{};
     clap_host_latency latency{};
     clap_host_gui gui{};
+    clap_wrapper_wide_speakers wideSpeakers{};
+    bool offerWideSpeakers = false;   // as clap-wrapper's VST3 and AU wrappers do
     int restarts = 0;
     int flushRequests = 0;
     bool agreeToResize = true;

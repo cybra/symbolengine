@@ -11,8 +11,9 @@
 namespace symbolengine
 {
 
-/** The speaker a channel is for. Each has the number WAVE files' channel masks and CLAP give it, and a layout's
-    channels come in this order in WAVE files and VST3 hosts. */
+/** The speaker a channel is for. Each has the number CLAP gives it, the first eighteen also WAVE files' channel masks,
+    and the wide pair, which CLAP has no number for, comes after them. A layout's channels come in this order in WAVE
+    files and VST3 hosts. */
 enum class Speaker : std::uint8_t
 {
     left = 0,
@@ -35,10 +36,12 @@ enum class Speaker : std::uint8_t
     topBackRight = 17,
     topSideLeft = 18,   // the top pair of 5.1.2 and 7.1.2
     topSideRight = 19,
+    wideLeft = 20,   // the wide pair of Dolby's 9.1.4 and 9.1.6
+    wideRight = 21,
 };
 
 /** How many kinds of speaker there are, each numbered below this. */
-inline constexpr std::size_t speakerKinds = 20;
+inline constexpr std::size_t speakerKinds = 22;
 
 /** A bus's or a file's channels: the speaker each one is for, in order. */
 class ChannelLayout
@@ -64,8 +67,10 @@ public:
     static ChannelLayout surround714();      // 7.1 with top front and top back pairs
     static ChannelLayout surround914Itu();   // 7.1.4 with left and right center, where Dolby's 9.1.4 has wides
     static ChannelLayout surround916Itu();   // 9.1.4 ITU with top side left and right
+    static ChannelLayout surround914();      // Dolby's: 7.1.4 with wide left and right
+    static ChannelLayout surround916();      // Dolby's: 9.1.4 with top side left and right
 
-    /** Every standard layout, from mono to 9.1.6 ITU, in the order above. */
+    /** Every standard layout, from mono to 9.1.6, in the order above. */
     static std::span<const ChannelLayout> standard();
 
     /** The layout of a channel mask, (1 << speaker) for each speaker, in the order of the speakers' numbers; nothing

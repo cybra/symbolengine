@@ -5,14 +5,15 @@ include(FetchContent)
 # The CLAP SDK and clap-wrapper, pinned by checksum. Each is fetched only, not added, and clap-wrapper is pointed at
 # the CLAP SDK, so it downloads nothing of its own. clap-wrapper comes from SymbolEngine's fork, whose symbolengine
 # branch adds its changes to a clap-wrapper release, each a commit of its own: VST3 speaker arrangements a plugin
-# refuses stay refused, and Audio Units have channel layouts.
+# refuses stay refused, Audio Units have channel layouts, and Dolby's wide speakers pass between a plugin and the VST3
+# and Audio Unit wrappers.
 FetchContent_Declare(symbolengine_clap
     URL https://github.com/free-audio/clap/archive/refs/tags/1.2.10.tar.gz
     URL_HASH SHA256=58fdb977c6678859c15d57942378b651399178f49a3a8ecad1813b9f231dc096
     SOURCE_SUBDIR fetched-only)
 FetchContent_Declare(symbolengine_clap_wrapper
-    URL https://github.com/cybra/clap-wrapper/archive/ebf213fba5b4e678d4fd8f603a712d86a686444a.tar.gz # v0.17.0 and ours
-    URL_HASH SHA256=2b87867c28d19570c2d2ac5645d84d494b19ddd765a3db4a09167073dd448611
+    URL https://github.com/cybra/clap-wrapper/archive/8c30544e82fab0bb0e9be705b15e497c6d657cf3.tar.gz # v0.17.0 and ours
+    URL_HASH SHA256=e65c2b02677b5392b18e17ea061f36c8e1c7a90ac10c550698e5b193b38ab49e
     SOURCE_SUBDIR fetched-only)
 FetchContent_MakeAvailable(symbolengine_clap symbolengine_clap_wrapper)
 

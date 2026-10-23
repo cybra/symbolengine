@@ -13,6 +13,7 @@
 
 #include <clap/clap.h>
 #include <clapwrapper/vst3.h>
+#include <clapwrapper/wide_speakers.h>
 
 #if SYMBOLENGINE_EDITORS
     #include "Editor.h"
@@ -137,6 +138,7 @@ public:
     const clap_host_params* hostParams = nullptr;
     const clap_host_latency* hostLatency = nullptr;
     const clap_host_gui* hostGui = nullptr;
+    bool hostWideSpeakers = false;   // whether the host names the wide pair, as clap-wrapper's VST3 and AU do
     std::unique_ptr<Plugin> plugin;
     Buses buses;
     bool active = false;
@@ -161,6 +163,7 @@ public:
             hostParams = static_cast<const clap_host_params*>(host->get_extension(host, CLAP_EXT_PARAMS));
             hostLatency = static_cast<const clap_host_latency*>(host->get_extension(host, CLAP_EXT_LATENCY));
             hostGui = static_cast<const clap_host_gui*>(host->get_extension(host, CLAP_EXT_GUI));
+            hostWideSpeakers = host->get_extension(host, CLAP_WRAPPER_WIDE_SPEAKERS) != nullptr;
 
             buses = plugin->buses();
             Layouts given;
@@ -567,7 +570,16 @@ public:
     // Layouts
     //
     // A host asks for layouts as CLAP's configurable audio ports: a port's type and channel map, or only its channel
-    // count, which takes the first standard layout with that many channels the plugin accepts.
+    // count, which takes the first standard layout with that many channels the plugin accepts. CLAP has no numbers
+    // for the wide pair, so only a host that offers clap-wrapper's wide speakers is given layouts with them.
+
+    bool hostNames(const ChannelLayout& layout) const noexcept
+    {
+        const auto speakers = layout.speakers();
+        return hostWideSpeakers || std::none_of(speakers.begin(), speakers.end(), [](Speaker speaker) {
+                   return speaker == Speaker::wideLeft || speaker == Speaker::wideRight;
+               });
+    }
 
     std::uint32_t channelMap(bool input, std::uint32_t index, std::uint8_t* map, std::uint32_t capacity) const noexcept
     {
@@ -586,7 +598,7 @@ public:
         try
         {
             const auto layout = ChannelLayout::fromMask(mask);
-            if (!layout || layout->channels() == 0)
+            if (!layout || layout->channels() == 0 || !hostNames(*layout))
                 return false;
 
             // On the main output, the main input, or both.
@@ -655,7 +667,7 @@ public:
                 if (request.channel_count == 0 && layout.channels() != 0)
                     port.choices.emplace_back();
                 for (const auto& standard : ChannelLayout::standard())
-                    if (standard.channels() == request.channel_count && standard != layout)
+                    if (standard.channels() == request.channel_count && standard != layout && hostNames(standard))
                         port.choices.push_back(standard);
                 if (port.choices.empty())
                     return std::nullopt;
@@ -672,7 +684,7 @@ public:
                 for (std::uint32_t channel = 0; channel < request.channel_count; ++channel)
                     speakers.push_back(static_cast<Speaker>(map[channel]));
                 ChannelLayout mapped(std::move(speakers));
-                if (!mapped.valid())
+                if (!mapped.valid() || !hostNames(mapped))
                     return std::nullopt;
                 layout = std::move(mapped);
             }
@@ -956,6 +968,9 @@ const clap_plugin_configurable_audio_ports configurablePorts{
                               std::uint32_t count) { return Instance::of(p).apply(requests, count); },
 };
 
+// Offered to say the plugin takes the wide pair, which it uses only with a host that offers it too.
+const clap_wrapper_wide_speakers wideSpeakers{0};
+
 const clap_plugin_latency latencies{
     .get = [](const clap_plugin* p) { return Instance::of(p).latency(); },
 };
@@ -1013,6 +1028,8 @@ const void* Instance::extension(const char* id) const noexcept
         return &audioPorts;
     if (std::strcmp(id, CLAP_EXT_SURROUND) == 0 || std::strcmp(id, CLAP_EXT_SURROUND_COMPAT) == 0)
         return &surround;
+    if (std::strcmp(id, CLAP_WRAPPER_WIDE_SPEAKERS) == 0)
+        return &wideSpeakers;
     if (std::strcmp(id, CLAP_EXT_CONFIGURABLE_AUDIO_PORTS) == 0 ||
         std::strcmp(id, CLAP_EXT_CONFIGURABLE_AUDIO_PORTS_COMPAT) == 0)
         return &configurablePorts;

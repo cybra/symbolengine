@@ -33,7 +33,9 @@ enum : int
     TBL = 15,
     TBR = 17,
     TSL = 18,
-    TSR = 19
+    TSR = 19,
+    LW = 20,   // clap-wrapper's numbers for the wide pair, which CLAP has none for
+    RW = 21
 };
 
 struct Case
@@ -56,9 +58,16 @@ const std::vector<Case> cases{
     {"Logic's Atmos 7.1.4, L R Rls Rrs Ls Rs C LFE ...",
      kAudioChannelLayoutTag_Logic_Atmos_7_1_4_B,
      {L, R, BL, BR, SL, SR, C, LFE, TFL, TFR, TBL, TBR}},
+    {"Atmos 9.1.6, L R C LFE Ls Rs Rls Rrs Lw Rw Vhl Vhr Ltm Rtm Ltr Rtr",
+     kAudioChannelLayoutTag_Atmos_9_1_6,
+     {L, R, C, LFE, SL, SR, BL, BR, LW, RW, TFL, TFR, TSL, TSR, TBL, TBR}},
     {"6 channels alone", 0, {L, R, C, LFE, BL, BR}, kAudioChannelLayoutTag_MPEG_5_1_A},
     {"8 channels alone", 0, {L, R, C, LFE, SL, SR, BL, BR}, kAudioChannelLayoutTag_MPEG_7_1_C},
     {"12 channels alone", 0, {L, R, C, LFE, SL, SR, BL, BR, TFL, TFR, TBL, TBR}, kAudioChannelLayoutTag_Atmos_7_1_4},
+    {"16 channels alone",
+     0,
+     {L, R, C, LFE, SL, SR, BL, BR, LW, RW, TFL, TFR, TSL, TSR, TBL, TBR},
+     kAudioChannelLayoutTag_Atmos_9_1_6},
 };
 
 constexpr UInt32 frames = 64;
@@ -243,6 +252,7 @@ int main(int argc, char** argv)
         };
         std::printf("The unit offers %zu output layouts\n", tags.size());
         check(has(kAudioChannelLayoutTag_Atmos_7_1_4), "Atmos 7.1.4 is offered");
+        check(has(kAudioChannelLayoutTag_Atmos_9_1_6), "Atmos 9.1.6, with the wide pair, is offered");
         check(has(kAudioChannelLayoutTag_MPEG_5_1_A), "5.1 is offered");
         check(!has(kAudioChannelLayoutTag_MPEG_7_1_A), "7.1 with left and right center isn't offered");
         check(layoutTags(unit, kAudioUnitScope_Input) == tags, "the input offers the same layouts");

@@ -71,6 +71,18 @@ if(SYMBOLENGINE_PLUGIN)
             Stereo>Stereo 30Cine>30Cine 40Music>40Music 50>50)
 endif()
 
+# clap-wrapper's VST3 speaker arrangements, from SymbolEngine's fork, checked on their own: Dolby's wide pair has
+# numbers only for a plugin that takes it.
+if(SYMBOLENGINE_PLUGIN AND SYMBOLENGINE_VST3_SDK_ROOT)
+    FetchContent_GetProperties(symbolengine_clap_wrapper)
+    add_executable(symbolengine_vst3_speakers Vst3Speakers/Vst3SpeakersTests.cpp
+        ${symbolengine_clap_wrapper_SOURCE_DIR}/src/detail/vst3/channelmap.cpp)
+    target_include_directories(symbolengine_vst3_speakers SYSTEM PRIVATE ${SYMBOLENGINE_VST3_SDK_ROOT}
+        ${symbolengine_clap_wrapper_SOURCE_DIR}/src)
+    target_link_libraries(symbolengine_vst3_speakers PRIVATE clap clap-wrapper-extensions Catch2::Catch2WithMain)
+    catch_discover_tests(symbolengine_vst3_speakers TEST_PREFIX "clap-wrapper: " DISCOVERY_MODE PRE_TEST)
+endif()
+
 # A plugin that marks each channel with the speaker it is for. On a Mac a host in the test itself runs its Audio Unit
 # in the layouts hosts set, Logic's channel orders among them, and in channel counts alone, and checks that every
 # channel reaches the plugin as its speaker and comes back where it went in.

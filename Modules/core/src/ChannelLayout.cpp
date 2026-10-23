@@ -18,9 +18,9 @@ struct Named
     ChannelLayout layout;
 };
 
-const std::array<Named, 14>& named()
+const std::array<Named, 16>& named()
 {
-    static const std::array<Named, 14> layouts{{
+    static const std::array<Named, 16> layouts{{
         {"Mono", {center}},
         {"Stereo", {left, right}},
         {"LCR", {left, right, center}},
@@ -42,6 +42,12 @@ const std::array<Named, 14>& named()
         {"9.1.6 ITU",
          {left, right, center, lfe, backLeft, backRight, leftCenter, rightCenter, sideLeft, sideRight, topFrontLeft,
           topFrontRight, topBackLeft, topBackRight, topSideLeft, topSideRight}},
+        {"9.1.4",
+         {left, right, center, lfe, backLeft, backRight, sideLeft, sideRight, topFrontLeft, topFrontRight, topBackLeft,
+          topBackRight, wideLeft, wideRight}},
+        {"9.1.6",
+         {left, right, center, lfe, backLeft, backRight, sideLeft, sideRight, topFrontLeft, topFrontRight, topBackLeft,
+          topBackRight, topSideLeft, topSideRight, wideLeft, wideRight}},
     }};
     return layouts;
 }
@@ -124,6 +130,16 @@ ChannelLayout ChannelLayout::surround914Itu()
 ChannelLayout ChannelLayout::surround916Itu()
 {
     return at(13);
+}
+
+ChannelLayout ChannelLayout::surround914()
+{
+    return at(14);
+}
+
+ChannelLayout ChannelLayout::surround916()
+{
+    return at(15);
 }
 
 std::span<const ChannelLayout> ChannelLayout::standard()

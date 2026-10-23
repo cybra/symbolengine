@@ -23,7 +23,9 @@ TEST_CASE("The standard layouts have the channels and names their formats give t
                                                                       {ChannelLayout::surround712(), "7.1.2"},
                                                                       {ChannelLayout::surround714(), "7.1.4"},
                                                                       {ChannelLayout::surround914Itu(), "9.1.4 ITU"},
-                                                                      {ChannelLayout::surround916Itu(), "9.1.6 ITU"}};
+                                                                      {ChannelLayout::surround916Itu(), "9.1.6 ITU"},
+                                                                      {ChannelLayout::surround914(), "9.1.4"},
+                                                                      {ChannelLayout::surround916(), "9.1.6"}};
 
     REQUIRE(ChannelLayout::standard().size() == expected.size());
     for (std::size_t i = 0; i < expected.size(); ++i)
@@ -46,6 +48,9 @@ TEST_CASE("The standard layouts have the channels and names their formats give t
     CHECK(ChannelLayout::surround714().channels() == 12);
     CHECK(ChannelLayout::surround914Itu().channels() == 14);
     CHECK(ChannelLayout::surround916Itu().channels() == 16);
+    CHECK(ChannelLayout::surround914().channels() == 14);
+    CHECK(ChannelLayout::surround916().channels() == 16);
+    CHECK(ChannelLayout::surround916().channelOf(Speaker::wideRight) == 15u);
 }
 
 TEST_CASE("A layout finds the channel each speaker is on")
@@ -65,7 +70,8 @@ TEST_CASE("A channel mask gives the layout of its speakers")
     CHECK(ChannelLayout::fromMask(bit(Speaker::left) | bit(Speaker::right)) == ChannelLayout::stereo());
     CHECK(ChannelLayout::fromMask(0x3F) == ChannelLayout::surround51());
     CHECK(ChannelLayout::fromMask(0) == ChannelLayout());
-    CHECK_FALSE(ChannelLayout::fromMask(std::uint64_t{1} << 20).has_value());
+    CHECK(ChannelLayout::fromMask(std::uint64_t{3} << 20) == ChannelLayout({Speaker::wideLeft, Speaker::wideRight}));
+    CHECK_FALSE(ChannelLayout::fromMask(std::uint64_t{1} << 22).has_value());
 }
 
 TEST_CASE("Any other layout is named by its channels, and one with a speaker twice is invalid")
@@ -76,5 +82,5 @@ TEST_CASE("Any other layout is named by its channels, and one with a speaker twi
     CHECK(ChannelLayout({Speaker::right, Speaker::left}) != ChannelLayout::stereo());
 
     CHECK_FALSE(ChannelLayout({Speaker::left, Speaker::left}).valid());
-    CHECK_FALSE(ChannelLayout({static_cast<Speaker>(20)}).valid());
+    CHECK_FALSE(ChannelLayout({static_cast<Speaker>(22)}).valid());
 }

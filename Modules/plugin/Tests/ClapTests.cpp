@@ -408,6 +408,43 @@ TEST_CASE("A host asks for a layout by its channel map or its channel count, and
     CHECK_FALSE(configure(made.plugin, {elsewhere}, false));
 }
 
+TEST_CASE("Dolby's wide speakers are given only to a host that names them, as clap-wrapper's VST3 and AU wrappers do")
+{
+    const std::vector<std::uint8_t> dolby916{
+        CLAP_SURROUND_FL,  CLAP_SURROUND_FR,  CLAP_SURROUND_FC,         CLAP_SURROUND_LFE,
+        CLAP_SURROUND_BL,  CLAP_SURROUND_BR,  CLAP_SURROUND_SL,         CLAP_SURROUND_SR,
+        CLAP_SURROUND_TFL, CLAP_SURROUND_TFR, CLAP_SURROUND_TBL,        CLAP_SURROUND_TBR,
+        CLAP_SURROUND_TSL, CLAP_SURROUND_TSR, CLAP_WRAPPER_SURROUND_LW, CLAP_WRAPPER_SURROUND_RW};
+    std::uint64_t mask = 0;
+    for (const auto speaker : dolby916)
+        mask |= std::uint64_t{1} << speaker;
+    const auto supported = [](const Made& made, std::uint64_t bits) {
+        return made.extension<clap_plugin_surround>(CLAP_EXT_SURROUND).is_channel_mask_supported(made.plugin, bits);
+    };
+
+    SECTION("A CLAP host, which has no numbers for them")
+    {
+        TestHost host;
+        Made made(host, "test.spread");
+        CHECK(made.plugin->get_extension(made.plugin, CLAP_WRAPPER_WIDE_SPEAKERS) != nullptr);
+        CHECK_FALSE(configure(made.plugin, {Request::mapped(false, dolby916)}, false));
+        CHECK_FALSE(supported(made, mask));
+        REQUIRE(configure(made.plugin, {Request::counted(false, 14)}, true));
+        CHECK(TestSpread::last->layouts().outputs[0] == ChannelLayout::surround914Itu());
+    }
+
+    SECTION("A wrapper that names them")
+    {
+        TestHost host;
+        host.offerWideSpeakers = true;
+        Made made(host, "test.spread");
+        REQUIRE(configure(made.plugin, {Request::mapped(false, dolby916)}, true));
+        CHECK(TestSpread::last->layouts().outputs[0] == ChannelLayout::surround916());
+        CHECK(channelMap(made.plugin, false) == dolby916);
+        CHECK(supported(made, mask));
+    }
+}
+
 TEST_CASE("A host learns which speaker sets a plugin takes")
 {
     TestHost host;
