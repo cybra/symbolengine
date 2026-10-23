@@ -107,19 +107,23 @@ WebView::WebView(Options options) : impl(std::make_unique<Impl>(std::move(option
     settings.transparentBackground = true;
     settings.fetchResource = [this](const std::string& path) { return impl->fetch(path); };
 
+    // WebView2 takes a binding only once it has started, which may be after the page has begun loading, so the
+    // native function is bound when the view says it is ready; on a Mac that is while it is being made.
+    settings.webviewIsReady = [this](choc::ui::WebView& view) {
+        view.bind("__symbolengine_call", [this](const choc::value::ValueView& arguments) -> choc::value::Value {
+            if (!arguments.isArray() || arguments.size() != 2)
+                return choc::value::createString(json::write(Object{{"error", "the call wasn't made as expected"}}));
+            return choc::value::createString(
+                impl->call(arguments[0].getWithDefault<std::string>({}), arguments[1].getWithDefault<std::string>({})));
+        });
+    };
+
     impl->view = std::make_unique<choc::ui::WebView>(settings);
     if (!impl->view->loadedOK())
     {
         impl->view.reset();
         return;
     }
-
-    impl->view->bind("__symbolengine_call", [this](const choc::value::ValueView& arguments) -> choc::value::Value {
-        if (!arguments.isArray() || arguments.size() != 2)
-            return choc::value::createString(json::write(Object{{"error", "the call wasn't made as expected"}}));
-        return choc::value::createString(
-            impl->call(arguments[0].getWithDefault<std::string>({}), arguments[1].getWithDefault<std::string>({})));
-    });
 }
 
 WebView::~WebView() = default;
