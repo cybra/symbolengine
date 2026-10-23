@@ -48,7 +48,7 @@ Every plugin built in the repository is checked in continuous integration: loade
 
 ## Moving an existing plugin
 
-A plugin that already ships keeps what hosts and its users have of it. It states its own identity, the VST3 class ID in its description and the Audio Unit type, subtype and manufacturer codes in `symbolengine_add_plugin`, as it was released with them, which clap-wrapper passes to each format, so a DAW session finds it. A test plugin states a class ID, and Steinberg's validator finds it under that ID on every system. It receives the state its earlier versions saved, exactly as the host stored it, so it can open presets and sessions with their settings, and it keeps the parameter numbers hosts recorded automation against.
+A plugin that already ships keeps what hosts and its users have of it. It states its own identity, the VST3 class ID in its description and the Audio Unit type, subtype and manufacturer codes in `symbolengine_add_plugin`, as it was released with them, which clap-wrapper passes to each format, so a DAW session finds it. A test plugin states a class ID, and Steinberg's validator finds it under that ID on every system. It receives the state its earlier versions saved, exactly as the host stored it, so it can open presets and sessions with their settings: a VST3 host's bytes as they are, and an Audio Unit's from under the key its earlier versions kept it under, `AU_STATE_KEY` in `symbolengine_add_plugin`, where it also saves it, so earlier versions open its sessions too. It keeps the parameter numbers hosts recorded automation against.
 
 ## Hosting
 

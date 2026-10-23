@@ -85,7 +85,8 @@ endif()
 
 # A plugin that marks each channel with the speaker it is for. On a Mac a host in the test itself runs its Audio Unit
 # in the layouts hosts set, Logic's channel orders among them, and in channel counts alone, and checks that every
-# channel reaches the plugin as its speaker and comes back where it went in.
+# channel reaches the plugin as its speaker and comes back where it went in; and gives it saved states with its state
+# under a key of its own, as a plugin released before kept it, and under the standard key.
 if(SYMBOLENGINE_PLUGIN)
     symbolengine_add_plugin(SpeakersTest
         SOURCES SpeakersPlugin/SpeakersPlugin.cpp
@@ -94,17 +95,21 @@ if(SYMBOLENGINE_PLUGIN)
         AU_SUBTYPE Spkr
         AU_MANUFACTURER_CODE SyEn
         AU_MANUFACTURER_NAME SymbolEngine
-        AU_NAME "Speakers Test")
+        AU_NAME "Speakers Test"
+        AU_STATE_KEY speakersTestState)
     symbolengine_set_warnings(SpeakersTest_impl)
     symbolengine_validate_plugin(SpeakersTest)
 
     get_target_property(speakers_formats SpeakersTest_impl SYMBOLENGINE_FORMATS)
     if(APPLE AND SYMBOLENGINE_HOSTS_CAN_LOAD_PLUGINS AND AUV2 IN_LIST speakers_formats)
-        add_executable(symbolengine_audio_unit_layouts AudioUnitLayouts/AudioUnitLayouts.cpp)
-        target_link_libraries(symbolengine_audio_unit_layouts PRIVATE "-framework AudioToolbox"
-            "-framework CoreFoundation")
-        symbolengine_set_warnings(symbolengine_audio_unit_layouts)
-        add_test(NAME "SpeakersTest: Audio Unit layouts"
-            COMMAND symbolengine_audio_unit_layouts $<TARGET_BUNDLE_DIR:SpeakersTest_auv2>)
+        foreach(check IN ITEMS Layouts State)
+            string(TOLOWER ${check} name)
+            add_executable(symbolengine_audio_unit_${name} AudioUnitHost/${check}.cpp)
+            target_link_libraries(symbolengine_audio_unit_${name} PRIVATE "-framework AudioToolbox"
+                "-framework CoreFoundation")
+            symbolengine_set_warnings(symbolengine_audio_unit_${name})
+            add_test(NAME "SpeakersTest: Audio Unit ${name}"
+                COMMAND symbolengine_audio_unit_${name} $<TARGET_BUNDLE_DIR:SpeakersTest_auv2>)
+        endforeach()
     endif()
 endif()
