@@ -61,10 +61,15 @@ std::optional<std::string_view> @FUNCTION@(std::string_view path)
     // In a debug build, SYMBOLENGINE_LIVE_FILES=1 reads each file from the folder it was built in from, so a page can
     // be changed and reloaded without building again. What it gives lasts until the next call on the same thread.
     #if defined(_MSC_VER)
-        #pragma warning(suppress : 4996)
-    #endif
+    char* live = nullptr;
+    std::size_t length = 0;
+    const bool on = _dupenv_s(&live, &length, "SYMBOLENGINE_LIVE_FILES") == 0 && live != nullptr && live[0] == '1';
+    std::free(live);
+    #else
     const char* live = std::getenv("SYMBOLENGINE_LIVE_FILES");
-    if (live != nullptr && live[0] == '1' && path.find("..") == std::string_view::npos)
+    const bool on = live != nullptr && live[0] == '1';
+    #endif
+    if (on && path.find("..") == std::string_view::npos)
     {
         std::ifstream in(std::string(R"symbolengine(@FOLDER@)symbolengine") + std::string(path), std::ios::binary);
         if (in)
