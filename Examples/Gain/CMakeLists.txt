@@ -5,7 +5,8 @@ symbolengine_add_plugin(Gain
     FORMATS CLAP VST3 AUV2
     AU_SUBTYPE Gain
     AU_MANUFACTURER_CODE SyEn
-    AU_MANUFACTURER_NAME SymbolEngine)
+    AU_MANUFACTURER_NAME SymbolEngine
+    AU_NAME Gain)
 
 symbolengine_set_warnings(Gain_impl)
 

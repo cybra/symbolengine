@@ -5,15 +5,15 @@ include(FetchContent)
 # The CLAP SDK and clap-wrapper, pinned by checksum. Each is fetched only, not added, and clap-wrapper is pointed at
 # the CLAP SDK, so it downloads nothing of its own. clap-wrapper comes from SymbolEngine's fork, whose symbolengine
 # branch adds its changes to a clap-wrapper release, each a commit of its own: VST3 speaker arrangements a plugin
-# refuses stay refused, Audio Units have channel layouts, and Dolby's wide speakers pass between a plugin and the VST3
-# and Audio Unit wrappers.
+# refuses stay refused, Audio Units have channel layouts and a name of their own, and Dolby's wide speakers pass
+# between a plugin and the VST3 and Audio Unit wrappers.
 FetchContent_Declare(symbolengine_clap
     URL https://github.com/free-audio/clap/archive/refs/tags/1.2.10.tar.gz
     URL_HASH SHA256=58fdb977c6678859c15d57942378b651399178f49a3a8ecad1813b9f231dc096
     SOURCE_SUBDIR fetched-only)
 FetchContent_Declare(symbolengine_clap_wrapper
-    URL https://github.com/cybra/clap-wrapper/archive/8c30544e82fab0bb0e9be705b15e497c6d657cf3.tar.gz # v0.17.0 and ours
-    URL_HASH SHA256=e65c2b02677b5392b18e17ea061f36c8e1c7a90ac10c550698e5b193b38ab49e
+    URL https://github.com/cybra/clap-wrapper/archive/19de81ef5ec8ee777cf7059bb7d73abba739c231.tar.gz # v0.17.0 and ours
+    URL_HASH SHA256=63db5f45bb4e9b4d5ff6b58d250a47edacfe9a63481c6b8f7929d7ca68fcb00d
     SOURCE_SUBDIR fetched-only)
 FetchContent_MakeAvailable(symbolengine_clap symbolengine_clap_wrapper)
 
@@ -102,6 +102,7 @@ set(SYMBOLENGINE_PLUGIN_ENTRY ${PROJECT_SOURCE_DIR}/Modules/plugin/entry/ClapEnt
 #     [AU_SUBTYPE <code>]             # four characters, the plugin's own among its maker's
 #     [AU_MANUFACTURER_CODE <code>]   # four characters with at least one capital, the maker's
 #     [AU_MANUFACTURER_NAME <name>]
+#     [AU_NAME <name>]                # the name hosts list after the maker's, such as "Gain"; OUTPUT_NAME if not given
 #     [LIBRARIES <libraries...>])
 #
 # Builds the plugins listed in the sources' SYMBOLENGINE_PLUGINS; a build with the sanitizers makes the CLAP build
@@ -111,7 +112,7 @@ set(SYMBOLENGINE_PLUGIN_ENTRY ${PROJECT_SOURCE_DIR}/Modules/plugin/entry/ClapEnt
 # class ID is, so neither may change once the plugin is released.
 function(symbolengine_add_plugin target)
     cmake_parse_arguments(PARSE_ARGV 1 plugin ""
-        "OUTPUT_NAME;BUNDLE_IDENTIFIER;VERSION;AU_TYPE;AU_SUBTYPE;AU_MANUFACTURER_CODE;AU_MANUFACTURER_NAME"
+        "OUTPUT_NAME;BUNDLE_IDENTIFIER;VERSION;AU_TYPE;AU_SUBTYPE;AU_MANUFACTURER_CODE;AU_MANUFACTURER_NAME;AU_NAME"
         "SOURCES;FORMATS;LIBRARIES")
 
     if(NOT plugin_OUTPUT_NAME)
@@ -128,6 +129,9 @@ function(symbolengine_add_plugin target)
     endif()
     if(NOT plugin_AU_MANUFACTURER_NAME)
         set(plugin_AU_MANUFACTURER_NAME ${plugin_OUTPUT_NAME})
+    endif()
+    if(NOT plugin_AU_NAME)
+        set(plugin_AU_NAME ${plugin_OUTPUT_NAME})
     endif()
     if(NOT plugin_BUNDLE_IDENTIFIER)
         message(FATAL_ERROR "symbolengine_add_plugin(${target}) needs a BUNDLE_IDENTIFIER, such as com.example.gain")
@@ -158,6 +162,7 @@ function(symbolengine_add_plugin target)
         symbolengine_fetch_audiounit_sdk()
         set(AUDIOUNIT_SDK_ROOT ${SYMBOLENGINE_AUDIOUNIT_SDK_ROOT})
         set(au_arguments
+            AUV2_NAME "${plugin_AU_NAME}"
             AUV2_MANUFACTURER_NAME "${plugin_AU_MANUFACTURER_NAME}"
             AUV2_MANUFACTURER_CODE "${plugin_AU_MANUFACTURER_CODE}"
             AUV2_SUBTYPE_CODE "${plugin_AU_SUBTYPE}"
@@ -236,5 +241,6 @@ function(symbolengine_add_plugin target)
 
     set_target_properties(${implementation} PROPERTIES
         SYMBOLENGINE_FORMATS "${plugin_FORMATS}"
-        SYMBOLENGINE_AU_CODES "${plugin_AU_TYPE};${plugin_AU_SUBTYPE};${plugin_AU_MANUFACTURER_CODE}")
+        SYMBOLENGINE_AU_CODES "${plugin_AU_TYPE};${plugin_AU_SUBTYPE};${plugin_AU_MANUFACTURER_CODE}"
+        SYMBOLENGINE_AU_NAME "${plugin_AU_MANUFACTURER_NAME}: ${plugin_AU_NAME}")
 endfunction()

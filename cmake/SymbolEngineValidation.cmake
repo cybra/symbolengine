@@ -68,6 +68,7 @@ function(symbolengine_validate_plugin target)
 
     get_target_property(formats ${target}_impl SYMBOLENGINE_FORMATS)
     get_target_property(au_codes ${target}_impl SYMBOLENGINE_AU_CODES)
+    get_target_property(au_name ${target}_impl SYMBOLENGINE_AU_NAME)
 
     if(APPLE)
         set(clap_file $<TARGET_BUNDLE_DIR:${target}_clap>)
@@ -138,7 +139,7 @@ function(symbolengine_validate_plugin target)
         list(GET au_codes 2 manufacturer)
         add_test(NAME "${target}: Audio Unit's Info.plist"
             COMMAND ${CMAKE_COMMAND} -DPLIST=$<TARGET_BUNDLE_CONTENT_DIR:${target}_auv2>/Info.plist
-                -DMANUFACTURER=${manufacturer} -P ${PROJECT_SOURCE_DIR}/cmake/CheckAudioUnitInfo.cmake)
+                -DMANUFACTURER=${manufacturer} "-DNAME=${au_name}" -P ${PROJECT_SOURCE_DIR}/cmake/CheckAudioUnitInfo.cmake)
     endif()
 
     if(APPLE AND SYMBOLENGINE_AUVAL AND AUV2 IN_LIST formats)

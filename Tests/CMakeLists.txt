@@ -93,7 +93,8 @@ if(SYMBOLENGINE_PLUGIN)
         FORMATS CLAP VST3 AUV2
         AU_SUBTYPE Spkr
         AU_MANUFACTURER_CODE SyEn
-        AU_MANUFACTURER_NAME SymbolEngine)
+        AU_MANUFACTURER_NAME SymbolEngine
+        AU_NAME "Speakers Test")
     symbolengine_set_warnings(SpeakersTest_impl)
     symbolengine_validate_plugin(SpeakersTest)
 
