@@ -67,7 +67,7 @@ A product built on SymbolEngine includes these, each under a permissive license 
 | SymbolEngine | everything | MIT |
 | CHOC, with a setting added for WebView2's data folder | ui | ISC |
 | Microsoft's WebView2Loader, carried inside CHOC | ui, on Windows | BSD-style, Microsoft's |
-| CLAP SDK and clap-wrapper | plugin | MIT |
+| CLAP SDK, and clap-wrapper from SymbolEngine's fork at github.com/cybra/clap-wrapper | plugin | MIT |
 | VST3 SDK | plugin, VST3 builds | MIT |
 | Apple's AudioUnitSDK | plugin, Audio Unit builds | Apache 2.0 |
 

@@ -4,7 +4,7 @@
 
 - **Foundations.** The repository, the CMake build and continuous integration on Mac, Windows and Linux are in place, with a contributing guide and issue and pull request templates. The core module has its first parts: values with JSON, UTF-8 text, paths and the system's folders, files written safely, settings files, and speaker layouts.
 - **Web pages.** The ui module shows pages in the system's own web view on Mac and Windows, served from files built into the program, with calls and events between page and native code. Plugin editors are web pages built on it, and the Filter example has one.
-- **Plugins.** The plugin module builds CLAP, VST3 and Audio Unit plugins from a class written once, and keeps a VST3 class ID and Audio Unit codes a plugin was released with. Buses take any standard layout from mono to 7.1.4 and the ITU 9.1.6 in CLAP and VST3, and up to 8 channels in Audio Units. The Gain and Filter examples pass CLAP's validator, Steinberg's, pluginval at its strictest level and auval. Reading the state an earlier build saved and keeping its parameter numbers come next, checked against a Live set.
+- **Plugins.** The plugin module builds CLAP, VST3 and Audio Unit plugins from a class written once, and keeps a VST3 class ID and Audio Unit codes a plugin was released with. Buses take any standard layout from mono to 7.1.4 in every format, and the ITU 9.1.6 in CLAP and VST3, through SymbolEngine's fork of clap-wrapper. The Gain and Filter examples pass CLAP's validator, Steinberg's, pluginval at its strictest level and auval. Reading the state an earlier build saved and keeping its parameter numbers come next, checked against a Live set.
 - **The first release** comes when Symbol Studio runs on SymbolEngine alone, and the phases below follow what it needs, plugins first and hosting other makers' plugins last.
 - **Home.** The name is SymbolEngine, symbolengine.dev is registered, the license is MIT, and the code is public at github.com/cybra/symbolengine. Contributions are signed off under the Developer Certificate of Origin.
 
@@ -32,8 +32,9 @@
 - [x] Editors resized by the page and the host within their limits, their size remembered per instance and for new editors; snapshots for scripted checks on a Mac; pages read live from disk in debug builds.
 - [ ] Snapshots on Windows, and Space reaching the host's transport while an editor has the keyboard, checked in Live on Windows; it does on a Mac.
 - [x] Buses in any standard layout from mono to 7.1.4 and the ITU 9.1.6, or the plugin's own, through CLAP's surround and configurable audio ports and clap-wrapper's VST3 speaker arrangements, with Steinberg's validator checking exactly which arrangements a plugin takes.
-- [ ] Audio Unit layouts: the speaker of each channel, and more than 8 channels, which clap-wrapper's Audio Unit wrapper doesn't give yet; checked in Logic.
-- [ ] Dolby's 9.1.4 and 9.1.6, whose wide left and right speakers CLAP has no positions for yet, so neither clap-wrapper nor a CLAP host can name them.
+- [x] Audio Unit layouts through SymbolEngine's fork of clap-wrapper: the layouts a plugin takes offered to the host up to Atmos 7.1.4, Logic's channel orders among them, and each channel handed to the plugin as its speaker, checked by auval and by a host in the tests.
+- [ ] Audio Unit layouts checked in Logic itself.
+- [ ] Dolby's 9.1.4 and 9.1.6, whose wide left and right speakers CLAP has no positions for: possible in VST3, Audio Units and AAX through the fork, while a CLAP host can't name them until CLAP can.
 - [ ] Its earlier versions' saved state and parameter numbers kept, checked against sessions saved with them.
 - [x] Example: a gain, passing every validator on every system.
 - [x] Example: a filter with an editor and a level meter.
