@@ -43,7 +43,7 @@ struct CLocaleScope
 
 int printScientific(char* buffer, std::size_t size, double number, int digits)
 {
-    return _snprintf_l(buffer, size, "%.*e", cLocale(), digits - 1, number);
+    return _snprintf_s_l(buffer, size, _TRUNCATE, "%.*e", cLocale(), digits - 1, number);
 }
 
 double readTerminated(const char* text)
@@ -106,7 +106,7 @@ Decimal fromScientific(const char* text, std::size_t length)
 
 Decimal shortestByPrinting(double number)
 {
-    CLocaleScope scope;
+    [[maybe_unused]] CLocaleScope scope;   // empty on Windows, whose functions take the locale
     char buffer[48];
 
     // At a power of two the gap to the double below is half the gap above, so the decimal nearest it with a given
@@ -223,7 +223,7 @@ double read(std::string_view checkedNumber)
         terminated = large.c_str();
     }
 
-    CLocaleScope scope;
+    [[maybe_unused]] CLocaleScope scope;   // empty on Windows, whose functions take the locale
     return readTerminated(terminated);
 }
 
