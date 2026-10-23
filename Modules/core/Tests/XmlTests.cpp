@@ -154,6 +154,16 @@ TEST_CASE("XML refuses elements nested deeper than its limit")
     CHECK(failure(nested(xml::maximumDepth)) == "parsed");
     CHECK(failure(nested(xml::maximumDepth + 1)) ==
           "1:" + std::to_string(xml::maximumDepth * 3 + 1) + " elements are nested more than 512 deep");
+
+    // One as deep as the limit is written, read, compared and let go of on every system's stack too.
+    xml::Element deepest("a");
+    for (std::size_t i = 1; i < xml::maximumDepth; ++i)
+    {
+        xml::Element outer("a");
+        outer.add(std::move(deepest));
+        deepest = std::move(outer);
+    }
+    CHECK(xml::parse(xml::write(deepest)) == deepest);
 }
 
 TEST_CASE("XML is written compact or laid out, with the declaration or without")

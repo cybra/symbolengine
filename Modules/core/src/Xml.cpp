@@ -5,6 +5,8 @@
 #include "Utf8.h"
 
 #include <algorithm>
+#include <utility>
+#include <vector>
 
 namespace symbolengine::xml
 {
@@ -201,7 +203,7 @@ public:
         if (next() != '<')
             fail(atEnd() ? "the text ends before the document's element" : "expected the document's element");
 
-        Element root = parseElement(1);
+        Element root = rootElement();
         misc(false);
 
         if (!atEnd())
@@ -361,11 +363,9 @@ private:
         return found;
     }
 
-    Element parseElement(std::size_t depth)
+    // A start tag with its attributes, and whether it was also the end of the element, as <name/> is.
+    std::pair<Element, bool> startTag()
     {
-        if (depth > maximumDepth)
-            fail("elements are nested more than " + std::to_string(maximumDepth) + " deep");
-
         ++position;   // the <
         Element element(name("expected an element's name"));
 
@@ -376,12 +376,12 @@ private:
             if (startsWith("/>"))
             {
                 position += 2;
-                return element;
+                return {std::move(element), true};
             }
             if (next() == '>')
             {
                 ++position;
-                break;
+                return {std::move(element), false};
             }
             if (atEnd())
                 fail("the text ends inside a tag");
@@ -409,11 +409,28 @@ private:
             }
             element.setAttribute(attribute, value);
         }
+    }
 
-        std::string content;
+    // The document's element and everything inside it. The elements still open are kept in a list rather than on
+    // the stack, so how deep they go never depends on the size of the thread's stack, which is 1 MB on Windows.
+    Element rootElement()
+    {
+        struct Open
+        {
+            Element element;
+            std::string content;
+        };
+        std::vector<Open> open;
+
+        if (auto [root, closed] = startTag(); closed)
+            return std::move(root);
+        else
+            open.push_back({std::move(root), {}});
 
         for (;;)
         {
+            auto& [element, content] = open.back();
+
             if (atEnd())
                 fail("the text ends inside <" + element.name() + ">");
 
@@ -435,7 +452,16 @@ private:
                 if (next() != '>')
                     fail(atEnd() ? "the text ends inside a tag" : "expected the end of the tag");
                 ++position;
-                break;
+
+                if (!element.children().empty() && std::all_of(content.begin(), content.end(), isSpace))
+                    content.clear();
+                element.setText(std::move(content));
+
+                Element done = std::move(element);
+                open.pop_back();
+                if (open.empty())
+                    return done;
+                open.back().element.children().push_back(std::move(done));
             }
             else if (startsWith("<!--"))
                 comment();
@@ -454,14 +480,17 @@ private:
             else if (startsWith("<!"))
                 fail("a declaration can only come before the document's element");
             else
-                element.children().push_back(parseElement(depth + 1));
+            {
+                if (open.size() >= maximumDepth)
+                    fail("elements are nested more than " + std::to_string(maximumDepth) + " deep");
+
+                // Adding to the open elements may move them, so the loop finds the element and its text again.
+                if (auto [child, closed] = startTag(); closed)
+                    element.children().push_back(std::move(child));
+                else
+                    open.push_back({std::move(child), {}});
+            }
         }
-
-        if (!element.children().empty() && std::all_of(content.begin(), content.end(), isSpace))
-            content.clear();
-
-        element.setText(std::move(content));
-        return element;
     }
 
     // Plain text up to the next markup or reference, or, for a CDATA section, the given number of bytes, with line
