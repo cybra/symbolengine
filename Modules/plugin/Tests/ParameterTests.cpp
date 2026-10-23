@@ -3,10 +3,15 @@
 #include <symbolengine/core/Json.h>
 #include <symbolengine/plugin.h>
 
+#include <symbolengine/core/Text.h>
+
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>
 #include <limits>
+#include <optional>
 #include <stdexcept>
+#include <string_view>
 
 using namespace symbolengine;
 using namespace symbolengine::plugin;
@@ -80,6 +85,64 @@ TEST_CASE("Parameters of the usual kinds show and read their values")
     CHECK(off.bypass);
     CHECK(off.stepped);
     CHECK(off.name == "Bypass");
+}
+
+TEST_CASE("A scale spreads units over 0 to 1 evenly, or evenly by ratio")
+{
+    // What an equalizer released with these scales shows for positions its hosts recorded: 42.2 Hz, 1000 Hz and
+    // 3.56 kHz from 20 Hz to 20 kHz, -4.2 dB from -30 to +30 dB, and Q 0.95 and 1.00 from 0.025 to 40.
+    const auto frequency = Scale::ratio(20.0, 20000.0);
+    CHECK(std::abs(frequency.toUnits(0.108153269) - 42.2) < 0.05);
+    CHECK(std::abs(frequency.toUnits(0.566323) - 1000.0) < 0.05);
+    CHECK(std::abs(frequency.toUnits(0.75) - 3560.0) < 5.0);
+    CHECK(std::abs(frequency.toPosition(1000.0) - 0.566323) < 1e-6);
+    CHECK(std::abs(frequency.toUnits(0.5) - std::sqrt(20.0 * 20000.0)) < 1e-9);
+    const auto q = Scale::ratio(0.025, 40.0);
+    CHECK(std::abs(q.toUnits(0.493687689) - 0.95) < 0.005);
+    CHECK(std::abs(q.toUnits(0.5) - 1.0) < 1e-12);
+
+    const auto gain = Scale::linear(-30.0, 30.0);
+    CHECK(gain.toUnits(0.5) == 0.0);
+    CHECK(std::abs(gain.toUnits(0.430611551) - -4.2) < 0.05);
+    CHECK(gain.toPosition(-30.0) == 0.0);
+
+    // Held to their ranges, and back again where they started.
+    CHECK(frequency.toUnits(-1.0) == 20.0);
+    CHECK(frequency.toUnits(2.0) == 20000.0);
+    CHECK(frequency.toPosition(5.0) == 0.0);
+    for (const double at : {0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0})
+        CHECK(std::abs(frequency.toPosition(frequency.toUnits(at)) - at) < 1e-12);
+
+    CHECK_THROWS_AS(Scale::ratio(0.0, 1.0), std::logic_error);
+    CHECK_THROWS_AS(Scale::linear(1.0, 1.0), std::logic_error);
+}
+
+TEST_CASE("A scaled parameter is 0 to 1 to hosts and shown and typed in its units")
+{
+    const auto scale = Scale::ratio(20.0, 20000.0);
+    const auto hertz = [](double units) { return text::formatFixed(units, 0) + " Hz"; };
+    const auto kilohertz = [](std::string_view typed) -> std::optional<double> {
+        const auto number = detail::leadingNumber(typed);
+        if (number && typed.find('k') != std::string_view::npos)
+            return *number * 1000.0;
+        return number;
+    };
+
+    const auto frequency = scaled(7, "Frequency", scale, 1000.0, hertz, kilohertz);
+    CHECK(frequency.minimum == 0.0);
+    CHECK(frequency.maximum == 1.0);
+    CHECK(std::abs(frequency.defaultValue - 0.566323) < 1e-6);
+    CHECK(frequency.toText(frequency.defaultValue) == "1000 Hz");
+    CHECK(std::abs(*frequency.fromText("2.5 kHz") - scale.toPosition(2500.0)) < 1e-12);
+    CHECK(*frequency.fromText("100000 Hz") == 1.0);
+    CHECK_FALSE(frequency.fromText("loud").has_value());
+
+    // Without a reading of its own, the number typed, in the parameter's units.
+    const auto plain = scaled(8, "Gain", Scale::linear(-30.0, 30.0), 0.0,
+                              [](double units) { return text::formatFixed(units, 1) + " dB"; });
+    CHECK(plain.defaultValue == 0.5);
+    CHECK(*plain.fromText("-15 dB") == 0.25);
+    CHECK_THROWS_AS(scaled(9, "Nothing", scale, 1.0, {}), std::logic_error);
 }
 
 TEST_CASE("A plugin refuses parameters it couldn't keep straight")

@@ -165,4 +165,55 @@ Parameter bypass(std::uint32_t id)
     return parameter;
 }
 
+Scale Scale::linear(double minimum, double maximum)
+{
+    if (!(minimum < maximum))
+        throw std::logic_error("a scale's minimum must be below its maximum");
+    return {Kind::linear, minimum, maximum};
+}
+
+Scale Scale::ratio(double minimum, double maximum)
+{
+    if (!(minimum > 0.0 && minimum < maximum))
+        throw std::logic_error("a ratio scale runs between two numbers above 0, the lower first");
+    return {Kind::ratio, minimum, maximum};
+}
+
+double Scale::toUnits(double position) const noexcept
+{
+    const auto at = std::clamp(position, 0.0, 1.0);
+    const auto units = kind == Kind::linear ? low + (high - low) * at : low * std::pow(high / low, at);
+    return std::clamp(units, low, high);
+}
+
+double Scale::toPosition(double units) const noexcept
+{
+    const auto held = std::clamp(units, low, high);
+    const auto position =
+        kind == Kind::linear ? (held - low) / (high - low) : std::log(held / low) / std::log(high / low);
+    return std::clamp(position, 0.0, 1.0);
+}
+
+Parameter scaled(std::uint32_t id, std::string name, Scale scale, double defaultUnits,
+                 std::function<std::string(double units)> toText,
+                 std::function<std::optional<double>(std::string_view typed)> fromText)
+{
+    if (!toText)
+        throw std::logic_error("a scaled parameter needs its text, in its units");
+
+    Parameter parameter{.id = id,
+                        .name = std::move(name),
+                        .minimum = 0.0,
+                        .maximum = 1.0,
+                        .defaultValue = scale.toPosition(defaultUnits)};
+    parameter.toText = [scale, toText = std::move(toText)](double position) { return toText(scale.toUnits(position)); };
+    parameter.fromText = [scale, fromText = std::move(fromText)](std::string_view typed) -> std::optional<double> {
+        const auto units = fromText ? fromText(typed) : detail::leadingNumber(typed);
+        if (!units || std::isnan(*units))
+            return std::nullopt;
+        return scale.toPosition(*units);
+    };
+    return parameter;
+}
+
 }
