@@ -53,9 +53,23 @@ It needs CMake 3.25 or later and a C++20 compiler, and runs on macOS 11 or later
 | Module | Now |
 |---|---|
 | core | Values with JSON, UTF-8 text, paths and the system's folders, files written safely, settings files |
+| ui | Pages in the system's own web view, WKWebView on a Mac and WebView2 on Windows, served from files built into the program, calling native functions and receiving events through a script every page is given |
 | plugin | Plugins written once as a class, with parameters, state, buses, latency and tail, built as CLAP, VST3 and Audio Units, keeping the class ID and codes of a plugin released before, and checked by CLAP's validator, Steinberg's, auval and pluginval |
 
-The [architecture](Docs/02_architecture.md) describes the modules to come: files, devices, ui, app and host.
+The [architecture](Docs/02_architecture.md) describes the modules to come: files, devices, app and host, and the rest of ui.
+
+## What a product includes
+
+A product built on SymbolEngine includes these, each under a permissive license whose notice goes with the product's other notices:
+
+| Part | Used by | License |
+|---|---|---|
+| SymbolEngine | everything | MIT |
+| CHOC | ui | ISC |
+| Microsoft's WebView2Loader, carried inside CHOC | ui, on Windows | BSD-style, Microsoft's |
+| CLAP SDK and clap-wrapper | plugin | MIT |
+| VST3 SDK | plugin, VST3 builds | MIT |
+| Apple's AudioUnitSDK | plugin, Audio Unit builds | Apache 2.0 |
 
 ## Docs
 

@@ -8,6 +8,7 @@ project(SymbolEngine
 
 option(SYMBOLENGINE_TESTS "Build SymbolEngine's tests" ${PROJECT_IS_TOP_LEVEL})
 option(SYMBOLENGINE_INSTALL "Add SymbolEngine's install rules, for find_package" ${PROJECT_IS_TOP_LEVEL})
+option(SYMBOLENGINE_UI "Build the ui module, which fetches CHOC for the system's web view" ON)
 option(SYMBOLENGINE_PLUGIN "Build the plugin module, which fetches the CLAP SDK and clap-wrapper" ON)
 option(SYMBOLENGINE_EXAMPLES "Build SymbolEngine's examples" ${PROJECT_IS_TOP_LEVEL})
 option(SYMBOLENGINE_WARNINGS_AS_ERRORS "Treat warnings in SymbolEngine's own code as errors" OFF)
@@ -35,6 +36,9 @@ if(SYMBOLENGINE_TESTS)
 endif()
 
 add_subdirectory(Modules/core)
+if(SYMBOLENGINE_UI)
+    add_subdirectory(Modules/ui)
+endif()
 if(SYMBOLENGINE_PLUGIN)
     add_subdirectory(Modules/plugin)
 endif()

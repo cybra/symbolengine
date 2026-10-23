@@ -22,6 +22,10 @@ Text is UTF-8 in `std::string`, and paths are `std::filesystem::path`, turned to
 
 Values hold what JSON holds, keeping whole numbers as 64-bit integers so that sample positions stay exact, and objects keep their members in the order they were added. JSON is written as browsers write it, so a page and the native side read each other's numbers exactly. Files that hold a user's work or settings are written beside the old one and moved into its place in one step, so a crash leaves either the old file or the new one whole, and a settings file that can't be read is kept aside instead of being overwritten.
 
+## Web pages
+
+A page is served from files built into the program with `symbolengine_add_files`, by path from `/index.html`, and every page is also served `symbolengine.js`, its side of the bridge: `symbolengine.call` reaches a native function the program exposed and gives what it returned, or the message of what it threw, and `symbolengine.on` receives the events the program sends. Values cross as JSON, so a page and the native side read each other's numbers and text exactly. Some systems start loading a page before the web view says it is ready, so the bridge waits for the native side before its first call, and the native side holds what it sends until the page has said it is listening; nothing sent early is lost on any system. Linux's web view, WebKitGTK, follows the first release.
+
 ## Threads and real time
 
 Three kinds of thread, named in every interface: the message thread, which owns windows, web views and plugin editors; the audio thread, which never allocates, locks or waits, and is checked for it in debug builds; and worker threads for everything slow. Every callback says which thread it is on. Nothing is a global singleton the user didn't make; a program creates its message loop, devices and hosts and passes them where they are needed.
