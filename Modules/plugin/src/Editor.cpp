@@ -4,7 +4,12 @@
 #include "TextValues.h"
 
 #include <symbolengine/core/Paths.h>
+#include <symbolengine/core/SettingsFile.h>
+#include <symbolengine/core/System.h>
 
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include <stdexcept>
 #include <string>
 
@@ -18,6 +23,10 @@ namespace
 {
 // How a stepped parameter with this many steps or fewer lists them for the page, as a menu would.
 constexpr double mostSteps = 64.0;
+
+// The timer's interval, and how many of its ticks a resizing rests for before its size is kept.
+constexpr std::uint32_t tickMilliseconds = 33;
+constexpr int restBeforeKeeping = 18;
 
 Value describe(const Parameter& parameter, double value)
 {
@@ -66,13 +75,21 @@ ui::WebView::Options pageOptions(const Description& description, const Editor& e
             .name = description.id,
             .dataFolder = dataFolder};
 }
+
+std::uint32_t whole(const Value& number)
+{
+    return static_cast<std::uint32_t>(std::clamp<std::int64_t>(number.intOr(0), 0, 100000));
+}
 }
 
 EditorSession::EditorSession(Plugin& owner, const Description& about, Editor description, EditorChanges& queue,
-                             std::function<void()> tell)
-    : plugin(owner), editor(std::move(description)), changes(queue), told(std::move(tell)),
-      view(pageOptions(about, editor))
+                             Host link)
+    : plugin(owner), editor(std::move(description)), changes(queue), host(std::move(link)),
+      view(pageOptions(about, editor)), file(sizeFile(about))
 {
+    size = openingSize();
+    kept = size;
+
     const auto& parameters = plugin.parameters();
     for (std::size_t i = 0; i < parameters.size(); ++i)
         sent.push_back(Access::value(plugin, i));
@@ -113,11 +130,22 @@ EditorSession::EditorSession(Plugin& owner, const Description& about, Editor des
         return Value(textFor(parameter, arguments[1].numberOr(parameter.defaultValue)));
     });
 
+    view.expose("__resize", [this](const Value& arguments) {
+        if (!editor.resizable)
+            throw std::runtime_error("this editor can't be resized");
+
+        const auto [w, h] = heldToLimits(whole(arguments[0]), whole(arguments[1]));
+        const bool agreed = (w == size.first && h == size.second) || (host.resize && host.resize(w, h));
+        if (agreed)
+            resizedTo(w, h);
+        return Value(Object{{"width", size.first}, {"height", size.second}, {"agreed", agreed}});
+    });
+
     if (!view.available())
         return;
 
     plugin.editorOpened(*this);
-    timer = std::make_unique<ui::Timer>(33, [this] { tick(); });
+    timer = std::make_unique<ui::Timer>(tickMilliseconds, [this] { tick(); });
 }
 
 EditorSession::~EditorSession()
@@ -125,9 +153,90 @@ EditorSession::~EditorSession()
     timer.reset();
     if (view.available())
     {
+        keepSize(true);
         plugin.editorClosed();
         ui::native::detach(view.nativeView());
     }
+}
+
+std::filesystem::path EditorSession::sizeFile(const Description& about) const
+{
+    if (!editor.sizeFile.empty())
+        return editor.sizeFile;
+    std::error_code ignored;
+    return paths::systemFolder(paths::Folder::appData, ignored) / paths::fromUtf8(about.vendor) /
+           paths::fromUtf8(about.name) / "Editor.json";
+}
+
+std::pair<std::uint32_t, std::uint32_t> EditorSession::heldToLimits(std::uint32_t w, std::uint32_t h) const noexcept
+{
+    if (!editor.resizable)
+        return {editor.width, editor.height};
+    w = std::max(w, editor.minimumWidth);
+    h = std::max(h, editor.minimumHeight);
+    if (editor.maximumWidth > 0)
+        w = std::min(w, editor.maximumWidth);
+    if (editor.maximumHeight > 0)
+        h = std::min(h, editor.maximumHeight);
+    return {w, h};
+}
+
+std::pair<std::uint32_t, std::uint32_t> EditorSession::openingSize() const
+{
+    if (!editor.resizable)
+        return {editor.width, editor.height};
+
+    // This instance's own size, or the size kept for new editors, or the size the plugin gives.
+    auto [w, h] = Access::editorSize(plugin);
+    if (w == 0 || h == 0)
+    {
+        w = editor.width;
+        h = editor.height;
+        std::error_code ignored;
+        if (editor.remember && std::filesystem::exists(file, ignored))
+        {
+            const SettingsFile keptSize(file);
+            w = whole(keptSize.get("width").isNumber() ? keptSize.get("width") : Value(w));
+            h = whole(keptSize.get("height").isNumber() ? keptSize.get("height") : Value(h));
+        }
+    }
+
+    // A size left from a larger screen is fitted to the one the editor opens on.
+    const auto screen = ui::native::workAreaAtPointer();
+    const auto pointsWide = static_cast<std::uint32_t>(screen.width / host.pixelsPerPoint);
+    const auto pointsHigh = static_cast<std::uint32_t>(screen.height / host.pixelsPerPoint);
+    if (pointsWide > 40 && pointsHigh > 80)
+    {
+        w = std::min(w, pointsWide - 40);
+        h = std::min(h, pointsHigh - 80);
+    }
+
+    return heldToLimits(w, h);
+}
+
+void EditorSession::resizedTo(std::uint32_t w, std::uint32_t h)
+{
+    if (w == size.first && h == size.second)
+        return;
+    size = {w, h};
+    restingTicks = 0;
+    Access::keepEditorSize(plugin, w, h);
+    plugin.editorResized(w, h);
+}
+
+void EditorSession::keepSize(bool now)
+{
+    if (!editor.resizable || !editor.remember || size == kept)
+        return;
+    if (!now && ++restingTicks < restBeforeKeeping)
+        return;
+
+    std::error_code ignored;
+    SettingsFile keptSize(file);
+    keptSize.set("width", size.first);
+    keptSize.set("height", size.second);
+    keptSize.save(ignored);
+    kept = size;
 }
 
 void EditorSession::expose(std::string name, std::function<Value(const Value& arguments)> function)
@@ -138,6 +247,11 @@ void EditorSession::expose(std::string name, std::function<Value(const Value& ar
 void EditorSession::send(std::string_view event, const Value& data)
 {
     view.send(event, data);
+}
+
+void EditorSession::snapshot(const std::filesystem::path& png, std::function<void(bool)> done)
+{
+    view.snapshot(png, std::move(done));
 }
 
 std::size_t EditorSession::indexOf(const Value& id) const
@@ -151,8 +265,36 @@ std::size_t EditorSession::indexOf(const Value& id) const
 void EditorSession::change(EditorChange::Kind kind, std::uint32_t id, double value)
 {
     changes.push({kind, id, value});
-    if (told)
-        told();
+    if (host.told)
+        host.told();
+}
+
+// For checks run from a script: a second after the page is ready the script is run, and a second after that the
+// picture is saved.
+void EditorSession::snapshotWhenAsked()
+{
+    if (!view.pageReady())
+        return;
+
+    const int second = static_cast<int>(1000 / tickMilliseconds);
+    if (++ticks != second && ticks != 2 * second)
+        return;
+
+    const auto png = system::environmentVariable("SYMBOLENGINE_EDITOR_SNAPSHOT");
+    if (!png || png->empty())
+        return;
+
+    if (ticks == second)
+    {
+        if (const auto script = system::environmentVariable("SYMBOLENGINE_EDITOR_SCRIPT"))
+            view.run(*script);
+        return;
+    }
+
+    view.snapshot(paths::fromUtf8(*png), [path = *png](bool written) {
+        std::printf("snapshot %s: %s\n", written ? "written" : "FAILED", path.c_str());
+        std::fflush(stdout);
+    });
 }
 
 void EditorSession::tick()
@@ -170,6 +312,8 @@ void EditorSession::tick()
         }
     }
 
+    keepSize(false);
+    snapshotWhenAsked();
     plugin.editorTick(*this);
 }
 

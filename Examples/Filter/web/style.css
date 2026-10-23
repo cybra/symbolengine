@@ -50,8 +50,9 @@ main {
 }
 
 .knob svg {
-    width: 120px;
-    height: 120px;
+    width: min(100%, 60vh);
+    height: auto;
+    aspect-ratio: 1;
 }
 
 .knob .track {

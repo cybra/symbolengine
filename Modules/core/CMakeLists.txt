@@ -4,6 +4,7 @@ set(sources
     src/Numbers.cpp
     src/Paths.cpp
     src/SettingsFile.cpp
+    src/System.cpp
     src/Text.cpp
     src/Utf8.cpp
     src/Value.cpp)

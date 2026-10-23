@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 extern "C" const void* symbolengine_clap_get_factory(const char* id);
@@ -33,6 +34,8 @@ struct TestHost
                 return &of(h).params;
             if (std::strcmp(id, CLAP_EXT_LATENCY) == 0)
                 return &of(h).latency;
+            if (std::strcmp(id, CLAP_EXT_GUI) == 0)
+                return &of(h).gui;
             return nullptr;
         };
         host.request_restart = [](const clap_host* h) { ++of(h).restarts; };
@@ -43,6 +46,14 @@ struct TestHost
         params.clear = [](const clap_host*, clap_id, clap_param_clear_flags) {};
         params.request_flush = [](const clap_host* h) { ++of(h).flushRequests; };
         latency.changed = [](const clap_host* h) { ++of(h).latencyChanges; };
+        gui.resize_hints_changed = [](const clap_host*) {};
+        gui.request_resize = [](const clap_host* h, std::uint32_t w, std::uint32_t height) {
+            of(h).resizeRequests.emplace_back(w, height);
+            return of(h).agreeToResize;
+        };
+        gui.request_show = [](const clap_host*) { return true; };
+        gui.request_hide = [](const clap_host*) { return true; };
+        gui.closed = [](const clap_host*, bool) {};
     }
 
     TestHost(const TestHost&) = delete;
@@ -53,8 +64,11 @@ struct TestHost
     clap_host host{};
     clap_host_params params{};
     clap_host_latency latency{};
+    clap_host_gui gui{};
     int restarts = 0;
     int flushRequests = 0;
+    bool agreeToResize = true;
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> resizeRequests;
     int latencyChanges = 0;
     std::vector<clap_param_rescan_flags> rescans;
 };

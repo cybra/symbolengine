@@ -9,6 +9,12 @@
 #include <map>
 #include <vector>
 
+namespace symbolengine::ui::detail
+{
+/** Saves a picture of the system's web view to a PNG, in Snapshot_mac.mm or Native_windows.cpp. */
+void snapshot(void* view, const std::string& png, std::function<void(bool)> done);
+}
+
 // The bridge's script, built into the module from web/symbolengine.js.
 std::optional<std::string_view> symbolengine_ui_bridge_files(std::string_view path);
 
@@ -174,6 +180,14 @@ void WebView::expose(std::string name, std::function<Value(const Value& argument
 void WebView::send(std::string_view event, const Value& data)
 {
     run("window.__symbolengine_receive(" + json::write(Value(event)) + ", " + json::write(data) + ");");
+}
+
+void WebView::snapshot(const std::filesystem::path& png, std::function<void(bool)> done)
+{
+    if (impl->view == nullptr)
+        done(false);
+    else
+        detail::snapshot(impl->view->getViewHandle(), paths::toUtf8(png), std::move(done));
 }
 
 void WebView::run(std::string script)

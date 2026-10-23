@@ -37,6 +37,15 @@ void detach(void* view);
 void resize(void* view, std::uint32_t width, std::uint32_t height);
 
 void show(void* view, bool visible);
+
+/** The size of the screen under the pointer, less the menu bar, the Dock and the taskbar: in points on a Mac, and in
+    pixels on Windows. A window opens there when something has just been clicked to open it. */
+struct Area
+{
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+};
+Area workAreaAtPointer();
 }
 
 }

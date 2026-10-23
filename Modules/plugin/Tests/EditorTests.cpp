@@ -21,7 +21,12 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <symbolengine/core/Files.h>
+#include <symbolengine/core/Json.h>
+
+#include <filesystem>
 #include <map>
+#include <random>
 #include <tuple>
 #include <vector>
 
@@ -173,4 +178,107 @@ TEST_CASE("An editor opens in the host's window, and its page and the host chang
     CHECK(told.events == std::vector<Event>{{CLAP_EVENT_PARAM_GESTURE_BEGIN, 1, 0.0},
                                             {CLAP_EVENT_PARAM_VALUE, 1, -12.0},
                                             {CLAP_EVENT_PARAM_GESTURE_END, 1, 0.0}});
+}
+
+TEST_CASE("A resizable editor asks the host for sizes within its limits, and opens again at the size it was given")
+{
+    choc::messageloop::initialise();
+
+    std::random_device random;
+    const auto folder = std::filesystem::temp_directory_path() / ("symbolengine-editor-" + std::to_string(random()));
+    tests::TestLatency::sizeFile = folder / "Editor.json";
+
+    std::map<std::string, Value> reports;
+    tests::TestLatency::onEditorOpened = [&](EditorLink& link) {
+        link.expose("report", [&](const Value& arguments) {
+            reports[arguments[0].asString()] = arguments[1];
+            return Value();
+        });
+        link.expose("done", [&](const Value&) {
+            choc::messageloop::stop();
+            return Value();
+        });
+    };
+
+    TestHost host;
+    std::uint32_t width = 0, height = 0;
+    {
+        Made made(host, "test.latency");
+        const auto& gui = made.extension<clap_plugin_gui>(CLAP_EXT_GUI);
+        REQUIRE(gui.create(made.plugin, windowApi, false));
+        CHECK(gui.can_resize(made.plugin));
+
+        REQUIRE(gui.get_size(made.plugin, &width, &height));
+        CHECK(width == 400);
+        CHECK(height == 240);
+
+        width = height = 10;
+        REQUIRE(gui.adjust_size(made.plugin, &width, &height));
+        CHECK(width == 300);
+        CHECK(height == 200);
+        width = height = 5000;
+        REQUIRE(gui.adjust_size(made.plugin, &width, &height));
+        CHECK(width == 900);
+        CHECK(height == 600);
+
+        // The host resizes it, as when the user drags the window's corner.
+        CHECK(gui.set_size(made.plugin, 450, 260));
+        CHECK(tests::TestLatency::last->resized == std::pair<std::uint32_t, std::uint32_t>{450, 260});
+        CHECK_FALSE(gui.set_size(made.plugin, 10, 10));
+
+        // The page asks for sizes, held to the limits.
+        ParentView parent;
+        clap_window window{};
+        window.api = windowApi;
+        window.ptr = parent.view;
+        REQUIRE(gui.set_parent(made.plugin, &window));
+        REQUIRE(gui.show(made.plugin));
+
+        bool timedOut = false;
+        choc::messageloop::Timer timeout(20000, [&] {
+            timedOut = true;
+            choc::messageloop::stop();
+            return false;
+        });
+        choc::messageloop::run();
+        REQUIRE_FALSE(timedOut);
+
+        CHECK(reports["tooSmall"] == Value(Object{{"width", 300}, {"height", 200}, {"agreed", true}}));
+        CHECK(reports["larger"] == Value(Object{{"width", 500}, {"height", 320}, {"agreed", true}}));
+        using Size = std::pair<std::uint32_t, std::uint32_t>;
+        CHECK(host.resizeRequests == std::vector<Size>{{300, 200}, {500, 320}});
+        REQUIRE(gui.get_size(made.plugin, &width, &height));
+        CHECK(width == 500);
+        CHECK(height == 320);
+
+        // Opened again on the same instance, it keeps its size.
+        gui.destroy(made.plugin);
+        REQUIRE(gui.create(made.plugin, windowApi, false));
+        REQUIRE(gui.get_size(made.plugin, &width, &height));
+        CHECK(width == 500);
+        CHECK(height == 320);
+        gui.destroy(made.plugin);
+    }
+
+    // A new instance opens at the size kept in the file, and the plugin can set its own.
+    CHECK(json::parse(files::read(tests::TestLatency::sizeFile)) == Value(Object{{"width", 500}, {"height", 320}}));
+    {
+        Made made(host, "test.latency");
+        const auto& gui = made.extension<clap_plugin_gui>(CLAP_EXT_GUI);
+        REQUIRE(gui.create(made.plugin, windowApi, false));
+        REQUIRE(gui.get_size(made.plugin, &width, &height));
+        CHECK(width == 500);
+        CHECK(height == 320);
+
+        tests::TestLatency::last->setEditorSize(640, 480);
+        REQUIRE(gui.get_size(made.plugin, &width, &height));
+        CHECK(width == 640);
+        CHECK(height == 480);
+        CHECK(host.resizeRequests.back() == std::pair<std::uint32_t, std::uint32_t>{640, 480});
+        gui.destroy(made.plugin);
+    }
+
+    tests::TestLatency::onEditorOpened = nullptr;
+    std::error_code ignored;
+    std::filesystem::remove_all(folder, ignored);
 }

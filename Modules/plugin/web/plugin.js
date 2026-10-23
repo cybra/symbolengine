@@ -87,5 +87,9 @@
     window.plugin = Object.freeze({
         // The plugin's parameters, as a Map from each one's id.
         parameters: () => (loaded ??= load()),
+
+        // Asks the host to resize a resizable editor, in points, held to its limits. Gives the size it has after, and
+        // whether the host agreed.
+        resize: (width, height) => symbolengine.call("__resize", Number(width), Number(height)),
     });
 })();

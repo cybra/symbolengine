@@ -18,7 +18,7 @@ FetchContent_Declare(symbolengine_choc
 FetchContent_MakeAvailable(symbolengine_choc)
 
 if(APPLE)
-    set(sources src/Native_mac.mm)
+    set(sources src/Native_mac.mm src/Snapshot_mac.mm)
     set(libraries "-framework WebKit" "-framework AppKit" "-framework Foundation")
 else()
     set(sources src/Native_windows.cpp)
@@ -36,4 +36,15 @@ symbolengine_add_files(symbolengine_ui FOLDER web FUNCTION symbolengine_ui_bridg
 if(SYMBOLENGINE_TESTS)
     symbolengine_add_tests(ui SOURCES Tests/WebViewTests.cpp)
     target_include_directories(symbolengine_ui_tests SYSTEM PRIVATE ${symbolengine_choc_SOURCE_DIR})
+    if(APPLE)
+        target_link_libraries(symbolengine_ui_tests PRIVATE "-framework ImageIO" "-framework CoreGraphics")
+    endif()
+
+    # A folder in the build folder for the live-files test to change.
+    set(live ${CMAKE_CURRENT_BINARY_DIR}/live-files)
+    if(NOT EXISTS ${live}/greeting.txt)
+        file(WRITE ${live}/greeting.txt "built in")
+    endif()
+    symbolengine_add_files(symbolengine_ui_tests FOLDER ${live} FUNCTION liveTestFiles)
+    target_compile_definitions(symbolengine_ui_tests PRIVATE "SYMBOLENGINE_LIVE_TEST_FOLDER=\"${live}\"")
 endif()

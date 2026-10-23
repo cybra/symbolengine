@@ -8,6 +8,9 @@
 #endif
 #include <windows.h>
 
+#include <functional>
+#include <string>
+
 namespace symbolengine::ui::native
 {
 
@@ -46,6 +49,36 @@ void show(void* view, bool visible)
 {
     if (view != nullptr)
         ShowWindow(static_cast<HWND>(view), visible ? SW_SHOWNA : SW_HIDE);
+}
+
+}
+
+namespace symbolengine::ui::native
+{
+
+Area workAreaAtPointer()
+{
+    POINT pointer{};
+    GetCursorPos(&pointer);
+    MONITORINFO monitor{};
+    monitor.cbSize = sizeof monitor;
+    if (!GetMonitorInfoW(MonitorFromPoint(pointer, MONITOR_DEFAULTTONEAREST), &monitor))
+        return {1280, 800};
+
+    return {static_cast<std::uint32_t>(monitor.rcWork.right - monitor.rcWork.left),
+            static_cast<std::uint32_t>(monitor.rcWork.bottom - monitor.rcWork.top)};
+}
+
+}
+
+namespace symbolengine::ui::detail
+{
+
+// WebView2 can capture a page, but CHOC keeps its ICoreWebView2 to itself; until it gives it out, Windows has no
+// snapshots.
+void snapshot(void*, const std::string&, std::function<void(bool)> done)
+{
+    done(false);
 }
 
 }

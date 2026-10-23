@@ -136,6 +136,7 @@ public:
     const Description& pluginDescription;
     const clap_host_params* hostParams = nullptr;
     const clap_host_latency* hostLatency = nullptr;
+    const clap_host_gui* hostGui = nullptr;
     std::unique_ptr<Plugin> plugin;
     Buses buses;
     bool active = false;
@@ -159,6 +160,7 @@ public:
         {
             hostParams = static_cast<const clap_host_params*>(host->get_extension(host, CLAP_EXT_PARAMS));
             hostLatency = static_cast<const clap_host_latency*>(host->get_extension(host, CLAP_EXT_LATENCY));
+            hostGui = static_cast<const clap_host_gui*>(host->get_extension(host, CLAP_EXT_GUI));
 
             buses = plugin->buses();
             for (const auto& bus : buses.inputs)
@@ -226,6 +228,19 @@ public:
         // Asked again when the host next activates the plugin, which it does at once when asked to restart.
         if (active)
             host->request_restart(host);
+    }
+
+    void editorSizeChanged() override
+    {
+#if SYMBOLENGINE_EDITORS
+        // The plugin set the size its editor opens at; an editor that is open asks the host for it.
+        if (editor == nullptr)
+            return;
+        const auto [w, h] = detail::Access::editorSize(*plugin);
+        const auto [held, high] = editor->heldToLimits(w, h);
+        if (editor->description().resizable && askHostToResize(held, high))
+            editor->resizedTo(held, high);
+#endif
     }
 
     std::optional<std::size_t> parameterIndex(const clap_event_param_value& change) const noexcept
@@ -565,8 +580,7 @@ public:
     #endif
 
     std::unique_ptr<detail::EditorSession> editor;
-    double scale = 1.0;
-    std::uint32_t width = 0, height = 0;   // in points
+    double scale = 1.0;   // pixels to a point, which a Windows host gives
 
     std::uint32_t pixels(std::uint32_t inPoints) const noexcept
     {
@@ -576,6 +590,20 @@ public:
     std::uint32_t points(std::uint32_t inPixels) const noexcept
     {
         return static_cast<std::uint32_t>(std::lround(inPixels / scale));
+    }
+
+    void showSize() const
+    {
+        ui::native::resize(editor->nativeView(), pixels(editor->width()), pixels(editor->height()));
+    }
+
+    // Asks the host for a new size in points, and takes it if the host agrees.
+    bool askHostToResize(std::uint32_t w, std::uint32_t h)
+    {
+        if (editor == nullptr || hostGui == nullptr || !hostGui->request_resize(host, pixels(w), pixels(h)))
+            return false;
+        ui::native::resize(editor->nativeView(), pixels(w), pixels(h));
+        return true;
     }
 
     bool guiSupported(const char* api, bool floating) const noexcept
@@ -597,22 +625,23 @@ public:
             if (!guiSupported(api, floating))
                 return false;
 
-            auto description = *plugin->editor();
-            width = description.width;
-            height = description.height;
-            editor = std::make_unique<detail::EditorSession>(*plugin, pluginDescription, std::move(description),
-                                                             editorChanges, [this] {
-                                                                 // While the plugin isn't processing, the host collects the editor's changes when asked.
-                                                                 if (!processing && hostParams != nullptr)
-                                                                     hostParams->request_flush(host);
-                                                             });
+            detail::EditorSession::Host link;
+            link.told = [this] {
+                // While the plugin isn't processing, the host collects the editor's changes when asked.
+                if (!processing && hostParams != nullptr)
+                    hostParams->request_flush(host);
+            };
+            link.resize = [this](std::uint32_t w, std::uint32_t h) { return askHostToResize(w, h); };
+            link.pixelsPerPoint = scale;
 
+            editor = std::make_unique<detail::EditorSession>(*plugin, pluginDescription, *plugin->editor(),
+                                                             editorChanges, std::move(link));
             if (!editor->available())
             {
                 editor.reset();
                 return false;
             }
-            ui::native::resize(editor->nativeView(), pixels(width), pixels(height));
+            showSize();
             return true;
         }
         catch (...)
@@ -629,7 +658,7 @@ public:
             return false;
         scale = newScale;
         if (editor != nullptr)
-            ui::native::resize(editor->nativeView(), pixels(width), pixels(height));
+            showSize();
         return true;
     #else
         (void) newScale;
@@ -641,8 +670,8 @@ public:
     {
         if (editor == nullptr)
             return false;
-        w = pixels(width);
-        h = pixels(height);
+        w = pixels(editor->width());
+        h = pixels(editor->height());
         return true;
     }
 
@@ -664,23 +693,26 @@ public:
     {
         if (editor == nullptr)
             return false;
-        if (!guiResizable())
-        {
-            w = pixels(width);
-            h = pixels(height);
-            return true;
-        }
-        w = std::max(w, pixels(editor->description().minimumWidth));
-        h = std::max(h, pixels(editor->description().minimumHeight));
+        const auto [held, high] = editor->heldToLimits(points(w), points(h));
+        w = pixels(held);
+        h = pixels(high);
         return true;
     }
 
     bool guiSetSize(std::uint32_t w, std::uint32_t h) noexcept
     {
-        if (editor == nullptr || (!guiResizable() && (w != pixels(width) || h != pixels(height))))
+        if (editor == nullptr)
             return false;
-        width = points(w);
-        height = points(h);
+        const auto [held, high] = editor->heldToLimits(points(w), points(h));
+        if (pixels(held) != w || pixels(high) != h)
+            return false;
+        try
+        {
+            editor->resizedTo(held, high);
+        }
+        catch (...)
+        {
+        }
         ui::native::resize(editor->nativeView(), w, h);
         return true;
     }
@@ -691,7 +723,7 @@ public:
             return false;
         if (!ui::native::attach(editor->nativeView(), window.ptr))
             return false;
-        ui::native::resize(editor->nativeView(), pixels(width), pixels(height));
+        showSize();
         return true;
     }
 

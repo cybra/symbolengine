@@ -60,6 +60,16 @@ void Plugin::editorTick(EditorLink&) {}
 
 void Plugin::editorClosed() {}
 
+void Plugin::editorResized(std::uint32_t, std::uint32_t) {}
+
+void Plugin::setEditorSize(std::uint32_t width, std::uint32_t height)
+{
+    editorWidth = width;
+    editorHeight = height;
+    if (host != nullptr)
+        host->editorSizeChanged();
+}
+
 const Parameter* Plugin::findParameter(std::uint32_t id) const noexcept
 {
     const auto found = indexOf.find(id);

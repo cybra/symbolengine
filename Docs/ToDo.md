@@ -29,6 +29,8 @@
 - [x] VST3 and AU v2 through clap-wrapper, checked by Steinberg's validator, pluginval and auval.
 - [ ] AU v3, AAX (with the developer's SDK) and standalone through clap-wrapper.
 - [x] A plugin's own VST3 class ID and Audio Unit codes kept ([moving an existing plugin](02_architecture.md#moving-an-existing-plugin)).
+- [x] Editors resized by the page and the host within their limits, their size remembered per instance and for new editors; snapshots for scripted checks on a Mac; pages read live from disk in debug builds.
+- [ ] Snapshots on Windows, and Space reaching the host's transport while an editor has the keyboard, checked in Live.
 - [ ] Its earlier versions' saved state and parameter numbers kept, checked against sessions saved with them.
 - [x] Example: a gain, passing every validator on every system.
 - [x] Example: a filter with an editor and a level meter.

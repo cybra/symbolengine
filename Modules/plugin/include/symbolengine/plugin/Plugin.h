@@ -144,6 +144,14 @@ struct Editor
     bool resizable = false;
     std::uint32_t minimumWidth = 200;
     std::uint32_t minimumHeight = 120;
+    std::uint32_t maximumWidth = 0;   // 0 for no limit
+    std::uint32_t maximumHeight = 0;
+
+    /** For a resizable editor: a size the user gives it is kept, for this plugin instance and, in sizeFile, for new
+        ones, once the resizing has rested for 0.6 s. An editor opens at its instance's size, or the size kept in the
+        file, or width and height, held to the limits and to the screen it opens on. */
+    bool remember = true;
+    std::filesystem::path sizeFile{};   // empty for <app data>/<vendor>/<plugin name>/Editor.json
     std::function<std::optional<std::string_view>(std::string_view path)> files{};
 
     /** Windows only: the folder the editor's web view keeps its data in. Empty for AppData\Local\<vendor>\<plugin
@@ -162,6 +170,11 @@ public:
 
     /** Sends the page an event, which it receives with symbolengine.on. */
     virtual void send(std::string_view event, const Value& data) = 0;
+
+    /** Saves a picture of the editor as it is drawn now to a PNG, then says whether it was written; on a Mac only
+        for now. An editor saves one by itself when SYMBOLENGINE_EDITOR_SNAPSHOT names a PNG, two seconds after it
+        opens and a second after running SYMBOLENGINE_EDITOR_SCRIPT in the page, and prints whether it was written. */
+    virtual void snapshot(const std::filesystem::path& png, std::function<void(bool written)> done) = 0;
 };
 
 class Plugin;
@@ -173,6 +186,7 @@ struct HostLink
 {
     virtual ~HostLink() = default;
     virtual void latencyChanged() = 0;
+    virtual void editorSizeChanged() = 0;
 };
 
 struct Access;
@@ -235,6 +249,10 @@ public:
     /** Message thread: the editor has closed. */
     virtual void editorClosed();
 
+    /** Message thread: the user, the host or the page has resized the editor, to a size in points; the place to keep
+        it in the plugin's own state, so a session opens the editor at it. */
+    virtual void editorResized(std::uint32_t width, std::uint32_t height);
+
     /** The parameters, in the order they were added. */
     const std::vector<Parameter>& parameters() const noexcept { return definitions; }
 
@@ -251,6 +269,10 @@ protected:
     /** Message thread: tells the host the latency has changed, so it asks latency() again. */
     void latencyChanged();
 
+    /** Message thread: the size in points this instance's editor opens at, such as one its saved state held; an
+        editor that is open asks the host to resize it. */
+    void setEditorSize(std::uint32_t width, std::uint32_t height);
+
     /** The parameters' values by id, and setting them back from it, for plugins whose saveState() writes more. */
     Object saveParameters() const;
     void loadParameters(const Value& saved);
@@ -262,6 +284,7 @@ private:
     std::deque<std::atomic<double>> values;   // a deque, so each value stays where its ParameterValue points
     std::unordered_map<std::uint32_t, std::size_t> indexOf;
     detail::HostLink* host = nullptr;
+    std::uint32_t editorWidth = 0, editorHeight = 0;   // 0 until this instance's editor has a size of its own
 };
 
 /** A plugin a binary offers: its description, and how to make one. */

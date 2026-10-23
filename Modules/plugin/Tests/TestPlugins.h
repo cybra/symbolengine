@@ -6,11 +6,13 @@
 
 #include <array>
 #include <cmath>
+#include <filesystem>
 #include <functional>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 // The editor page the tests use, built in from Tests/EditorPage.
 std::optional<std::string_view> testEditorFiles(std::string_view path);
@@ -95,6 +97,23 @@ public:
     bool flushedDenormals = false;
 };
 
+// A resizable editor's page: it asks for a size too small, then for a larger one, and reports what it got.
+inline std::optional<std::string_view> resizePage(std::string_view path)
+{
+    static const std::string page = R"html(<!doctype html>
+<meta charset="utf-8">
+<script src="symbolengine.js"></script>
+<script src="plugin.js"></script>
+<script>
+(async () => {
+    await symbolengine.call("report", "tooSmall", await plugin.resize(10, 10));
+    await symbolengine.call("report", "larger", await plugin.resize(500, 320));
+    await symbolengine.call("done");
+})();
+</script>)html";
+    return path == "/index.html" ? std::optional<std::string_view>(page) : std::nullopt;
+}
+
 class TestLatency final : public Plugin
 {
 public:
@@ -124,6 +143,33 @@ public:
     }
 
     std::uint32_t latency() const override { return frames; }
+
+    std::optional<Editor> editor() const override
+    {
+        return Editor{.width = 400,
+                      .height = 240,
+                      .resizable = true,
+                      .minimumWidth = 300,
+                      .minimumHeight = 200,
+                      .maximumWidth = 900,
+                      .maximumHeight = 600,
+                      .sizeFile = sizeFile,
+                      .files = resizePage};
+    }
+
+    void editorOpened(EditorLink& link) override
+    {
+        if (onEditorOpened)
+            onEditorOpened(link);
+    }
+
+    void editorResized(std::uint32_t width, std::uint32_t height) override { resized = {width, height}; }
+
+    using Plugin::setEditorSize;
+
+    static inline std::filesystem::path sizeFile;
+    static inline std::function<void(EditorLink&)> onEditorOpened;
+    std::pair<std::uint32_t, std::uint32_t> resized{};
     void process(Block&) override {}
 
     void change(std::uint32_t newFrames)

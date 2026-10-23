@@ -45,3 +45,20 @@ void show(void* view, bool visible)
 }
 
 }
+
+namespace symbolengine::ui::native
+{
+
+Area workAreaAtPointer()
+{
+    const auto pointer = [NSEvent mouseLocation];
+    NSScreen* under = [NSScreen mainScreen];
+    for (NSScreen* screen in [NSScreen screens])
+        if (NSPointInRect(pointer, screen.frame))
+            under = screen;
+
+    const auto size = under != nil ? under.visibleFrame.size : NSMakeSize(1280, 800);
+    return {static_cast<std::uint32_t>(size.width), static_cast<std::uint32_t>(size.height)};
+}
+
+}

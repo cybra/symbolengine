@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <utility>
 
 namespace symbolengine::plugin::detail
 {
@@ -40,6 +41,18 @@ struct Access
     }
 
     static void attach(Plugin& plugin, HostLink* host) noexcept { plugin.host = host; }
+
+    /** This instance's editor size in points, or 0 by 0 until it has one. */
+    static std::pair<std::uint32_t, std::uint32_t> editorSize(const Plugin& plugin) noexcept
+    {
+        return {plugin.editorWidth, plugin.editorHeight};
+    }
+
+    static void keepEditorSize(Plugin& plugin, std::uint32_t width, std::uint32_t height) noexcept
+    {
+        plugin.editorWidth = width;
+        plugin.editorHeight = height;
+    }
 };
 
 }

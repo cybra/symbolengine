@@ -1,9 +1,18 @@
+#include <symbolengine/core/Files.h>
 #include <symbolengine/core/Json.h>
+#include <symbolengine/ui/Native.h>
 #include <symbolengine/ui/WebView.h>
 
 #include <choc/gui/choc_MessageLoop.h>
 
 #include <catch2/catch_test_macros.hpp>
+
+#if defined(__APPLE__)
+    #include <CoreGraphics/CoreGraphics.h>
+    #include <ImageIO/ImageIO.h>
+#endif
+#include <array>
+#include <cstdlib>
 
 #include <filesystem>
 #include <map>
@@ -97,6 +106,50 @@ std::string unique(std::string_view stem)
     std::random_device random;
     return std::string(stem) + "-" + std::to_string(random());
 }
+
+void setVariable(const char* name, const char* value)
+{
+#if defined(_WIN32)
+    _putenv_s(name, value);
+#else
+    if (value[0] == '\0')
+        unsetenv(name);
+    else
+        setenv(name, value, 1);
+#endif
+}
+
+#if defined(__APPLE__)
+// The colour of the pixel in the middle of a PNG, as red, green and blue from 0 to 255.
+std::array<int, 3> centreOf(const std::filesystem::path& png)
+{
+    std::array<int, 3> colour{-1, -1, -1};
+    const auto path = png.string();
+    CFURLRef url = CFURLCreateFromFileSystemRepresentation(nullptr, reinterpret_cast<const UInt8*>(path.c_str()),
+                                                           static_cast<CFIndex>(path.size()), false);
+    CGImageSourceRef source = CGImageSourceCreateWithURL(url, nullptr);
+    CGImageRef image = source != nullptr ? CGImageSourceCreateImageAtIndex(source, 0, nullptr) : nullptr;
+
+    if (image != nullptr)
+    {
+        unsigned char pixel[4] = {};
+        CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+        CGContextRef context =
+            CGBitmapContextCreate(pixel, 1, 1, 8, 4, space, static_cast<CGBitmapInfo>(kCGImageAlphaPremultipliedLast));
+        const auto w = static_cast<CGFloat>(CGImageGetWidth(image)), h = static_cast<CGFloat>(CGImageGetHeight(image));
+        CGContextDrawImage(context, CGRectMake(-w / 2, -h / 2, w, h), image);
+        colour = {pixel[0], pixel[1], pixel[2]};
+        CGContextRelease(context);
+        CGColorSpaceRelease(space);
+        CGImageRelease(image);
+    }
+
+    if (source != nullptr)
+        CFRelease(source);
+    CFRelease(url);
+    return colour;
+}
+#endif
 }
 
 TEST_CASE("Files are given MIME types by their names")
@@ -163,5 +216,61 @@ TEST_CASE("WebView2 keeps its data in the folder it is given")
 
     std::error_code ignored;
     std::filesystem::remove_all(folder, ignored);
+}
+#endif
+
+#if defined(__APPLE__)
+TEST_CASE("A snapshot saves the page as it is drawn")
+{
+    const auto png = std::filesystem::temp_directory_path() / (unique("symbolengine-snapshot") + ".png");
+    const auto red = pageWith(R"js(
+        document.addEventListener("DOMContentLoaded", () => {
+            document.body.style.cssText = "margin:0; background:#ff0000; width:100vw; height:100vh";
+            setTimeout(() => symbolengine.call("snap"), 300);
+        });
+    )js");
+
+    bool written = false;
+    runPage({.resources = onePage(red)}, [&](ui::WebView& view) {
+        ui::native::resize(view.nativeView(), 200, 150);   // made at no size, as a host would size it
+        view.expose("snap", [&](const Value&) {
+            view.snapshot(png, [&](bool done) {
+                written = done;
+                choc::messageloop::stop();
+            });
+            return Value();
+        });
+    });
+
+    REQUIRE(written);
+    const auto colour = centreOf(png);
+    CHECK(colour[0] > 240);   // red
+    CHECK(colour[1] < 20);
+    CHECK(colour[2] < 20);
+
+    std::error_code ignored;
+    std::filesystem::remove(png, ignored);
+}
+#endif
+
+// The live-files folder below is made by CMake in the build folder, and built in as liveTestFiles.
+std::optional<std::string_view> liveTestFiles(std::string_view path);
+
+#if !defined(NDEBUG)
+TEST_CASE("In a debug build, files built in can be read live from the folder they came from")
+{
+    const auto file = std::filesystem::path(SYMBOLENGINE_LIVE_TEST_FOLDER) / "greeting.txt";
+    const auto builtIn = files::read(file);
+    REQUIRE(liveTestFiles("/greeting.txt") == std::optional<std::string_view>(builtIn));
+
+    files::writeSafely(file, "changed on disk");
+    CHECK(liveTestFiles("/greeting.txt") == std::optional<std::string_view>(builtIn));   // not live yet
+
+    setVariable("SYMBOLENGINE_LIVE_FILES", "1");
+    CHECK(liveTestFiles("/greeting.txt") == std::optional<std::string_view>("changed on disk"));
+    CHECK_FALSE(liveTestFiles("/../greeting.txt").has_value());
+    setVariable("SYMBOLENGINE_LIVE_FILES", "");
+
+    files::writeSafely(file, builtIn);
 }
 #endif

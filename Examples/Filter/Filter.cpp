@@ -88,7 +88,14 @@ public:
 
     std::optional<Editor> editor() const override
     {
-        return Editor{.width = 420, .height = 260, .files = filterEditorFiles};
+        return Editor{.width = 420,
+                      .height = 260,
+                      .resizable = true,
+                      .minimumWidth = 360,
+                      .minimumHeight = 220,
+                      .maximumWidth = 1200,
+                      .maximumHeight = 800,
+                      .files = filterEditorFiles};
     }
 
     void editorTick(EditorLink& editor) override

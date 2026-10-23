@@ -84,6 +84,10 @@ public:
     /** Runs a script in the page. */
     void run(std::string script);
 
+    /** Saves a picture of the page as it is drawn now to a PNG file, for checks run from a script, and then says
+        whether it was written. On a Mac only for now; elsewhere it says false. */
+    void snapshot(const std::filesystem::path& png, std::function<void(bool written)> done);
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;
