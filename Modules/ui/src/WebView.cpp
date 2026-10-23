@@ -1,6 +1,7 @@
 #include <symbolengine/ui/WebView.h>
 
 #include <symbolengine/core/Json.h>
+#include <symbolengine/core/Paths.h>
 #include <symbolengine/core/Text.h>
 
 #include <choc/gui/choc_WebView.h>
@@ -31,6 +32,26 @@ std::string mimeTypeFor(std::string_view path)
 
     const auto found = types.find(extension);
     return found != types.end() ? found->second : "application/octet-stream";
+}
+
+namespace
+{
+// A page's address from its name. A Mac serves it on a scheme of SymbolEngine's own; WebView2 serves it on a
+// name under .localhost, which never reaches the network.
+std::string addressFor(std::string_view name)
+{
+    std::string host;
+    for (const char c : text::toLowerAscii(name))
+        host += (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' || c == '-' ? c : '-';
+    if (host.empty())
+        host = "page";
+
+#if defined(_WIN32)
+    return "https://" + host + ".localhost/";
+#else
+    return "symbolengine://" + host + "/";
+#endif
+}
 }
 
 struct WebView::Impl
@@ -106,6 +127,8 @@ WebView::WebView(Options options) : impl(std::make_unique<Impl>(std::move(option
     settings.acceptsFirstMouseClick = true;
     settings.transparentBackground = true;
     settings.fetchResource = [this](const std::string& path) { return impl->fetch(path); };
+    settings.customSchemeURI = addressFor(impl->options.name);
+    settings.userDataFolder = paths::toUtf8(impl->options.dataFolder);
 
     // WebView2 takes a binding only once it has started, which may be after the page has begun loading, so the
     // native function is bound when the view says it is ready; on a Mac that is while it is being made.

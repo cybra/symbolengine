@@ -2,6 +2,7 @@
 
 #include <symbolengine/core/Value.h>
 
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -45,6 +46,16 @@ public:
     struct Options
     {
         Resources resources{};
+
+        /** The page's own name, such as a plugin's id, which becomes its address: pages with different names never
+            share what they store, even in one program, and pages with the same name always do. Letters, digits,
+            dots and hyphens; anything else becomes a hyphen. */
+        std::string name = "page";
+
+        /** Windows only: the folder WebView2 keeps its data in, which it must be able to write to. Empty for a folder
+            named after the program that loaded it, in AppData\Roaming. */
+        std::filesystem::path dataFolder{};
+
         bool developerTools = false;   // the browser's inspector, on the page's context menu
     };
 

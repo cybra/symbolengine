@@ -8,11 +8,12 @@ endif()
 include(FetchContent)
 include(SymbolEngineResources)
 
-# CHOC, pinned by checksum. On Windows its web view carries Microsoft's WebView2Loader inside it, under Microsoft's
+# CHOC, pinned by checksum, with an option added for where WebView2 keeps its data (cmake/PatchChoc.cmake). On Windows its web view carries Microsoft's WebView2Loader inside it, under Microsoft's
 # BSD-style license, whose notice a program built with the ui module includes with its other notices.
 FetchContent_Declare(symbolengine_choc
     URL https://github.com/Tracktion/choc/archive/8af031c2ba4f5723f4b0a5ca14e0b4984af15b0e.tar.gz
     URL_HASH SHA256=930607066e0120438e6452d6caac21f886bf0289ae6db4717b3ce892e4d09b8a
+    PATCH_COMMAND ${CMAKE_COMMAND} -DFILE=choc/gui/choc_WebView.h -P ${PROJECT_SOURCE_DIR}/cmake/PatchChoc.cmake
     SOURCE_SUBDIR fetched-only)
 FetchContent_MakeAvailable(symbolengine_choc)
 

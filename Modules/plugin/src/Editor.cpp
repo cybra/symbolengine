@@ -3,6 +3,8 @@
 #include "Access.h"
 #include "TextValues.h"
 
+#include <symbolengine/core/Paths.h>
+
 #include <stdexcept>
 #include <string>
 
@@ -41,23 +43,35 @@ Value describe(const Parameter& parameter, double value)
     return about;
 }
 
-ui::WebView::Options pageOptions(const Editor& editor)
+ui::WebView::Options pageOptions(const Description& description, const Editor& editor)
 {
+    auto dataFolder = editor.dataFolder;
+    if (dataFolder.empty())
+    {
+        std::error_code ignored;
+        dataFolder = paths::systemFolder(paths::Folder::localAppData, ignored) / paths::fromUtf8(description.vendor) /
+                     paths::fromUtf8(description.name) / "WebView";
+    }
+
     return {.resources = [files = editor.files](std::string_view path) -> std::optional<ui::Resource> {
-        if (path == "/plugin.js")
-            return ui::Resource{std::string(*symbolengine_plugin_page_files("/plugin.js")), "text/javascript"};
-        if (!files)
-            return std::nullopt;
-        const auto found = files(path);
-        if (!found)
-            return std::nullopt;
-        return ui::Resource{std::string(*found), ""};
-    }};
+                if (path == "/plugin.js")
+                    return ui::Resource{std::string(*symbolengine_plugin_page_files("/plugin.js")), "text/javascript"};
+                if (!files)
+                    return std::nullopt;
+                const auto found = files(path);
+                if (!found)
+                    return std::nullopt;
+                return ui::Resource{std::string(*found), ""};
+            },
+            .name = description.id,
+            .dataFolder = dataFolder};
 }
 }
 
-EditorSession::EditorSession(Plugin& owner, Editor description, EditorChanges& queue, std::function<void()> tell)
-    : plugin(owner), editor(std::move(description)), changes(queue), told(std::move(tell)), view(pageOptions(editor))
+EditorSession::EditorSession(Plugin& owner, const Description& about, Editor description, EditorChanges& queue,
+                             std::function<void()> tell)
+    : plugin(owner), editor(std::move(description)), changes(queue), told(std::move(tell)),
+      view(pageOptions(about, editor))
 {
     const auto& parameters = plugin.parameters();
     for (std::size_t i = 0; i < parameters.size(); ++i)

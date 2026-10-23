@@ -18,9 +18,10 @@ namespace symbolengine::plugin::detail
 class EditorSession final : public EditorLink
 {
 public:
-    /** told is called after each change the page makes, so the host can be asked to collect them if the plugin isn't
-        processing. */
-    EditorSession(Plugin& plugin, Editor editor, EditorChanges& changes, std::function<void()> told);
+    /** The page is named after the plugin's id, so its stored data is the plugin's own. told is called after each
+        change the page makes, so the host can be asked to collect them if the plugin isn't processing. */
+    EditorSession(Plugin& plugin, const Description& description, Editor editor, EditorChanges& changes,
+                  std::function<void()> told);
     ~EditorSession() override;
 
     EditorSession(const EditorSession&) = delete;

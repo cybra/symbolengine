@@ -104,8 +104,9 @@ const Descriptors& descriptors()
 class Instance final : public detail::HostLink
 {
 public:
-    Instance(const clap_host* clapHost, const clap_plugin_descriptor* descriptor, std::unique_ptr<Plugin> made)
-        : host(clapHost), plugin(std::move(made))
+    Instance(const clap_host* clapHost, const clap_plugin_descriptor* descriptor, const Description& description,
+             std::unique_ptr<Plugin> made)
+        : host(clapHost), pluginDescription(description), plugin(std::move(made))
     {
         clap.desc = descriptor;
         clap.plugin_data = this;
@@ -132,6 +133,7 @@ public:
 
     clap_plugin clap{};
     const clap_host* host;
+    const Description& pluginDescription;
     const clap_host_params* hostParams = nullptr;
     const clap_host_latency* hostLatency = nullptr;
     std::unique_ptr<Plugin> plugin;
@@ -598,11 +600,12 @@ public:
             auto description = *plugin->editor();
             width = description.width;
             height = description.height;
-            editor = std::make_unique<detail::EditorSession>(*plugin, std::move(description), editorChanges, [this] {
-                // While the plugin isn't processing, the host collects the editor's changes when asked.
-                if (!processing && hostParams != nullptr)
-                    hostParams->request_flush(host);
-            });
+            editor = std::make_unique<detail::EditorSession>(*plugin, pluginDescription, std::move(description),
+                                                             editorChanges, [this] {
+                                                                 // While the plugin isn't processing, the host collects the editor's changes when asked.
+                                                                 if (!processing && hostParams != nullptr)
+                                                                     hostParams->request_flush(host);
+                                                             });
 
             if (!editor->available())
             {
@@ -829,7 +832,8 @@ const clap_plugin_factory factory{
             {
                 if (entries[i].description.id == id)
                 {
-                    auto* instance = new Instance(host, &descriptors().list[i], entries[i].make());
+                    auto* instance =
+                        new Instance(host, &descriptors().list[i], entries[i].description, entries[i].make());
                     return &instance->clap;
                 }
             }

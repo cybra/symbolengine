@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -144,6 +145,10 @@ struct Editor
     std::uint32_t minimumWidth = 200;
     std::uint32_t minimumHeight = 120;
     std::function<std::optional<std::string_view>(std::string_view path)> files{};
+
+    /** Windows only: the folder the editor's web view keeps its data in. Empty for AppData\Local\<vendor>\<plugin
+        name>\WebView. On every system the page's stored data is the plugin's own, apart from other plugins'. */
+    std::filesystem::path dataFolder{};
 };
 
 /** The plugin's side of its open editor, on the message thread. */
