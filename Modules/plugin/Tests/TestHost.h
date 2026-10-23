@@ -41,7 +41,7 @@ struct TestHost
 
         params.rescan = [](const clap_host* h, clap_param_rescan_flags flags) { of(h).rescans.push_back(flags); };
         params.clear = [](const clap_host*, clap_id, clap_param_clear_flags) {};
-        params.request_flush = [](const clap_host*) {};
+        params.request_flush = [](const clap_host* h) { ++of(h).flushRequests; };
         latency.changed = [](const clap_host* h) { ++of(h).latencyChanges; };
     }
 
@@ -54,6 +54,7 @@ struct TestHost
     clap_host_params params{};
     clap_host_latency latency{};
     int restarts = 0;
+    int flushRequests = 0;
     int latencyChanges = 0;
     std::vector<clap_param_rescan_flags> rescans;
 };

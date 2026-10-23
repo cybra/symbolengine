@@ -7,7 +7,8 @@ include(ExternalProject)
 # - each plugin loaded from its CLAP binary as a host loads it, made, run and destroyed, on every system;
 # - CLAP's validator, when SYMBOLENGINE_CLAP_VALIDATOR names it;
 # - Steinberg's VST3 validator, built from the same SDK the plugins are built with;
-# - pluginval on the VST3 build, when SYMBOLENGINE_PLUGINVAL names it;
+# - pluginval on the VST3 build, when SYMBOLENGINE_PLUGINVAL names it, opening its editor when
+#   SYMBOLENGINE_PLUGINVAL_EDITORS is on, which puts windows on the screen;
 # - Apple's auval on the Audio Unit, when SYMBOLENGINE_AUVAL is on. It installs the Audio Unit for the user running
 #   the tests, so it is meant for continuous integration.
 #
@@ -15,6 +16,7 @@ include(ExternalProject)
 # a process loads; in a sanitizer build only the loader, built with them too, runs.
 
 option(SYMBOLENGINE_AUVAL "Run auval on Audio Units, which installs them for the user running the tests" OFF)
+option(SYMBOLENGINE_PLUGINVAL_EDITORS "Let pluginval open plugins' editors, which puts windows on the screen" OFF)
 
 if(CMAKE_CXX_FLAGS MATCHES "-fsanitize")
     set(SYMBOLENGINE_HOSTS_CAN_LOAD_PLUGINS OFF CACHE INTERNAL "")
@@ -101,8 +103,13 @@ function(symbolengine_validate_plugin target)
         endif()
 
         if(SYMBOLENGINE_PLUGINVAL)
+            if(SYMBOLENGINE_PLUGINVAL_EDITORS)
+                set(editors)
+            else()
+                set(editors --skip-gui-tests)
+            endif()
             add_test(NAME "${target}: pluginval VST3"
-                COMMAND ${SYMBOLENGINE_PLUGINVAL} --strictness-level 10 --validate-in-process --skip-gui-tests
+                COMMAND ${SYMBOLENGINE_PLUGINVAL} --strictness-level 10 --validate-in-process ${editors}
                     --validate ${vst3_folder})
         endif()
     endif()

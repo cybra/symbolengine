@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<script src="symbolengine.js"></script>
+<script src="plugin.js"></script>
+<script>
+// Reads the parameters, changes one as a gesture, then waits for one the host changes.
+(async () => {
+    const parameters = await plugin.parameters();
+    const gain = parameters.get(1), mode = parameters.get(2), on = parameters.get(3);
+
+    await symbolengine.call("report", "gain", { name: gain.name, text: gain.text, minimum: gain.minimum });
+    await symbolengine.call("report", "modes", mode.steps.map(step => step.text));
+    await symbolengine.call("report", "typed", await gain.textFor(-3.26));
+
+    await gain.change(-12);
+    await symbolengine.call("report", "changed", gain.text);
+
+    on.onChange(changed => symbolengine.call("report", "automated", changed.text).then(() => symbolengine.call("done")));
+    await symbolengine.call("automate");
+})();
+</script>
+</head>
+<body>An editor for the tests</body>
+</html>

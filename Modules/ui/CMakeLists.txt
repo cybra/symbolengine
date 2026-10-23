@@ -17,13 +17,15 @@ FetchContent_Declare(symbolengine_choc
 FetchContent_MakeAvailable(symbolengine_choc)
 
 if(APPLE)
+    set(sources src/Native_mac.mm)
     set(libraries "-framework WebKit" "-framework AppKit" "-framework Foundation")
 else()
+    set(sources src/Native_windows.cpp)
     set(libraries ole32 oleaut32 user32 shell32 version)
 endif()
 
 symbolengine_add_module(ui
-    SOURCES src/WebView.cpp
+    SOURCES src/WebView.cpp src/Timer.cpp ${sources}
     DEPENDS core
     LIBRARIES ${libraries})
 

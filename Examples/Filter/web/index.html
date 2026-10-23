@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="style.css">
+<script src="symbolengine.js"></script>
+<script src="plugin.js"></script>
+<script src="editor.js" defer></script>
+</head>
+<body>
+<main>
+    <section class="knobs">
+        <div class="knob" data-parameter="1" data-scale="log">
+            <svg viewBox="0 0 100 100"><circle class="track" cx="50" cy="50" r="38"/><path class="arc"/><line class="pointer" x1="50" y1="50" x2="50" y2="18"/></svg>
+            <span class="name"></span>
+            <span class="value"></span>
+        </div>
+        <div class="knob" data-parameter="2">
+            <svg viewBox="0 0 100 100"><circle class="track" cx="50" cy="50" r="38"/><path class="arc"/><line class="pointer" x1="50" y1="50" x2="50" y2="18"/></svg>
+            <span class="name"></span>
+            <span class="value"></span>
+        </div>
+    </section>
+    <section class="side">
+        <div class="modes" data-parameter="3"></div>
+        <div class="meter"><div class="bar"></div><div class="bar"></div></div>
+    </section>
+</main>
+</body>
+</html>

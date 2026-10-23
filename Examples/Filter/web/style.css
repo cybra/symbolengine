@@ -1,0 +1,126 @@
+:root {
+    --background: #15171b;
+    --panel: #1d2026;
+    --line: #2c3038;
+    --text: #e8eaee;
+    --muted: #8a909c;
+    --accent: #5fb3ff;
+    color-scheme: dark;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    height: 100%;
+    background: var(--background);
+    color: var(--text);
+    font: 14px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    user-select: none;
+    -webkit-user-select: none;
+    overflow: hidden;
+}
+
+main {
+    display: flex;
+    gap: 16px;
+    height: 100%;
+    padding: 20px;
+}
+
+.knobs {
+    display: flex;
+    gap: 16px;
+    flex: 1;
+}
+
+.knob {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 1;
+    padding: 12px 8px;
+    border-radius: 6px;
+    background: var(--panel);
+    cursor: ns-resize;
+    touch-action: none;
+}
+
+.knob svg {
+    width: 120px;
+    height: 120px;
+}
+
+.knob .track {
+    fill: none;
+    stroke: var(--line);
+    stroke-width: 8;
+}
+
+.knob .arc {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 8;
+    stroke-linecap: round;
+}
+
+.knob .pointer {
+    stroke: var(--text);
+    stroke-width: 4;
+    stroke-linecap: round;
+}
+
+.knob .name {
+    margin-top: 6px;
+    color: var(--muted);
+}
+
+.knob .value {
+    font-variant-numeric: tabular-nums;
+}
+
+.side {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 120px;
+}
+
+.modes {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.modes button {
+    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--panel);
+    color: var(--muted);
+    font: inherit;
+    cursor: pointer;
+}
+
+.modes button.chosen {
+    border-color: var(--accent);
+    color: var(--text);
+}
+
+.meter {
+    display: flex;
+    gap: 6px;
+    flex: 1;
+    padding: 6px;
+    border-radius: 6px;
+    background: var(--panel);
+}
+
+.meter .bar {
+    flex: 1;
+    background: linear-gradient(to top, var(--accent) var(--level, 0%), var(--line) var(--level, 0%));
+    border-radius: 3px;
+}

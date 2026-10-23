@@ -125,6 +125,40 @@ private:
     std::span<const std::span<float* const>> outs;
 };
 
+/** A plugin's editor: a web page shown in the host's window for the plugin, on Mac and Windows. Its files come from
+    symbolengine_add_files, starting with "/index.html", which loads symbolengine.js and plugin.js:
+
+        <script src="symbolengine.js"></script>
+        <script src="plugin.js"></script>
+
+        const parameters = await plugin.parameters();
+        const gain = parameters.get(1);       // by id: gain.name, gain.value, gain.text, gain.minimum, ...
+        gain.onChange(() => show(gain.text));  // whenever the value changes, from the page, the host or a preset
+        await gain.change(-6);                 // a change the host records as automation; or begin(), set(), end()
+                                               // around a drag */
+struct Editor
+{
+    std::uint32_t width = 600;   // in points on a Mac and in pixels at 100% on Windows
+    std::uint32_t height = 400;
+    bool resizable = false;
+    std::uint32_t minimumWidth = 200;
+    std::uint32_t minimumHeight = 120;
+    std::function<std::optional<std::string_view>(std::string_view path)> files{};
+};
+
+/** The plugin's side of its open editor, on the message thread. */
+class EditorLink
+{
+public:
+    virtual ~EditorLink() = default;
+
+    /** Adds a function the page calls with symbolengine.call, given its arguments as an array. */
+    virtual void expose(std::string name, std::function<Value(const Value& arguments)> function) = 0;
+
+    /** Sends the page an event, which it receives with symbolengine.on. */
+    virtual void send(std::string_view event, const Value& data) = 0;
+};
+
 class Plugin;
 
 namespace detail
@@ -182,6 +216,19 @@ public:
 
     /** Audio thread: clears anything held from earlier audio, such as delay lines, as when the host jumps. */
     virtual void reset();
+
+    /** Message thread: the plugin's editor, or nothing for one without, asked when the host opens it. */
+    virtual std::optional<Editor> editor() const;
+
+    /** Message thread: the editor has opened; the place to expose the plugin's own functions to the page. */
+    virtual void editorOpened(EditorLink& editor);
+
+    /** Message thread, about 30 times a second while the editor is open: the place to send the page what changes on
+        its own, such as levels the audio thread has measured. Changes to the parameters reach the page without it. */
+    virtual void editorTick(EditorLink& editor);
+
+    /** Message thread: the editor has closed. */
+    virtual void editorClosed();
 
     /** The parameters, in the order they were added. */
     const std::vector<Parameter>& parameters() const noexcept { return definitions; }

@@ -44,7 +44,7 @@ symbolengine_add_plugin(Gain
     AU_MANUFACTURER_CODE Exmp)
 ```
 
-[Examples/Gain](Examples/Gain/Gain.cpp) is a whole plugin in about 40 lines.
+[Examples/Gain](Examples/Gain/Gain.cpp) is a whole plugin in about 40 lines, and [Examples/Filter](Examples/Filter) is a filter with an editor: knobs, mode buttons and a level meter in a web page.
 
 It needs CMake 3.25 or later and a C++20 compiler, and runs on macOS 11 or later, Windows 10 or later, and Linux.
 
@@ -54,7 +54,7 @@ It needs CMake 3.25 or later and a C++20 compiler, and runs on macOS 11 or later
 |---|---|
 | core | Values with JSON, UTF-8 text, paths and the system's folders, files written safely, settings files |
 | ui | Pages in the system's own web view, WKWebView on a Mac and WebView2 on Windows, served from files built into the program, calling native functions and receiving events through a script every page is given |
-| plugin | Plugins written once as a class, with parameters, state, buses, latency and tail, built as CLAP, VST3 and Audio Units, keeping the class ID and codes of a plugin released before, and checked by CLAP's validator, Steinberg's, auval and pluginval |
+| plugin | Plugins written once as a class, with parameters, state, buses, latency and tail, and an editor as a web page on Mac and Windows; built as CLAP, VST3 and Audio Units, keeping the class ID and codes of a plugin released before, and checked by CLAP's validator, Steinberg's, auval and pluginval |
 
 The [architecture](Docs/02_architecture.md) describes the modules to come: files, devices, app and host, and the rest of ui.
 

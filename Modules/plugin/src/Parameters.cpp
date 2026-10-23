@@ -15,6 +15,11 @@ namespace symbolengine::plugin
 namespace detail
 {
 
+std::string textFor(const Parameter& parameter, double value)
+{
+    return parameter.toText ? parameter.toText(value) : text::formatFixed(value, 2);
+}
+
 std::optional<double> leadingNumber(std::string_view typed)
 {
     auto text = text::trim(typed);

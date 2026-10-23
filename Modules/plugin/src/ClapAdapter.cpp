@@ -6,6 +6,7 @@
 #include <symbolengine/core/Text.h>
 
 #include "Access.h"
+#include "Changes.h"
 #include "Denormals.h"
 #include "Identity.h"
 #include "TextValues.h"
@@ -13,7 +14,13 @@
 #include <clap/clap.h>
 #include <clapwrapper/vst3.h>
 
+#if SYMBOLENGINE_EDITORS
+    #include "Editor.h"
+#endif
+
 #include <algorithm>
+#include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
@@ -108,8 +115,11 @@ public:
             return of(p).activate(rate, maximum);
         };
         clap.deactivate = [](const clap_plugin* p) { of(p).deactivate(); };
-        clap.start_processing = [](const clap_plugin*) { return true; };
-        clap.stop_processing = [](const clap_plugin*) {};
+        clap.start_processing = [](const clap_plugin* p) {
+            of(p).processing = true;
+            return true;
+        };
+        clap.stop_processing = [](const clap_plugin* p) { of(p).processing = false; };
         clap.reset = [](const clap_plugin* p) { of(p).reset(); };
         clap.process = [](const clap_plugin* p, const clap_process* process) { return of(p).process(*process); };
         clap.get_extension = [](const clap_plugin* p, const char* id) { return of(p).extension(id); };
@@ -128,6 +138,10 @@ public:
     Buses buses;
     bool active = false;
     std::optional<std::uint32_t> reportedLatency;
+
+    // Changes the editor made, for the host to be told of, and whether the host is calling process() to collect them.
+    detail::EditorChanges editorChanges;
+    std::atomic<bool> processing{false};
 
     // Each bus's channel pointers, moved along for each stretch of a split block, and the spans a Block hands out.
     std::vector<std::vector<const float*>> inputChannels;
@@ -240,12 +254,46 @@ public:
         return header.space_id == CLAP_CORE_EVENT_SPACE_ID && header.type == CLAP_EVENT_PARAM_VALUE;
     }
 
-    void flush(const clap_input_events* in) noexcept
+    void flush(const clap_input_events* in, const clap_output_events* out) noexcept
     {
         const auto count = in != nullptr ? in->size(in) : 0;
         for (std::uint32_t i = 0; i < count; ++i)
             if (const auto* header = in->get(in, i))
                 apply(*header);
+        tellHost(out);
+    }
+
+    // Tells the host of the changes the editor made, as the gestures and values it records automation from.
+    void tellHost(const clap_output_events* out) noexcept
+    {
+        editorChanges.drain([&](const detail::EditorChange& change) {
+            if (out == nullptr)
+                return;
+
+            if (change.kind == detail::EditorChange::Kind::value)
+            {
+                clap_event_param_value event{};
+                event.header = {sizeof event, 0, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_VALUE, 0};
+                event.param_id = change.id;
+                if (const auto index = detail::Access::index(*plugin, change.id))
+                    event.cookie = reinterpret_cast<void*>(static_cast<std::uintptr_t>(*index) + 1);
+                event.note_id = -1;
+                event.port_index = -1;
+                event.channel = -1;
+                event.key = -1;
+                event.value = change.value;
+                out->try_push(out, &event.header);
+            }
+            else
+            {
+                clap_event_param_gesture gesture{};
+                const auto type = change.kind == detail::EditorChange::Kind::begin ? CLAP_EVENT_PARAM_GESTURE_BEGIN
+                                                                                   : CLAP_EVENT_PARAM_GESTURE_END;
+                gesture.header = {sizeof gesture, 0, CLAP_CORE_EVENT_SPACE_ID, static_cast<std::uint16_t>(type), 0};
+                gesture.param_id = change.id;
+                out->try_push(out, &gesture.header);
+            }
+        });
     }
 
     bool buffersMatch(const clap_process& call) const noexcept
@@ -291,6 +339,7 @@ public:
         try
         {
             detail::NoDenormals noDenormals;
+            tellHost(call.out_events);
 
             // The block is split where each parameter changes, so every stretch is processed with its own values.
             const auto frames = call.frames_count;
@@ -371,7 +420,7 @@ public:
             const auto* about = parameter(id);
             if (about == nullptr)
                 return false;
-            copyText(display, size, about->toText ? about->toText(value) : text::formatFixed(value, 2));
+            copyText(display, size, detail::textFor(*about, value));
             return true;
         }
         catch (...)
@@ -502,6 +551,155 @@ public:
     }
 
     const void* extension(const char* id) const noexcept;
+
+#if SYMBOLENGINE_EDITORS
+    // The editor, in the host's window. A Mac host gives sizes in points; a Windows host gives them in pixels, and
+    // says how many pixels a point is.
+
+    #if defined(__APPLE__)
+    static constexpr const char* windowApi = CLAP_WINDOW_API_COCOA;
+    #else
+    static constexpr const char* windowApi = CLAP_WINDOW_API_WIN32;
+    #endif
+
+    std::unique_ptr<detail::EditorSession> editor;
+    double scale = 1.0;
+    std::uint32_t width = 0, height = 0;   // in points
+
+    std::uint32_t pixels(std::uint32_t inPoints) const noexcept
+    {
+        return static_cast<std::uint32_t>(std::lround(inPoints * scale));
+    }
+
+    std::uint32_t points(std::uint32_t inPixels) const noexcept
+    {
+        return static_cast<std::uint32_t>(std::lround(inPixels / scale));
+    }
+
+    bool guiSupported(const char* api, bool floating) const noexcept
+    {
+        try
+        {
+            return !floating && api != nullptr && std::strcmp(api, windowApi) == 0 && plugin->editor().has_value();
+        }
+        catch (...)
+        {
+            return false;
+        }
+    }
+
+    bool guiCreate(const char* api, bool floating) noexcept
+    {
+        try
+        {
+            if (!guiSupported(api, floating))
+                return false;
+
+            auto description = *plugin->editor();
+            width = description.width;
+            height = description.height;
+            editor = std::make_unique<detail::EditorSession>(*plugin, std::move(description), editorChanges, [this] {
+                // While the plugin isn't processing, the host collects the editor's changes when asked.
+                if (!processing && hostParams != nullptr)
+                    hostParams->request_flush(host);
+            });
+
+            if (!editor->available())
+            {
+                editor.reset();
+                return false;
+            }
+            ui::native::resize(editor->nativeView(), pixels(width), pixels(height));
+            return true;
+        }
+        catch (...)
+        {
+            editor.reset();
+            return false;
+        }
+    }
+
+    bool guiSetScale(double newScale) noexcept
+    {
+    #if defined(_WIN32)
+        if (!(newScale > 0.0))
+            return false;
+        scale = newScale;
+        if (editor != nullptr)
+            ui::native::resize(editor->nativeView(), pixels(width), pixels(height));
+        return true;
+    #else
+        (void) newScale;
+        return false;
+    #endif
+    }
+
+    bool guiGetSize(std::uint32_t& w, std::uint32_t& h) const noexcept
+    {
+        if (editor == nullptr)
+            return false;
+        w = pixels(width);
+        h = pixels(height);
+        return true;
+    }
+
+    bool guiResizable() const noexcept { return editor != nullptr && editor->description().resizable; }
+
+    bool guiResizeHints(clap_gui_resize_hints& hints) const noexcept
+    {
+        if (editor == nullptr)
+            return false;
+        hints.can_resize_horizontally = guiResizable();
+        hints.can_resize_vertically = guiResizable();
+        hints.preserve_aspect_ratio = false;
+        hints.aspect_ratio_width = 0;
+        hints.aspect_ratio_height = 0;
+        return true;
+    }
+
+    bool guiAdjustSize(std::uint32_t& w, std::uint32_t& h) const noexcept
+    {
+        if (editor == nullptr)
+            return false;
+        if (!guiResizable())
+        {
+            w = pixels(width);
+            h = pixels(height);
+            return true;
+        }
+        w = std::max(w, pixels(editor->description().minimumWidth));
+        h = std::max(h, pixels(editor->description().minimumHeight));
+        return true;
+    }
+
+    bool guiSetSize(std::uint32_t w, std::uint32_t h) noexcept
+    {
+        if (editor == nullptr || (!guiResizable() && (w != pixels(width) || h != pixels(height))))
+            return false;
+        width = points(w);
+        height = points(h);
+        ui::native::resize(editor->nativeView(), w, h);
+        return true;
+    }
+
+    bool guiSetParent(const clap_window& window) noexcept
+    {
+        if (editor == nullptr || window.api == nullptr || std::strcmp(window.api, windowApi) != 0)
+            return false;
+        if (!ui::native::attach(editor->nativeView(), window.ptr))
+            return false;
+        ui::native::resize(editor->nativeView(), pixels(width), pixels(height));
+        return true;
+    }
+
+    bool guiShow(bool visible) noexcept
+    {
+        if (editor == nullptr)
+            return false;
+        ui::native::show(editor->nativeView(), visible);
+        return true;
+    }
+#endif
 };
 
 // The extensions each plugin offers.
@@ -520,7 +718,7 @@ const clap_plugin_params params{
     .text_to_value = [](const clap_plugin* p, clap_id id, const char* display,
                         double* value) { return value != nullptr && Instance::of(p).textToValue(id, display, *value); },
     .flush = [](const clap_plugin* p, const clap_input_events* in,
-                const clap_output_events*) { Instance::of(p).flush(in); },
+                const clap_output_events* out) { Instance::of(p).flush(in, out); },
 };
 
 const clap_plugin_state state{
@@ -544,6 +742,43 @@ const clap_plugin_tail tails{
     .get = [](const clap_plugin* p) { return Instance::of(p).tail(); },
 };
 
+#if SYMBOLENGINE_EDITORS
+const clap_plugin_gui gui{
+    .is_api_supported = [](const clap_plugin* p, const char* api,
+                           bool floating) { return Instance::of(p).guiSupported(api, floating); },
+    .get_preferred_api =
+        [](const clap_plugin*, const char** api, bool* floating) {
+            if (api == nullptr || floating == nullptr)
+                return false;
+            *api = Instance::windowApi;
+            *floating = false;
+            return true;
+        },
+    .create = [](const clap_plugin* p, const char* api,
+                 bool floating) { return Instance::of(p).guiCreate(api, floating); },
+    .destroy = [](const clap_plugin* p) { Instance::of(p).editor.reset(); },
+    .set_scale = [](const clap_plugin* p, double scale) { return Instance::of(p).guiSetScale(scale); },
+    .get_size = [](const clap_plugin* p, std::uint32_t* w,
+                   std::uint32_t* h) { return w != nullptr && h != nullptr && Instance::of(p).guiGetSize(*w, *h); },
+    .can_resize = [](const clap_plugin* p) { return Instance::of(p).guiResizable(); },
+    .get_resize_hints =
+        [](const clap_plugin* p, clap_gui_resize_hints* hints) {
+            return hints != nullptr && Instance::of(p).guiResizeHints(*hints);
+        },
+    .adjust_size =
+        [](const clap_plugin* p, std::uint32_t* w, std::uint32_t* h) {
+            return w != nullptr && h != nullptr && Instance::of(p).guiAdjustSize(*w, *h);
+        },
+    .set_size = [](const clap_plugin* p, std::uint32_t w, std::uint32_t h) { return Instance::of(p).guiSetSize(w, h); },
+    .set_parent = [](const clap_plugin* p,
+                     const clap_window* window) { return window != nullptr && Instance::of(p).guiSetParent(*window); },
+    .set_transient = [](const clap_plugin*, const clap_window*) { return false; },
+    .suggest_title = [](const clap_plugin*, const char*) {},
+    .show = [](const clap_plugin* p) { return Instance::of(p).guiShow(true); },
+    .hide = [](const clap_plugin* p) { return Instance::of(p).guiShow(false); },
+};
+#endif
+
 const void* Instance::extension(const char* id) const noexcept
 {
     if (id == nullptr)
@@ -558,6 +793,10 @@ const void* Instance::extension(const char* id) const noexcept
         return &latencies;
     if (std::strcmp(id, CLAP_EXT_TAIL) == 0)
         return &tails;
+#if SYMBOLENGINE_EDITORS
+    if (std::strcmp(id, CLAP_EXT_GUI) == 0)
+        return &gui;
+#endif
     return nullptr;
 }
 

@@ -11,11 +11,26 @@ symbolengine_add_module(plugin NOT_INSTALLED
 target_link_libraries(symbolengine_plugin PUBLIC clap PRIVATE clap-wrapper-extensions)
 target_include_directories(symbolengine_plugin PRIVATE src)
 
+# Editors are web pages, so they come with the ui module's web view, on Mac and Windows.
+include(SymbolEngineResources)
+if(TARGET symbolengine_ui)
+    target_sources(symbolengine_plugin PRIVATE src/Editor.cpp)
+    target_link_libraries(symbolengine_plugin PRIVATE symbolengine_ui)
+    target_compile_definitions(symbolengine_plugin PRIVATE SYMBOLENGINE_EDITORS=1)
+    symbolengine_add_files(symbolengine_plugin FOLDER web FUNCTION symbolengine_plugin_page_files)
+endif()
+
 if(SYMBOLENGINE_TESTS)
     symbolengine_add_tests(plugin SOURCES
         Tests/ClapTests.cpp
         Tests/ParameterTests.cpp)
     target_include_directories(symbolengine_plugin_tests PRIVATE src)
     target_link_libraries(symbolengine_plugin_tests PRIVATE clap-wrapper-extensions)
+    symbolengine_add_files(symbolengine_plugin_tests FOLDER Tests/EditorPage FUNCTION testEditorFiles)
+    if(TARGET symbolengine_ui)
+        FetchContent_GetProperties(symbolengine_choc)
+        target_sources(symbolengine_plugin_tests PRIVATE Tests/EditorTests.cpp)
+        target_include_directories(symbolengine_plugin_tests SYSTEM PRIVATE ${symbolengine_choc_SOURCE_DIR})
+    endif()
     include(SymbolEngineValidation)
 endif()

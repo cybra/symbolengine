@@ -49,6 +49,17 @@ bool Plugin::loadState(std::string_view state)
 
 void Plugin::reset() {}
 
+std::optional<Editor> Plugin::editor() const
+{
+    return std::nullopt;
+}
+
+void Plugin::editorOpened(EditorLink&) {}
+
+void Plugin::editorTick(EditorLink&) {}
+
+void Plugin::editorClosed() {}
+
 const Parameter* Plugin::findParameter(std::uint32_t id) const noexcept
 {
     const auto found = indexOf.find(id);
