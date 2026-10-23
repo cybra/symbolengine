@@ -6,7 +6,7 @@ Each module is a CMake target usable on its own, with its own tests, guide and e
 
 | Module | What it does | Built on |
 |---|---|---|
-| core | UTF-8 text helpers over `std::string`, paths over `std::filesystem`, values with JSON, speaker layouts, the message loop and timers, threads, spin locks, lock-free FIFOs, logging, settings files written safely | C++20, CHOC |
+| core | UTF-8 text helpers over `std::string`, paths over `std::filesystem`, values with JSON, XML documents, speaker layouts, the message loop and timers, threads, spin locks, lock-free FIFOs, logging, settings files written safely | C++20, CHOC |
 | files | Reading and writing audio files: WAV with BWF and iXML, AIFF, FLAC, Ogg Vorbis; reading MP3; AAC, M4A and CAF through the system's own decoders; streaming readers for files of any length | CHOC, AudioToolbox, Media Foundation |
 | devices | Audio and MIDI devices: Core Audio, Windows Audio in shared and exclusive mode, ASIO with the developer's own SDK, ALSA, PipeWire and JACK; device lists and changes, latency in and out, inputs and outputs run apart or together | System APIs, CHOC's device layer where it fits |
 | ui | The system's web view (WKWebView, WebView2, WebKitGTK) with a typed bridge: native functions the page calls and awaits, events the native side sends, and resources served from memory; windows, native menus, dialogs, file choosers, drag and drop, the clipboard, keyboard handling | CHOC's web view, AppKit, Win32, GTK |
@@ -21,6 +21,8 @@ Each module lives in `Modules/<name>`: its public headers in `include/symbolengi
 Text is UTF-8 in `std::string`, and paths are `std::filesystem::path`, turned to and from UTF-8 with `paths::fromUtf8` and `paths::toUtf8`, since a path's own `string()` uses the system's code page on Windows. Text written for files and for other programs, numbers included, comes out the same on every system and in every locale. A function that can fail for reasons outside the program, such as a missing file, throws `std::filesystem::filesystem_error` or, given a `std::error_code`, sets it, as `std::filesystem` does. Reading data that may not be there, such as a member of a parsed value, never throws.
 
 Values hold what JSON holds, keeping whole numbers as 64-bit integers so that sample positions stay exact, and objects keep their members in the order they were added. JSON is written as browsers write it, so a page and the native side read each other's numbers exactly. Files that hold a user's work or settings are written beside the old one and moved into its place in one step, so a crash leaves either the old file or the new one whole, and a settings file that can't be read is kept aside instead of being overwritten.
+
+XML is read and written for documents of data, such as settings, lists and session files: elements with their attributes in order, the elements inside them and their text. The entities XML defines and character references are read, and a document's own entities never are, so a document can't make itself grow without bound. Everything written reads back as it was, line breaks in attributes included.
 
 ## Web pages
 

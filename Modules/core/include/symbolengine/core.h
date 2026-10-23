@@ -8,3 +8,4 @@
 #include "core/System.h"
 #include "core/Text.h"
 #include "core/Value.h"
+#include "core/Xml.h"

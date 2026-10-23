@@ -2,9 +2,9 @@
 
 ## Where things stand
 
-- **Foundations.** The repository, the CMake build and continuous integration on Mac, Windows and Linux are in place, with a contributing guide and issue and pull request templates. The core module has its first parts: values with JSON, UTF-8 text, paths and the system's folders, files written safely, settings files, and speaker layouts.
+- **Foundations.** The repository, the CMake build and continuous integration on Mac, Windows and Linux are in place, with a contributing guide and issue and pull request templates. The core module has its first parts: values with JSON, XML documents, UTF-8 text, paths and the system's folders, files written safely, settings files, and speaker layouts.
 - **Web pages.** The ui module shows pages in the system's own web view on Mac and Windows, served from files built into the program, with calls and events between page and native code. Plugin editors are web pages built on it, and the Filter example has one.
-- **Plugins.** The plugin module builds CLAP, VST3 and Audio Unit plugins from a class written once, and keeps a VST3 class ID and Audio Unit codes a plugin was released with. Buses take any standard layout from mono to 7.1.4 in every format, Dolby's 9.1.4 and 9.1.6 in VST3 and Audio Units, and the ITU 9.1.6 in CLAP and VST3, through SymbolEngine's fork of clap-wrapper. The Gain and Filter examples pass CLAP's validator, Steinberg's, pluginval at its strictest level and auval. Reading the state an earlier build saved and keeping its parameter numbers come next, checked against a Live set.
+- **Plugins.** The plugin module builds CLAP, VST3 and Audio Unit plugins from a class written once, and keeps a VST3 class ID and Audio Unit codes a plugin was released with. Buses take any standard layout from mono to 7.1.4 in every format, Dolby's 9.1.4 and 9.1.6 in VST3 and Audio Units, and the ITU 9.1.6 in CLAP and VST3, through SymbolEngine's fork of clap-wrapper. The Gain and Filter examples pass CLAP's validator, Steinberg's, pluginval at its strictest level and auval. A plugin released before keeps the state hosts saved of it and its parameter numbers, as Symbol Studio's four plugins do, checked against a Live set saved with their earlier builds.
 - **The first release** comes when Symbol Studio runs on SymbolEngine alone, and the phases below follow what it needs, plugins first and hosting other makers' plugins last.
 - **Home.** The name is SymbolEngine, symbolengine.dev is registered, the license is MIT, and the code is public at github.com/cybra/symbolengine. Contributions are signed off under the Developer Certificate of Origin.
 
@@ -38,15 +38,13 @@
 - [ ] Dolby's 9.1.x in AAX, when AAX is built: the fork's AAX wrapper reads 5.1's surround pair as the side pair, where VST3 and Audio Units read it as the rear pair, which it has to agree with first.
 - [x] Parameters hosts see and record from 0 to 1 on a linear or ratio scale, shown in their own units, as plugins already released with such parameters have them.
 - [x] Editors that tick up to 120 times a second, and the plugin's own functions changing parameters in gestures the host records; core opens web addresses in the browser.
-- [ ] Its earlier versions' saved state and parameter numbers kept, checked against sessions saved with them.
+- [x] Its earlier versions' saved state and parameter numbers kept, an Audio Unit's state under the key its earlier versions used, checked against a Live set saved with them.
 - [x] Example: a gain, passing every validator on every system.
 - [x] Example: a filter with an editor and a level meter.
 - [ ] Example: a meter.
-- [ ] Symbol Studio's first plugin built on it.
-
 ## Phase 2: Core, files and the app
 
-- [x] core: values and JSON, UTF-8 text, paths and the system's folders, files written safely, settings files, speaker layouts.
+- [x] core: values and JSON, XML documents, UTF-8 text, paths and the system's folders, files written safely, settings files, speaker layouts.
 - [ ] core: the message loop, timers, threads and FIFOs, logging, child processes.
 - [ ] files: WAV with BWF and iXML, AIFF, FLAC, Ogg Vorbis, MP3 reading, the systems' decoders for AAC, M4A and CAF, streaming readers.
 - [x] ui: the web view on Mac and Windows, with pages served from files built into the program, and calls and events between page and native code.

@@ -52,7 +52,7 @@ It needs CMake 3.25 or later and a C++20 compiler, and runs on macOS 11 or later
 
 | Module | Now |
 |---|---|
-| core | Values with JSON, UTF-8 text, paths and the system's folders, files written safely, settings files, speaker layouts |
+| core | Values with JSON, XML documents, UTF-8 text, paths and the system's folders, files written safely, settings files, speaker layouts |
 | ui | Pages in the system's own web view, WKWebView on a Mac and WebView2 on Windows, served from files built into the program, calling native functions and receiving events through a script every page is given |
 | plugin | Plugins written once as a class, with parameters, state, buses from mono to 9.1.6, latency and tail, and an editor as a web page on Mac and Windows; built as CLAP, VST3 and Audio Units, keeping the class ID and codes of a plugin released before, and checked by CLAP's validator, Steinberg's, auval and pluginval |
 

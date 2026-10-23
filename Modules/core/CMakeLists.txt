@@ -8,7 +8,8 @@ set(sources
     src/System.cpp
     src/Text.cpp
     src/Utf8.cpp
-    src/Value.cpp)
+    src/Value.cpp
+    src/Xml.cpp)
 
 set(libraries)
 
@@ -34,7 +35,8 @@ if(SYMBOLENGINE_TESTS)
         Tests/SystemTests.cpp
         Tests/TextTests.cpp
         Tests/ToCharsReference.cpp
-        Tests/ValueTests.cpp)
+        Tests/ValueTests.cpp
+        Tests/XmlTests.cpp)
 
     # The number tests check the module's own way of printing a double against std::to_chars, which Apple provides
     # for doubles from macOS 13.3, so the file holding the reference is built for that.
