@@ -193,11 +193,12 @@ TEST_CASE("An editor opens in the host's window, and its page and the host chang
                                             {CLAP_EVENT_PARAM_GESTURE_END, 2, 0.0}});
     CHECK(TestGain::last->mode.get() == 1.0);
 
-    // It ticked as often as it asked, 100 times a second, well beyond the 30 it would have by default.
+    // It ticked as often as it asked, 5 times a second, well below the 30 it would have by default; a timer can fire
+    // later than asked on a busy machine, never sooner.
     const auto& ticks = TestGain::last->ticks;
-    REQUIRE(ticks.size() > 10);
+    REQUIRE(ticks.size() >= 2);
     const std::chrono::duration<double> span = ticks.back() - ticks.front();
-    CHECK(static_cast<double>(ticks.size() - 1) / span.count() > 50.0);
+    CHECK(static_cast<double>(ticks.size() - 1) / span.count() < 10.0);
 }
 
 TEST_CASE("A resizable editor asks the host for sizes within its limits, and opens again at the size it was given")

@@ -88,7 +88,7 @@ public:
 
     std::optional<Editor> editor() const override
     {
-        return Editor{.width = 320, .height = 200, .files = testEditorFiles, .ticksPerSecond = 100};
+        return Editor{.width = 320, .height = 200, .files = testEditorFiles, .ticksPerSecond = 5};
     }
 
     void editorOpened(EditorLink& link) override

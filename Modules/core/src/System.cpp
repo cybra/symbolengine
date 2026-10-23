@@ -7,8 +7,10 @@
     #ifndef NOMINMAX
         #define NOMINMAX
     #endif
-    #include <shellapi.h>
     #include <windows.h>
+
+    // After windows.h, which it needs.
+    #include <shellapi.h>
 
     #include <filesystem>
     #include <vector>
