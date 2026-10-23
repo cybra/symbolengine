@@ -58,10 +58,12 @@ add_test(NAME "consumer: find_package"
         --test-command consumer)
 set_tests_properties("consumer: find_package" PROPERTIES FIXTURES_REQUIRED installed)
 
-# Each example plugin, loaded from its CLAP binary as a host loads it, made, run and destroyed.
-if(SYMBOLENGINE_PLUGIN AND SYMBOLENGINE_EXAMPLES)
-    add_executable(symbolengine_clap_loader ClapLoader/ClapLoader.cpp)
-    target_link_libraries(symbolengine_clap_loader PRIVATE clap ${CMAKE_DL_LIBS})
-    symbolengine_set_warnings(symbolengine_clap_loader)
-    add_test(NAME "Gain: loads and processes" COMMAND symbolengine_clap_loader $<TARGET_FILE:Gain_clap>)
+# A plugin that states its VST3 class ID, as one moved from elsewhere does, found by Steinberg's validator under it.
+if(SYMBOLENGINE_PLUGIN)
+    symbolengine_add_plugin(IdentityTest
+        SOURCES IdentityPlugin/IdentityPlugin.cpp
+        BUNDLE_IDENTIFIER test.symbolengine.identity
+        FORMATS CLAP VST3)
+    symbolengine_set_warnings(IdentityTest_impl)
+    symbolengine_validate_plugin(IdentityTest VST3_CLASS_ID ABCDEF0153796D624964656E74697479)
 endif()

@@ -3,7 +3,7 @@
 ## Where things stand
 
 - **Foundations.** The repository, the CMake build and continuous integration on Mac, Windows and Linux are in place, with a contributing guide and issue and pull request templates. The core module has its first parts: values with JSON, UTF-8 text, paths and the system's folders, files written safely, and settings files.
-- **Plugins.** The plugin module builds CLAP plugins from a class written once, and the Gain example passes CLAP's validator on Mac, Windows and Linux. VST3, Audio Units and standalone come next, through clap-wrapper, then the editor as a web page.
+- **Plugins.** The plugin module builds CLAP, VST3 and Audio Unit plugins from a class written once, and keeps a VST3 class ID and Audio Unit codes a plugin was released with. The Gain example passes CLAP's validator, Steinberg's, pluginval at its strictest level and auval. The editor as a web page comes next.
 - **The first release** comes when Symbol Studio runs on SymbolEngine alone, and the phases below follow what it needs, plugins first and hosting other makers' plugins last.
 - **Home.** The name is SymbolEngine, symbolengine.dev is registered, the license is MIT, and the code is public at github.com/cybra/symbolengine. Contributions are signed off under the Developer Certificate of Origin.
 
@@ -26,10 +26,12 @@
 - [x] The plugin interface, shaped like CLAP: parameters with permanent IDs, state, buses, latency, tail, and processing split where parameters change.
 - [ ] The editor as a web page with the typed bridge.
 - [x] CLAP, with CLAP's validator in continuous integration on every system.
-- [ ] VST3, AU v2, AU v3, AAX (with the developer's SDK) and standalone through clap-wrapper.
-- [ ] A plugin's own VST3 class ID and Audio Unit codes, its earlier versions' saved state and its parameter numbers kept ([moving an existing plugin](02_architecture.md#moving-an-existing-plugin)).
-- [x] Example: a gain.
-- [ ] Examples: a filter with an editor, a meter; every validator passing on every system.
+- [x] VST3 and AU v2 through clap-wrapper, checked by Steinberg's validator, pluginval and auval.
+- [ ] AU v3, AAX (with the developer's SDK) and standalone through clap-wrapper.
+- [x] A plugin's own VST3 class ID and Audio Unit codes kept ([moving an existing plugin](02_architecture.md#moving-an-existing-plugin)).
+- [ ] Its earlier versions' saved state and parameter numbers kept, checked against sessions saved with them.
+- [x] Example: a gain, passing every validator on every system.
+- [ ] Examples: a filter with an editor, a meter.
 - [ ] Symbol Studio's first plugin built on it.
 
 ## Phase 2: Core, files and the app

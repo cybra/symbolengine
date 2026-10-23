@@ -34,6 +34,11 @@ struct Description
     std::string manualUrl{};
     std::string supportUrl{};
     std::vector<std::string> features{};   // CLAP's feature names, such as "audio-effect", "analyzer" and "stereo"
+
+    /** The class ID hosts know the plugin's VST3 build by, for a plugin already released with one of its own: 32
+        hexadecimal digits as Steinberg's validator prints them, such as "ABCDEF0153796D6247616E6750726F21". Empty for
+        one made from the id, which never changes either. */
+    std::string vst3ClassId{};
 };
 
 /** One of a plugin's parameters, the settings a host can save, show and automate. */

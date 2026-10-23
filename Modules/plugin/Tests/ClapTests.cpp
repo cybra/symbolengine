@@ -1,7 +1,10 @@
+#include "Identity.h"
 #include "TestHost.h"
 
 #include <symbolengine/core/Text.h>
 #include <symbolengine/plugin.h>
+
+#include <clapwrapper/vst3.h>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -87,7 +90,11 @@ class TestLatency final : public Plugin
 public:
     static Description describe()
     {
-        return {.id = "test.latency", .name = "Test Latency", .vendor = "Tests", .version = "2.0.0"};
+        return {.id = "test.latency",
+                .name = "Test Latency",
+                .vendor = "Tests",
+                .version = "2.0.0",
+                .vst3ClassId = "ABCDEF0153796D62546573744C617421"};
     }
 
     TestLatency()
@@ -454,4 +461,37 @@ TEST_CASE("A plugin that throws while preparing refuses activation instead of cr
     CHECK_FALSE(made.plugin->activate(made.plugin, 44100.0, 1, 256));
     TestGain::failToPrepare = false;
     CHECK(made.plugin->activate(made.plugin, 44100.0, 1, 256));
+}
+
+TEST_CASE("A VST3 class ID is read as Steinberg's validator prints it")
+{
+    const auto id = detail::vst3ComponentId("ABCDEF01-9182-FAEB-5379-6D6244796E61");
+    REQUIRE(id);
+    const array_of_16_bytes expected = COMPONENT_ID(0xABCDEF01, 0x9182FAEB, 0x53796D62, 0x44796E61);
+    CHECK(std::memcmp(id->data(), expected, 16) == 0);
+
+    CHECK(detail::vst3ComponentId("{abcdef019182faeb53796d6244796e61}") == id);
+    CHECK_FALSE(detail::vst3ComponentId("ABCDEF01").has_value());
+    CHECK_FALSE(detail::vst3ComponentId("ABCDEF019182FAEB53796D6244796E61AA").has_value());
+    CHECK_FALSE(detail::vst3ComponentId("GBCDEF019182FAEB53796D6244796E61").has_value());
+}
+
+TEST_CASE("Each plugin's VST3 build is given the class ID it states, or none to be made from its id")
+{
+    const auto* vst3 =
+        static_cast<const clap_plugin_factory_as_vst3*>(symbolengine_clap_get_factory(CLAP_PLUGIN_FACTORY_INFO_VST3));
+    REQUIRE(vst3 != nullptr);
+    CHECK(symbolengine_clap_get_factory(CLAP_PLUGIN_FACTORY_INFO_VST3_V1) == vst3);
+
+    const auto* gain = vst3->get_vst3_info(vst3, 0);
+    REQUIRE(gain != nullptr);
+    CHECK(gain->componentId == nullptr);
+
+    const auto* latency = vst3->get_vst3_info(vst3, 1);
+    REQUIRE(latency != nullptr);
+    REQUIRE(latency->componentId != nullptr);
+    const array_of_16_bytes expected = COMPONENT_ID(0xABCDEF01, 0x53796D62, 0x54657374, 0x4C617421);
+    CHECK(std::memcmp(*latency->componentId, expected, 16) == 0);
+
+    CHECK(vst3->get_vst3_info(vst3, 2) == nullptr);
 }

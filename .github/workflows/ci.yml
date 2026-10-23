@@ -26,16 +26,22 @@ jobs:
             preset: ci-mac
             validator: macos-universal.zip
             validator-sha256: bbec8cd7d18274e549d5d8c12ece3cec54be966129388dd2e742b9957f2ba9f1
+            pluginval: macOS
+            pluginval-sha256: 3c4c533bda0c5059eea3ddaea752d757ee2025041f0f47e6bcb0e87f6082b29f
           - name: Windows
             os: windows-latest
             preset: ci-windows
             validator: windows.zip
             validator-sha256: d935c3af0a45c3911ea2e900f4aa5d6709dac82bb485f0c4ce28648ab2cd0c10
+            pluginval: Windows
+            pluginval-sha256: c08e61ce3b96db41636f8ec7e76f4c7e2c13ebdac7fa1b5a1f52b4f32ec715ab
           - name: Linux
             os: ubuntu-latest
             preset: ci-linux
             validator: ubuntu-22.04.zip
             validator-sha256: 49edadcfb407ea0dd946ce418300e853fbd2660fa4b0d00e4f19ff8eef24ad90
+            pluginval: Linux
+            pluginval-sha256: c01c49d8063965c4c2dea8324468336768f5c9139e0b1caebde14c2400b55352
           # The validator can't load a plugin built with the sanitizers, which must be the first thing a process loads.
           - name: Linux with sanitizers
             os: ubuntu-latest
@@ -48,29 +54,52 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo locale-gen de_DE.UTF-8
 
-      # CLAP's validator, pinned by checksum, checks every CLAP plugin the build makes.
-      - name: CLAP validator
+      # The plugin validators, each pinned by checksum: CLAP's, and pluginval, a separate GPL tool run on the plugins.
+      # Steinberg's is built from the VST3 SDK, and auval comes with macOS.
+      - name: Validators
         if: matrix.validator
         shell: bash
         env:
-          ASSET: clap-validator-0.4.1-127-g152b982-${{ matrix.validator }}
-          SHA256: ${{ matrix.validator-sha256 }}
+          CLAP_ASSET: clap-validator-0.4.1-127-g152b982-${{ matrix.validator }}
+          CLAP_SHA256: ${{ matrix.validator-sha256 }}
+          PLUGINVAL_ASSET: pluginval_${{ matrix.pluginval }}.zip
+          PLUGINVAL_SHA256: ${{ matrix.pluginval-sha256 }}
         run: |
-          mkdir -p "$RUNNER_TEMP/clap-validator" && cd "$RUNNER_TEMP/clap-validator"
-          curl -sSfL -o validator.zip "https://github.com/free-audio/clap-validator/releases/download/0.4.1/$ASSET"
-          if command -v shasum > /dev/null; then actual=$(shasum -a 256 validator.zip | cut -d' ' -f1); else actual=$(sha256sum validator.zip | cut -d' ' -f1); fi
-          [ "$actual" = "$SHA256" ] || { echo "validator.zip has checksum $actual, not $SHA256"; exit 1; }
-          unzip -q validator.zip
-          for archive in *.tar.gz; do if [ -e "$archive" ]; then tar xzf "$archive"; fi; done
-          validator=$(find "$PWD" -type f \( -name clap-validator -o -name clap-validator.exe \) | head -n 1)
-          [ -n "$validator" ] || { echo "No clap-validator in $ASSET"; exit 1; }
-          chmod +x "$validator"
-          if [ "$RUNNER_OS" = "Windows" ]; then validator=$(cygpath -m "$validator"); fi
-          echo "CLAP_VALIDATOR=-DSYMBOLENGINE_CLAP_VALIDATOR=$validator" >> "$GITHUB_ENV"
+          fetch() { # fetch <folder> <url> <sha256>
+            mkdir -p "$RUNNER_TEMP/$1" && cd "$RUNNER_TEMP/$1"
+            curl -sSfL -o download.zip "$2"
+            if command -v shasum > /dev/null; then actual=$(shasum -a 256 download.zip | cut -d' ' -f1); else actual=$(sha256sum download.zip | cut -d' ' -f1); fi
+            [ "$actual" = "$3" ] || { echo "$2 has checksum $actual, not $3"; exit 1; }
+            unzip -q download.zip
+            for archive in *.tar.gz; do if [ -e "$archive" ]; then tar xzf "$archive"; fi; done
+          }
+          found() { # found <folder> <name>: the path of the program, as CMake on this system takes it
+            program=$(find "$RUNNER_TEMP/$1" -type f \( -name "$2" -o -name "$2.exe" \) | head -n 1)
+            [ -n "$program" ] || { echo "No $2 in $RUNNER_TEMP/$1"; exit 1; }
+            chmod +x "$program"
+            if [ "$RUNNER_OS" = "Windows" ]; then cygpath -m "$program"; else echo "$program"; fi
+          }
+
+          fetch clap-validator "https://github.com/free-audio/clap-validator/releases/download/0.4.1/$CLAP_ASSET" "$CLAP_SHA256"
+          clap_validator=$(found clap-validator clap-validator)
+          fetch pluginval "https://github.com/Tracktion/pluginval/releases/download/v1.0.4/$PLUGINVAL_ASSET" "$PLUGINVAL_SHA256"
+          pluginval=$(found pluginval pluginval)
+
+          # pluginval needs a display on Linux, so there it runs on a virtual one.
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            command -v xvfb-run > /dev/null || { sudo apt-get update && sudo apt-get install -y xvfb; }
+            printf '#!/bin/sh\nexec xvfb-run -a "%s" "$@"\n' "$pluginval" > "$RUNNER_TEMP/pluginval-headless"
+            chmod +x "$RUNNER_TEMP/pluginval-headless"
+            pluginval="$RUNNER_TEMP/pluginval-headless"
+          fi
+
+          options="-DSYMBOLENGINE_CLAP_VALIDATOR=$clap_validator -DSYMBOLENGINE_PLUGINVAL=$pluginval"
+          if [ "$RUNNER_OS" = "macOS" ]; then options="$options -DSYMBOLENGINE_AUVAL=ON"; fi
+          echo "VALIDATORS=$options" >> "$GITHUB_ENV"
 
       - name: Configure
         shell: bash
-        run: cmake --preset ${{ matrix.preset }} $CLAP_VALIDATOR
+        run: cmake --preset ${{ matrix.preset }} $VALIDATORS
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
       - name: Test

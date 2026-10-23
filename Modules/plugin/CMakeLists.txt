@@ -8,7 +8,7 @@ symbolengine_add_module(plugin NOT_INSTALLED
         src/Plugin.cpp
     DEPENDS core)
 
-target_link_libraries(symbolengine_plugin PUBLIC clap)
+target_link_libraries(symbolengine_plugin PUBLIC clap PRIVATE clap-wrapper-extensions)
 target_include_directories(symbolengine_plugin PRIVATE src)
 
 if(SYMBOLENGINE_TESTS)
@@ -16,4 +16,6 @@ if(SYMBOLENGINE_TESTS)
         Tests/ClapTests.cpp
         Tests/ParameterTests.cpp)
     target_include_directories(symbolengine_plugin_tests PRIVATE src)
+    target_link_libraries(symbolengine_plugin_tests PRIVATE clap-wrapper-extensions)
+    include(SymbolEngineValidation)
 endif()

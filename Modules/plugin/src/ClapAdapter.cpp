@@ -7,9 +7,11 @@
 
 #include "Access.h"
 #include "Denormals.h"
+#include "Identity.h"
 #include "TextValues.h"
 
 #include <clap/clap.h>
+#include <clapwrapper/vst3.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -35,10 +37,20 @@ void copyText(char* destination, std::size_t size, std::string_view text)
 }
 
 // The CLAP descriptors of the plugins this binary offers, made once from their descriptions.
+struct ComponentId
+{
+    array_of_16_bytes bytes;
+};
+
+// The CLAP descriptors of the plugins this binary offers, made once from their descriptions, and what clap-wrapper
+// asks about each one's VST3 build. A class ID written wrongly leaves the binary offering no plugins at all, so the
+// mistake shows at once instead of the plugin going out under an ID no session knows.
 struct Descriptors
 {
     std::vector<std::vector<const char*>> features;
     std::vector<clap_plugin_descriptor> list;
+    std::vector<ComponentId> componentIds;
+    std::vector<clap_plugin_info_as_vst3> vst3;
 };
 
 const Descriptors& descriptors()
@@ -49,10 +61,12 @@ const Descriptors& descriptors()
         const auto& entries = registered();
         made.features.reserve(entries.size());
         made.list.reserve(entries.size());
+        made.componentIds.resize(entries.size());
+        made.vst3.resize(entries.size());
 
-        for (const auto& entry : entries)
+        for (std::size_t i = 0; i < entries.size(); ++i)
         {
-            const auto& about = entry.description;
+            const auto& about = entries[i].description;
             auto& features = made.features.emplace_back();
             for (const auto& feature : about.features)
                 features.push_back(feature.c_str());
@@ -62,6 +76,19 @@ const Descriptors& descriptors()
                                                        about.vendor.c_str(), about.url.c_str(), about.manualUrl.c_str(),
                                                        about.supportUrl.c_str(), about.version.c_str(),
                                                        about.description.c_str(), features.data()});
+
+            made.vst3[i] = {};
+            if (!about.vst3ClassId.empty())
+            {
+                const auto id = detail::vst3ComponentId(about.vst3ClassId);
+                if (!id)
+                {
+                    made = {};
+                    return;
+                }
+                std::memcpy(made.componentIds[i].bytes, id->data(), id->size());
+                made.vst3[i].componentId = &made.componentIds[i].bytes;
+            }
         }
     });
     return made;
@@ -534,6 +561,17 @@ const void* Instance::extension(const char* id) const noexcept
     return nullptr;
 }
 
+const clap_plugin_factory_as_vst3 vst3Factory{
+    .vendor = nullptr,
+    .vendor_url = nullptr,
+    .email_contact = nullptr,
+    .get_vst3_info = [](const clap_plugin_factory_as_vst3*, std::uint32_t index) -> const clap_plugin_info_as_vst3* {
+        const auto& vst3 = descriptors().vst3;
+        return index < vst3.size() ? &vst3[index] : nullptr;
+    },
+    .get_vst3_compatibility = nullptr,
+};
+
 const clap_plugin_factory factory{
     .get_plugin_count =
         [](const clap_plugin_factory*) { return static_cast<std::uint32_t>(descriptors().list.size()); },
@@ -578,10 +616,42 @@ bool clapInit(const char*) noexcept
 
 void clapDeinit() noexcept {}
 
+std::optional<std::array<std::uint8_t, 16>> vst3ComponentId(std::string_view written)
+{
+    std::array<std::uint8_t, 16> big{};
+    std::size_t digits = 0;
+    for (const char c : written)
+    {
+        if (c == '-' || c == '{' || c == '}' || c == ' ')
+            continue;
+        int value = -1;
+        if (c >= '0' && c <= '9')
+            value = c - '0';
+        else if (c >= 'a' && c <= 'f')
+            value = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F')
+            value = c - 'A' + 10;
+        if (value < 0 || digits == 32)
+            return std::nullopt;
+        big[digits / 2] = static_cast<std::uint8_t>(big[digits / 2] << 4 | value);
+        ++digits;
+    }
+    if (digits != 32)
+        return std::nullopt;
+
+    // The first 32 bits in little-endian order, the next two 16 bits each in little-endian order, the rest as written.
+    return std::array<std::uint8_t, 16>{big[3], big[2], big[1],  big[0],  big[5],  big[4],  big[7],  big[6],
+                                        big[8], big[9], big[10], big[11], big[12], big[13], big[14], big[15]};
+}
+
 const void* clapFactory(const char* id) noexcept
 {
-    if (id != nullptr && std::strcmp(id, CLAP_PLUGIN_FACTORY_ID) == 0)
+    if (id == nullptr)
+        return nullptr;
+    if (std::strcmp(id, CLAP_PLUGIN_FACTORY_ID) == 0)
         return &factory;
+    if (std::strcmp(id, CLAP_PLUGIN_FACTORY_INFO_VST3) == 0 || std::strcmp(id, CLAP_PLUGIN_FACTORY_INFO_VST3_V1) == 0)
+        return &vst3Factory;
     return nullptr;
 }
 
