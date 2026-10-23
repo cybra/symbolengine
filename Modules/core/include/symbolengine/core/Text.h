@@ -54,6 +54,11 @@ bool equalsIgnoringCaseAscii(std::string_view a, std::string_view b) noexcept;
     for numbers that aren't finite. The same on every system, whatever its locale. */
 std::string formatNumber(double number);
 
+/** A number with a fixed number of decimal places, such as -6.0 or 48.25, rounded to the nearest; one that rounds to
+    zero has no minus sign. "NaN", "Infinity" and "-Infinity" for numbers that aren't finite. The same on every system,
+    whatever its locale. */
+std::string formatFixed(double number, int decimals);
+
 /** A number written as JSON writes one, such as -12, 0.5 or 1e-7, read to the nearest double; nothing for anything
     else, spaces included. The same on every system, whatever its locale. */
 std::optional<double> parseNumber(std::string_view text);

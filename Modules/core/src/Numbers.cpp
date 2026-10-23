@@ -50,6 +50,11 @@ double readTerminated(const char* text)
 {
     return _strtod_l(text, nullptr, cLocale());
 }
+
+int printFixed(char* buffer, std::size_t size, double number, int decimals)
+{
+    return _snprintf_s_l(buffer, size, _TRUNCATE, "%.*f", cLocale(), decimals, number);
+}
 #else
 locale_t cLocale()
 {
@@ -76,8 +81,23 @@ double readTerminated(const char* text)
 {
     return std::strtod(text, nullptr);
 }
+
+int printFixed(char* buffer, std::size_t size, double number, int decimals)
+{
+    return std::snprintf(buffer, size, "%.*f", decimals, number);
+}
 #endif
 
+}
+
+std::string fixed(double number, int decimals)
+{
+    [[maybe_unused]] CLocaleScope scope;   // empty on Windows, whose functions take the locale
+
+    // The largest double has 309 digits before the point, and no more than 17 after it are ever meaningful.
+    char buffer[400];
+    const int length = printFixed(buffer, sizeof buffer, number, decimals < 0 ? 0 : decimals > 17 ? 17 : decimals);
+    return length > 0 ? std::string(buffer, static_cast<std::size_t>(length)) : std::string();
 }
 
 Decimal fromScientific(const char* text, std::size_t length)

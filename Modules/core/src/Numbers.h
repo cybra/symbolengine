@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <string>
 #include <string_view>
 
 // Converting doubles to and from text the same way on every system and in every locale.
@@ -22,6 +23,9 @@ Decimal shortest(double number);
 /** The shortest decimal found by printing with the C library, for Macs before macOS 13.3, whose std::to_chars can't
     print doubles. It gives the same digits as std::to_chars. */
 Decimal shortestByPrinting(double number);
+
+/** A finite number with this many decimal places, as printf's %.*f writes it in the C locale. */
+std::string fixed(double number, int decimals);
 
 /** Reads d.ddde-x, as printf's %e and std::to_chars's scientific form write it. */
 Decimal fromScientific(const char* text, std::size_t length);

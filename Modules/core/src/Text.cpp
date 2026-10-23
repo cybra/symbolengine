@@ -166,6 +166,17 @@ std::string formatNumber(double number)
     return text;
 }
 
+std::string formatFixed(double number, int decimals)
+{
+    if (!std::isfinite(number))
+        return formatNumber(number);
+
+    auto text = numbers::fixed(number, decimals);
+    if (text.starts_with('-') && text.find_first_not_of("-0.") == std::string::npos)
+        text.erase(0, 1);
+    return text;
+}
+
 std::optional<double> parseNumber(std::string_view text)
 {
     if (text.empty() || numbers::jsonNumberLength(text) != text.size())

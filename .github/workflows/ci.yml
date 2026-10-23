@@ -24,12 +24,19 @@ jobs:
           - name: Mac
             os: macos-latest
             preset: ci-mac
+            validator: macos-universal.zip
+            validator-sha256: bbec8cd7d18274e549d5d8c12ece3cec54be966129388dd2e742b9957f2ba9f1
           - name: Windows
             os: windows-latest
             preset: ci-windows
+            validator: windows.zip
+            validator-sha256: d935c3af0a45c3911ea2e900f4aa5d6709dac82bb485f0c4ce28648ab2cd0c10
           - name: Linux
             os: ubuntu-latest
             preset: ci-linux
+            validator: ubuntu-22.04.zip
+            validator-sha256: 49edadcfb407ea0dd946ce418300e853fbd2660fa4b0d00e4f19ff8eef24ad90
+          # The validator can't load a plugin built with the sanitizers, which must be the first thing a process loads.
           - name: Linux with sanitizers
             os: ubuntu-latest
             preset: ci-linux-sanitizers
@@ -41,8 +48,28 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo locale-gen de_DE.UTF-8
 
+      # CLAP's validator, pinned by checksum, checks every CLAP plugin the build makes.
+      - name: CLAP validator
+        if: matrix.validator
+        shell: bash
+        env:
+          ASSET: clap-validator-0.4.1-127-g152b982-${{ matrix.validator }}
+          SHA256: ${{ matrix.validator-sha256 }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/clap-validator" && cd "$RUNNER_TEMP/clap-validator"
+          curl -sSfL -o validator.zip "https://github.com/free-audio/clap-validator/releases/download/0.4.1/$ASSET"
+          if command -v sha256sum > /dev/null; then echo "$SHA256  validator.zip" | sha256sum -c; else echo "$SHA256  validator.zip" | shasum -a 256 -c; fi
+          unzip -q validator.zip
+          for archive in *.tar.gz; do if [ -e "$archive" ]; then tar xzf "$archive"; fi; done
+          validator=$(find "$PWD" -type f \( -name clap-validator -o -name clap-validator.exe \) | head -n 1)
+          [ -n "$validator" ] || { echo "No clap-validator in $ASSET"; exit 1; }
+          chmod +x "$validator"
+          if [ "$RUNNER_OS" = "Windows" ]; then validator=$(cygpath -m "$validator"); fi
+          echo "CLAP_VALIDATOR=-DSYMBOLENGINE_CLAP_VALIDATOR=$validator" >> "$GITHUB_ENV"
+
       - name: Configure
-        run: cmake --preset ${{ matrix.preset }}
+        shell: bash
+        run: cmake --preset ${{ matrix.preset }} $CLAP_VALIDATOR
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
       - name: Test

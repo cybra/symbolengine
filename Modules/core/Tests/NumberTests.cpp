@@ -76,6 +76,20 @@ TEST_CASE("Numbers are written as browsers write them")
     }
 }
 
+TEST_CASE("Numbers are written with fixed decimal places")
+{
+    CHECK(text::formatFixed(-6.0, 1) == "-6.0");
+    CHECK(text::formatFixed(1.26, 1) == "1.3");
+    CHECK(text::formatFixed(48000.0, 0) == "48000");
+    CHECK(text::formatFixed(0.0, 2) == "0.00");
+    CHECK(text::formatFixed(-0.04, 1) == "0.0");
+    CHECK(text::formatFixed(-1e-10, 3) == "0.000");
+    CHECK(text::formatFixed(-0.06, 1) == "-0.1");
+    CHECK(text::formatFixed(1.7976931348623157e308, 0).size() == 309);
+    CHECK(text::formatFixed(std::numeric_limits<double>::quiet_NaN(), 1) == "NaN");
+    CHECK(text::formatFixed(-std::numeric_limits<double>::infinity(), 1) == "-Infinity");
+}
+
 TEST_CASE("Numbers are read only in the JSON form")
 {
     CHECK(text::parseNumber("0") == 0.0);
@@ -164,6 +178,7 @@ TEST_CASE("Numbers are written and read the same where the locale uses a decimal
 
     CHECK(text::formatNumber(1.5) == "1.5");
     CHECK(text::formatNumber(0.30000000000000004) == "0.30000000000000004");
+    CHECK(text::formatFixed(-6.25, 2) == "-6.25");
     CHECK(text::parseNumber("1.5") == 1.5);
     CHECK(json::parse("[0.25]")[0].asNumber() == 0.25);
     CHECK(json::write(0.25) == "0.25");

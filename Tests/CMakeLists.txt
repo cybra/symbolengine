@@ -10,6 +10,21 @@ set(consumer_options
     "-DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}"
     "-DCMAKE_EXE_LINKER_FLAGS=${CMAKE_EXE_LINKER_FLAGS}")
 
+if(DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
+    list(APPEND consumer_options "-DCMAKE_MSVC_RUNTIME_LIBRARY=${CMAKE_MSVC_RUNTIME_LIBRARY}")
+endif()
+
+# The consumer builds a plugin too when the plugin module is on, from the SDKs this build already fetched.
+if(SYMBOLENGINE_PLUGIN)
+    FetchContent_GetProperties(symbolengine_clap)
+    FetchContent_GetProperties(symbolengine_clap_wrapper)
+    list(APPEND consumer_options
+        -DFETCHCONTENT_SOURCE_DIR_SYMBOLENGINE_CLAP=${symbolengine_clap_SOURCE_DIR}
+        -DFETCHCONTENT_SOURCE_DIR_SYMBOLENGINE_CLAP_WRAPPER=${symbolengine_clap_wrapper_SOURCE_DIR})
+else()
+    list(APPEND consumer_options -DSYMBOLENGINE_PLUGIN=OFF)
+endif()
+
 if(APPLE AND CMAKE_OSX_DEPLOYMENT_TARGET)
     list(APPEND consumer_options -DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET})
 endif()

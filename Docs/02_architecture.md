@@ -32,7 +32,9 @@ A plugin's editor and an app's screens are web pages in the system's web view, l
 
 ## Plugins
 
-A plugin is written once against one interface shaped like CLAP, and clap-wrapper turns it into every other format, so a fix lands in every format at once. Parameters are declared once, with their IDs kept forever, and drive automation, the editor and saved state. The validators (CLAP's, Steinberg's, Apple's auval, and pluginval run as a separate tool) run on every example in continuous integration on every system.
+A plugin is a class derived from `Plugin`, written once, whose static `describe()` gives its id, name, vendor and features. Its constructor adds its parameters, each with an id kept forever, a range, a default, and text for showing and typing its values; decibels, numbers with units, choices, switches and a bypass come ready-made. Its buses are stereo in and out unless it says otherwise. The framework keeps each parameter's value where the audio thread reads it without locking, splits each block where the host changes a parameter so that automation is exact to the sample, flushes denormal numbers to zero while the plugin processes, and saves and loads the parameters as JSON unless the plugin saves more. An exception thrown in a plugin's code fails the host's call instead of crashing the host.
+
+A plugin binary lists its plugins with `SYMBOLENGINE_PLUGINS`, and `symbolengine_add_plugin` in CMake builds it. Every format is built through CLAP, and clap-wrapper turns the CLAP build into each other format, so a fix lands in every format at once. Nothing in a plugin is visible outside it but its entry point, so plugins built on different versions of SymbolEngine load side by side in one host. The validators, CLAP's now and Steinberg's, Apple's auval and pluginval (run as a separate tool) as the other formats arrive, run on every example in continuous integration on every system.
 
 ## Moving an existing plugin
 

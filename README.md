@@ -32,6 +32,18 @@ const auto project = json::parse(files::read("take.json"));
 const auto path = project["sources"][0]["path"].stringOr("");
 ```
 
+The plugin module is taken in with FetchContent, since it builds plugins with a CMake function of its own:
+
+```cmake
+symbolengine_add_plugin(Gain
+    SOURCES           Gain.cpp
+    OUTPUT_NAME       "Gain"
+    BUNDLE_IDENTIFIER com.example.gain
+    FORMATS           CLAP)
+```
+
+[Examples/Gain](Examples/Gain/Gain.cpp) is a whole plugin in about 40 lines.
+
 It needs CMake 3.25 or later and a C++20 compiler, and runs on macOS 11 or later, Windows 10 or later, and Linux.
 
 ## Modules
@@ -39,8 +51,9 @@ It needs CMake 3.25 or later and a C++20 compiler, and runs on macOS 11 or later
 | Module | Now |
 |---|---|
 | core | Values with JSON, UTF-8 text, paths and the system's folders, files written safely, settings files |
+| plugin | Plugins written once as a class, with parameters, state, buses, latency and tail, built as CLAP and checked by CLAP's validator; VST3, Audio Units and standalone next |
 
-The [architecture](Docs/02_architecture.md) describes the modules to come: files, devices, ui, app, plugin and host.
+The [architecture](Docs/02_architecture.md) describes the modules to come: files, devices, ui, app and host.
 
 ## Docs
 

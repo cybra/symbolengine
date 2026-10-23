@@ -19,17 +19,20 @@ function(symbolengine_set_warnings target)
     endif()
 endfunction()
 
-# symbolengine_add_module(<name> SOURCES <files...> [DEPENDS <modules...>] [LIBRARIES <libraries...>])
+# symbolengine_add_module(<name> [NOT_INSTALLED] SOURCES <files...> [DEPENDS <modules...>] [LIBRARIES <libraries...>])
 #
 # Adds the module <name> as the static library SymbolEngine::<name>, its public headers in include/symbolengine/<name>.
-# DEPENDS names the SymbolEngine modules it is built on, and LIBRARIES anything else it links to.
+# DEPENDS names the SymbolEngine modules it is built on, and LIBRARIES anything else it links to. NOT_INSTALLED leaves
+# it out of what find_package finds.
 function(symbolengine_add_module name)
-    cmake_parse_arguments(PARSE_ARGV 1 module "" "" "SOURCES;DEPENDS;LIBRARIES")
+    cmake_parse_arguments(PARSE_ARGV 1 module "NOT_INSTALLED" "" "SOURCES;DEPENDS;LIBRARIES")
 
     set(target symbolengine_${name})
     add_library(${target} STATIC ${module_SOURCES})
     add_library(SymbolEngine::${name} ALIAS ${target})
-    set_target_properties(${target} PROPERTIES EXPORT_NAME ${name} POSITION_INDEPENDENT_CODE ON)
+    # Linked into plugins, where nothing but a plugin's entry point may be visible outside it.
+    set_target_properties(${target} PROPERTIES
+        EXPORT_NAME ${name} POSITION_INDEPENDENT_CODE ON CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
 
     target_compile_features(${target} PUBLIC cxx_std_20)
     target_include_directories(${target} PUBLIC
@@ -42,5 +45,7 @@ function(symbolengine_add_module name)
     target_link_libraries(${target} PRIVATE ${module_LIBRARIES})
 
     symbolengine_set_warnings(${target})
-    set_property(GLOBAL APPEND PROPERTY SYMBOLENGINE_MODULES ${name})
+    if(NOT module_NOT_INSTALLED)
+        set_property(GLOBAL APPEND PROPERTY SYMBOLENGINE_MODULES ${name})
+    endif()
 endfunction()

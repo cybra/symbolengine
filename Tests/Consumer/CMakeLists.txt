@@ -12,3 +12,10 @@ endif()
 
 add_executable(consumer main.cpp)
 target_link_libraries(consumer PRIVATE SymbolEngine::core)
+
+if(CONSUME STREQUAL "fetch" AND TARGET SymbolEngine::plugin)
+    symbolengine_add_plugin(ConsumerGain
+        SOURCES ${SYMBOLENGINE_SOURCE}/Examples/Gain/Gain.cpp
+        BUNDLE_IDENTIFIER test.symbolengine.consumer.gain)
+    add_dependencies(consumer ConsumerGain_all)
+endif()
