@@ -57,3 +57,11 @@ add_test(NAME "consumer: find_package"
         --build-options ${consumer_options} -DCONSUME=package -DCMAKE_PREFIX_PATH=${consumer_build}/prefix
         --test-command consumer)
 set_tests_properties("consumer: find_package" PROPERTIES FIXTURES_REQUIRED installed)
+
+# Each example plugin, loaded from its CLAP binary as a host loads it, made, run and destroyed.
+if(SYMBOLENGINE_PLUGIN AND SYMBOLENGINE_EXAMPLES)
+    add_executable(symbolengine_clap_loader ClapLoader/ClapLoader.cpp)
+    target_link_libraries(symbolengine_clap_loader PRIVATE clap ${CMAKE_DL_LIBS})
+    symbolengine_set_warnings(symbolengine_clap_loader)
+    add_test(NAME "Gain: loads and processes" COMMAND symbolengine_clap_loader $<TARGET_FILE:Gain_clap>)
+endif()

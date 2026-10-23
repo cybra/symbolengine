@@ -568,20 +568,21 @@ const clap_plugin_factory factory{
 
 }
 
-extern "C"
+namespace symbolengine::plugin::detail
 {
 
-    bool symbolengine_clap_init(const char*)
-    {
-        return true;
-    }
+bool clapInit(const char*) noexcept
+{
+    return true;
+}
 
-    void symbolengine_clap_deinit(void) {}
+void clapDeinit() noexcept {}
 
-    const void* symbolengine_clap_get_factory(const char* id)
-    {
-        if (id != nullptr && std::strcmp(id, CLAP_PLUGIN_FACTORY_ID) == 0)
-            return &symbolengine::plugin::factory;
-        return nullptr;
-    }
+const void* clapFactory(const char* id) noexcept
+{
+    if (id != nullptr && std::strcmp(id, CLAP_PLUGIN_FACTORY_ID) == 0)
+        return &factory;
+    return nullptr;
+}
+
 }

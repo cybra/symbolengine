@@ -217,6 +217,14 @@ struct Entry
 /** The plugins this binary offers, in order, as SYMBOLENGINE_PLUGINS lists them. */
 const std::vector<Entry>& registered();
 
+namespace detail
+{
+/** The CLAP entry point's functions, which SYMBOLENGINE_PLUGINS passes on to. */
+bool clapInit(const char* path) noexcept;
+void clapDeinit() noexcept;
+const void* clapFactory(const char* id) noexcept;
+}
+
 template <typename... Kinds>
 std::vector<Entry> entriesFor()
 {
@@ -227,9 +235,23 @@ std::vector<Entry> entriesFor()
 
 /** Lists the plugin classes a binary offers, in one source file of the plugin's own, such as
     SYMBOLENGINE_PLUGINS(Gain) or SYMBOLENGINE_PLUGINS(Meter, MeterRack). */
+// The entry point's functions are defined here, in the plugin's own code, so a linker that reads each library once,
+// in order, as GNU ld does, takes the plugin's code first and the framework it uses after it.
 #define SYMBOLENGINE_PLUGINS(...)                                                                                      \
     const std::vector<symbolengine::plugin::Entry>& symbolengine::plugin::registered()                                 \
     {                                                                                                                  \
         static const auto entries = symbolengine::plugin::entriesFor<__VA_ARGS__>();                                   \
         return entries;                                                                                                \
+    }                                                                                                                  \
+    extern "C" bool symbolengine_clap_init(const char* path)                                                           \
+    {                                                                                                                  \
+        return symbolengine::plugin::detail::clapInit(path);                                                           \
+    }                                                                                                                  \
+    extern "C" void symbolengine_clap_deinit(void)                                                                     \
+    {                                                                                                                  \
+        symbolengine::plugin::detail::clapDeinit();                                                                    \
+    }                                                                                                                  \
+    extern "C" const void* symbolengine_clap_get_factory(const char* id)                                               \
+    {                                                                                                                  \
+        return symbolengine::plugin::detail::clapFactory(id);                                                          \
     }
