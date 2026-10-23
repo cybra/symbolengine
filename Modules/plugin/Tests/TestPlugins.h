@@ -108,6 +108,19 @@ inline std::optional<std::string_view> resizePage(std::string_view path)
 (async () => {
     await symbolengine.call("report", "tooSmall", await plugin.resize(10, 10));
     await symbolengine.call("report", "larger", await plugin.resize(500, 320));
+
+    // The grip, dragged 100 points right and 50 down.
+    const grip = await new Promise(found => {
+        const look = () => document.querySelector(".symbolengine-grip") ? found(document.querySelector(".symbolengine-grip"))
+                                                                          : setTimeout(look, 10);
+        look();
+    });
+    const at = (x, y) => ({ pointerId: 1, screenX: x, screenY: y, bubbles: true });
+    grip.dispatchEvent(new PointerEvent("pointerdown", at(0, 0)));
+    await new Promise(wait => setTimeout(wait, 100));
+    grip.dispatchEvent(new PointerEvent("pointermove", at(100, 50)));
+    grip.dispatchEvent(new PointerEvent("pointerup", at(100, 50)));
+    await new Promise(wait => setTimeout(wait, 200));
     await symbolengine.call("done");
 })();
 </script>)html";

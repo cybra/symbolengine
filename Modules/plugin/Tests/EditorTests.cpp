@@ -246,29 +246,29 @@ TEST_CASE("A resizable editor asks the host for sizes within its limits, and ope
         CHECK(reports["tooSmall"] == Value(Object{{"width", 300}, {"height", 200}, {"agreed", true}}));
         CHECK(reports["larger"] == Value(Object{{"width", 500}, {"height", 320}, {"agreed", true}}));
         using Size = std::pair<std::uint32_t, std::uint32_t>;
-        CHECK(host.resizeRequests == std::vector<Size>{{300, 200}, {500, 320}});
+        CHECK(host.resizeRequests == std::vector<Size>{{300, 200}, {500, 320}, {600, 370}});
         REQUIRE(gui.get_size(made.plugin, &width, &height));
-        CHECK(width == 500);
-        CHECK(height == 320);
+        CHECK(width == 600);
+        CHECK(height == 370);
 
         // Opened again on the same instance, it keeps its size.
         gui.destroy(made.plugin);
         REQUIRE(gui.create(made.plugin, windowApi, false));
         REQUIRE(gui.get_size(made.plugin, &width, &height));
-        CHECK(width == 500);
-        CHECK(height == 320);
+        CHECK(width == 600);
+        CHECK(height == 370);
         gui.destroy(made.plugin);
     }
 
     // A new instance opens at the size kept in the file, and the plugin can set its own.
-    CHECK(json::parse(files::read(tests::TestLatency::sizeFile)) == Value(Object{{"width", 500}, {"height", 320}}));
+    CHECK(json::parse(files::read(tests::TestLatency::sizeFile)) == Value(Object{{"width", 600}, {"height", 370}}));
     {
         Made made(host, "test.latency");
         const auto& gui = made.extension<clap_plugin_gui>(CLAP_EXT_GUI);
         REQUIRE(gui.create(made.plugin, windowApi, false));
         REQUIRE(gui.get_size(made.plugin, &width, &height));
-        CHECK(width == 500);
-        CHECK(height == 320);
+        CHECK(width == 600);
+        CHECK(height == 370);
 
         tests::TestLatency::last->setEditorSize(640, 480);
         REQUIRE(gui.get_size(made.plugin, &width, &height));

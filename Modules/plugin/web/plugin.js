@@ -84,6 +84,71 @@
         return parameters;
     };
 
+    // A resizable editor gets a grip in its bottom right corner, as hosts such as Live don't let a plugin's window be
+    // resized from its edges. A page restyles it, or hides it, through the class symbolengine-grip. While it is
+    // dragged, one size is asked for at a time, always the latest, so the host isn't flooded.
+    const addGrip = async () => {
+        const editor = await symbolengine.call("__editor");
+        if (!editor.resizable)
+            return;
+
+        const grip = document.createElement("div");
+        grip.className = "symbolengine-grip";
+        grip.innerHTML = `<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
+            <path d="M13 5 L5 13 M13 9 L9 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
+        grip.style.cssText = "position:fixed; right:1px; bottom:1px; width:16px; height:16px; display:flex;" +
+                             "align-items:center; justify-content:center; cursor:nwse-resize; opacity:0.5;" +
+                             "z-index:2147483647; touch-action:none; user-select:none; -webkit-user-select:none";
+
+        let start = null, wanted = null, asking = false;
+
+        const ask = async () => {
+            if (asking || wanted === null)
+                return;
+            asking = true;
+            const size = wanted;
+            wanted = null;
+            try {
+                await symbolengine.call("__resize", size.width, size.height);
+            } finally {
+                asking = false;
+                ask();
+            }
+        };
+
+        grip.addEventListener("pointerdown", async event => {
+            event.preventDefault();
+            try {
+                grip.setPointerCapture(event.pointerId);
+            } catch {
+            }
+            const from = { x: event.screenX, y: event.screenY };
+            const now = await symbolengine.call("__editor");
+            start = { x: from.x, y: from.y, width: now.width, height: now.height };
+        });
+
+        grip.addEventListener("pointermove", event => {
+            if (start === null)
+                return;
+            wanted = { width: Math.round(start.width + event.screenX - start.x),
+                       height: Math.round(start.height + event.screenY - start.y) };
+            ask();
+        });
+
+        const stop = () => {
+            start = null;
+        };
+        grip.addEventListener("pointerup", stop);
+        grip.addEventListener("pointercancel", stop);
+
+        document.body.append(grip);
+    };
+
+    if (document.readyState === "loading")
+        document.addEventListener("DOMContentLoaded", addGrip);
+    else
+        addGrip();
+
     window.plugin = Object.freeze({
         // The plugin's parameters, as a Map from each one's id.
         parameters: () => (loaded ??= load()),

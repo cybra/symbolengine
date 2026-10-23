@@ -130,6 +130,16 @@ EditorSession::EditorSession(Plugin& owner, const Description& about, Editor des
         return Value(textFor(parameter, arguments[1].numberOr(parameter.defaultValue)));
     });
 
+    view.expose("__editor", [this](const Value&) {
+        return Value(Object{{"resizable", editor.resizable},
+                            {"width", size.first},
+                            {"height", size.second},
+                            {"minimumWidth", editor.minimumWidth},
+                            {"minimumHeight", editor.minimumHeight},
+                            {"maximumWidth", editor.maximumWidth},
+                            {"maximumHeight", editor.maximumHeight}});
+    });
+
     view.expose("__resize", [this](const Value& arguments) {
         if (!editor.resizable)
             throw std::runtime_error("this editor can't be resized");
