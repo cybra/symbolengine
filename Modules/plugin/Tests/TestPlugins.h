@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <functional>
@@ -14,6 +15,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 // The editor page the tests use, built in from Tests/EditorPage.
 std::optional<std::string_view> testEditorFiles(std::string_view path);
@@ -86,16 +88,20 @@ public:
 
     std::optional<Editor> editor() const override
     {
-        return Editor{.width = 320, .height = 200, .files = testEditorFiles};
+        return Editor{.width = 320, .height = 200, .files = testEditorFiles, .ticksPerSecond = 100};
     }
 
     void editorOpened(EditorLink& link) override
     {
+        ticks.clear();
         if (onEditorOpened)
             onEditorOpened(link);
     }
 
+    void editorTick(EditorLink&) override { ticks.push_back(std::chrono::steady_clock::now()); }
+
     static inline TestGain* last = nullptr;
+    std::vector<std::chrono::steady_clock::time_point> ticks;
     static inline bool failToPrepare = false;
     static inline std::function<void(EditorLink&)> onEditorOpened;
 

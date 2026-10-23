@@ -7,13 +7,25 @@
     #ifndef NOMINMAX
         #define NOMINMAX
     #endif
+    #include <shellapi.h>
     #include <windows.h>
 
     #include <filesystem>
     #include <vector>
 #else
     #include <cstdlib>
+    #include <spawn.h>
+    #include <sys/wait.h>
+    #if defined(__APPLE__)
+        #include <crt_externs.h>
+    #else
+        #include <unistd.h>
+extern char** environ;
+    #endif
 #endif
+
+#include <algorithm>
+#include <cctype>
 
 namespace symbolengine::system
 {
@@ -35,6 +47,46 @@ std::optional<std::string> environmentVariable(std::string_view name)
     if (const char* value = std::getenv(std::string(name).c_str()))
         return std::string(value);
     return std::nullopt;
+#endif
+}
+
+bool openInBrowser(std::string_view url)
+{
+    const auto starts = [&url](std::string_view scheme) {
+        return url.size() > scheme.size() && std::equal(scheme.begin(), scheme.end(), url.begin(), [](char a, char b) {
+                   return a == static_cast<char>(std::tolower(static_cast<unsigned char>(b)));
+               });
+    };
+    const bool web = starts("http://") || starts("https://");
+    const bool plain = std::none_of(
+        url.begin(), url.end(), [](char c) { return static_cast<unsigned char>(c) < 0x21 || c == '"' || c == '\\'; });
+    if (!web || !plain)
+        return false;
+
+#if defined(_WIN32)
+    const auto wide = std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(url.data()), url.size()));
+    const auto result =
+        reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", wide.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+    return result > 32;
+#else
+    // The system's own opener, given the address as one argument, with no shell between.
+    #if defined(__APPLE__)
+    const char* opener = "/usr/bin/open";
+    #else
+    const char* opener = "xdg-open";
+    #endif
+    std::string address(url);
+    char* const arguments[] = {const_cast<char*>(opener), address.data(), nullptr};
+    pid_t child = 0;
+    #if defined(__APPLE__)
+    char** const environment = *_NSGetEnviron();   // environ itself isn't there for a plugin's bundle
+    #else
+    char** const environment = environ;
+    #endif
+    if (posix_spawnp(&child, opener, nullptr, nullptr, arguments, environment) != 0)
+        return false;
+    int status = 0;
+    return waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
 #endif
 }
 

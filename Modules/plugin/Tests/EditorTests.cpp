@@ -24,6 +24,7 @@
 #include <symbolengine/core/Files.h>
 #include <symbolengine/core/Json.h>
 
+#include <chrono>
 #include <filesystem>
 #include <map>
 #include <random>
@@ -125,6 +126,13 @@ TEST_CASE("An editor opens in the host's window, and its page and the host chang
             choc::messageloop::stop();
             return Value();
         });
+        // The plugin's own function sets Mode to Wide as the user does.
+        link.expose("wide", [&link](const Value&) {
+            link.beginGesture(2);
+            const auto value = link.setParameter(2, 7.0);
+            link.endGesture(2);
+            return Value(value);
+        });
         // The host changes a parameter, as automation does, and collects the editor's changes at the same time.
         link.expose("automate", [&](const Value&) {
             Changes automation;
@@ -168,6 +176,8 @@ TEST_CASE("An editor opens in the host's window, and its page and the host chang
     CHECK(reports["modes"] == Value(Array{"Narrow", "Wide"}));
     CHECK(reports["typed"].stringOr("") == "-3.3 dB");
     CHECK(reports["changed"].stringOr("") == "-12.0 dB");
+    CHECK(reports["native"] == Value(1));
+    CHECK(reports["heard"].stringOr("") == "Wide");
     CHECK(reports["automated"].stringOr("") == "Off");
 
     // The plugin has the value the page set, and the host was asked to collect the change and was told of it as one
@@ -177,7 +187,17 @@ TEST_CASE("An editor opens in the host's window, and its page and the host chang
     using Event = std::tuple<std::uint16_t, clap_id, double>;
     CHECK(told.events == std::vector<Event>{{CLAP_EVENT_PARAM_GESTURE_BEGIN, 1, 0.0},
                                             {CLAP_EVENT_PARAM_VALUE, 1, -12.0},
-                                            {CLAP_EVENT_PARAM_GESTURE_END, 1, 0.0}});
+                                            {CLAP_EVENT_PARAM_GESTURE_END, 1, 0.0},
+                                            {CLAP_EVENT_PARAM_GESTURE_BEGIN, 2, 0.0},
+                                            {CLAP_EVENT_PARAM_VALUE, 2, 1.0},
+                                            {CLAP_EVENT_PARAM_GESTURE_END, 2, 0.0}});
+    CHECK(TestGain::last->mode.get() == 1.0);
+
+    // It ticked as often as it asked, 100 times a second, well beyond the 30 it would have by default.
+    const auto& ticks = TestGain::last->ticks;
+    REQUIRE(ticks.size() > 10);
+    const std::chrono::duration<double> span = ticks.back() - ticks.front();
+    CHECK(static_cast<double>(ticks.size() - 1) / span.count() > 50.0);
 }
 
 TEST_CASE("A resizable editor asks the host for sizes within its limits, and opens again at the size it was given")

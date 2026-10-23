@@ -17,7 +17,14 @@
     await gain.change(-12);
     await symbolengine.call("report", "changed", gain.text);
 
-    on.onChange(changed => symbolengine.call("report", "automated", changed.text).then(() => symbolengine.call("done")));
+    // The plugin's own function changes a parameter as the user does, and the page hears of it.
+    const heard = new Promise(done => mode.onChange(done));
+    await symbolengine.call("report", "native", await symbolengine.call("wide"));
+    await symbolengine.call("report", "heard", (await heard).text);
+
+    // Done a moment after, so the editor ticks for long enough to count.
+    on.onChange(changed => symbolengine.call("report", "automated", changed.text)
+        .then(() => setTimeout(() => symbolengine.call("done"), 400)));
     await symbolengine.call("automate");
 })();
 </script>

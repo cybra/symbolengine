@@ -53,6 +53,9 @@ public:
     void expose(std::string name, std::function<Value(const Value& arguments)> function) override;
     void send(std::string_view event, const Value& data) override;
     void snapshot(const std::filesystem::path& png, std::function<void(bool written)> done) override;
+    void beginGesture(std::uint32_t id) override;
+    double setParameter(std::uint32_t id, double value) override;
+    void endGesture(std::uint32_t id) override;
 
 private:
     Plugin& plugin;
@@ -63,6 +66,7 @@ private:
     std::vector<double> sent;   // each parameter's value as the page last had it
     std::pair<std::uint32_t, std::uint32_t> size;
     std::pair<std::uint32_t, std::uint32_t> kept;   // the size last kept in the size file
+    std::uint32_t tickMilliseconds;
     int restingTicks = 0;
     int ticks = 0;
     std::filesystem::path file;   // where the size is kept for new editors
@@ -71,7 +75,8 @@ private:
     std::filesystem::path sizeFile(const Description& description) const;
     std::pair<std::uint32_t, std::uint32_t> openingSize() const;
     std::size_t indexOf(const Value& id) const;
-    void change(EditorChange::Kind kind, std::uint32_t id, double value);
+    std::size_t indexOf(std::uint32_t id) const;
+    void record(EditorChange::Kind kind, std::uint32_t id, double value);
     void keepSize(bool now);
     void snapshotWhenAsked();
     void tick();

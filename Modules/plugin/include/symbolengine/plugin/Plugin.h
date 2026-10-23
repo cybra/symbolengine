@@ -167,6 +167,10 @@ struct Editor
     /** Windows only: the folder the editor's web view keeps its data in. Empty for AppData\Local\<vendor>\<plugin
         name>\WebView. On every system the page's stored data is the plugin's own, apart from other plugins'. */
     std::filesystem::path dataFolder{};
+
+    /** How many times a second editorTick is called while the editor is open, from 1 to 120: more for meters that
+        move smoothly. */
+    std::uint32_t ticksPerSecond = 30;
 };
 
 /** The plugin's side of its open editor, on the message thread. */
@@ -185,6 +189,14 @@ public:
         for now. An editor saves one by itself when SYMBOLENGINE_EDITOR_SNAPSHOT names a PNG, two seconds after it
         opens and a second after running SYMBOLENGINE_EDITOR_SCRIPT in the page, and prints whether it was written. */
     virtual void snapshot(const std::filesystem::path& png, std::function<void(bool written)> done) = 0;
+
+    /** Changes a parameter as the user does, for the plugin's own functions that change its parameters, as plugin.js
+        does for the page: a gesture begins, the value is set as often as it changes, and the gesture ends, and the
+        host records it all as automation. setParameter gives the value as held to the parameter's range. Each throws
+        for a parameter the plugin hasn't. */
+    virtual void beginGesture(std::uint32_t id) = 0;
+    virtual double setParameter(std::uint32_t id, double value) = 0;
+    virtual void endGesture(std::uint32_t id) = 0;
 };
 
 class Plugin;
@@ -264,8 +276,9 @@ public:
     /** Message thread: the editor has opened; the place to expose the plugin's own functions to the page. */
     virtual void editorOpened(EditorLink& editor);
 
-    /** Message thread, about 30 times a second while the editor is open: the place to send the page what changes on
-        its own, such as levels the audio thread has measured. Changes to the parameters reach the page without it. */
+    /** Message thread, as often as the editor's ticksPerSecond says while it is open: the place to send the page what
+        changes on its own, such as levels the audio thread has measured. Changes to the parameters reach the page
+        without it. */
     virtual void editorTick(EditorLink& editor);
 
     /** Message thread: the editor has closed. */

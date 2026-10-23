@@ -24,9 +24,8 @@ namespace
 // How a stepped parameter with this many steps or fewer lists them for the page, as a menu would.
 constexpr double mostSteps = 64.0;
 
-// The timer's interval, and how many of its ticks a resizing rests for before its size is kept.
-constexpr std::uint32_t tickMilliseconds = 33;
-constexpr int restBeforeKeeping = 18;
+// How long a resizing rests for before its size is kept.
+constexpr std::uint32_t restMilliseconds = 600;
 
 Value describe(const Parameter& parameter, double value)
 {
@@ -85,7 +84,8 @@ std::uint32_t whole(const Value& number)
 EditorSession::EditorSession(Plugin& owner, const Description& about, Editor description, EditorChanges& queue,
                              Host link)
     : plugin(owner), editor(std::move(description)), changes(queue), host(std::move(link)),
-      view(pageOptions(about, editor)), file(sizeFile(about))
+      view(pageOptions(about, editor)),
+      tickMilliseconds(1000 / std::clamp<std::uint32_t>(editor.ticksPerSecond, 1, 120)), file(sizeFile(about))
 {
     size = openingSize();
     kept = size;
@@ -105,23 +105,20 @@ EditorSession::EditorSession(Plugin& owner, const Description& about, Editor des
     });
 
     view.expose("__begin", [this](const Value& arguments) {
-        const auto index = indexOf(arguments[0]);
-        change(EditorChange::Kind::begin, plugin.parameters()[index].id, 0.0);
+        beginGesture(plugin.parameters()[indexOf(arguments[0])].id);
         return Value();
     });
 
     view.expose("__set", [this](const Value& arguments) {
         const auto index = indexOf(arguments[0]);
-        Access::set(plugin, index, arguments[1].numberOr(Access::value(plugin, index)));
-        const auto value = Access::value(plugin, index);
-        sent[index] = value;
-        change(EditorChange::Kind::value, plugin.parameters()[index].id, value);
+        const auto value =
+            setParameter(plugin.parameters()[index].id, arguments[1].numberOr(Access::value(plugin, index)));
+        sent[index] = value;   // the page has it already
         return Value(Object{{"value", value}, {"text", textFor(plugin.parameters()[index], value)}});
     });
 
     view.expose("__end", [this](const Value& arguments) {
-        const auto index = indexOf(arguments[0]);
-        change(EditorChange::Kind::end, plugin.parameters()[index].id, 0.0);
+        endGesture(plugin.parameters()[indexOf(arguments[0])].id);
         return Value();
     });
 
@@ -238,7 +235,7 @@ void EditorSession::keepSize(bool now)
 {
     if (!editor.resizable || !editor.remember || size == kept)
         return;
-    if (!now && ++restingTicks < restBeforeKeeping)
+    if (!now && ++restingTicks < static_cast<int>(restMilliseconds / tickMilliseconds))
         return;
 
     std::error_code ignored;
@@ -266,13 +263,42 @@ void EditorSession::snapshot(const std::filesystem::path& png, std::function<voi
 
 std::size_t EditorSession::indexOf(const Value& id) const
 {
-    const auto index = Access::index(plugin, static_cast<std::uint32_t>(id.intOr(-1)));
+    const auto number = id.intOr(-1);
+    if (number < 0 || number > 0xFFFFFFFF)
+        throw std::runtime_error("the plugin has no parameter " + std::to_string(number));
+    return indexOf(static_cast<std::uint32_t>(number));
+}
+
+std::size_t EditorSession::indexOf(std::uint32_t id) const
+{
+    const auto index = Access::index(plugin, id);
     if (!index)
-        throw std::runtime_error("the plugin has no parameter " + std::to_string(id.intOr(-1)));
+        throw std::runtime_error("the plugin has no parameter " + std::to_string(id));
     return *index;
 }
 
-void EditorSession::change(EditorChange::Kind kind, std::uint32_t id, double value)
+void EditorSession::beginGesture(std::uint32_t id)
+{
+    indexOf(id);
+    record(EditorChange::Kind::begin, id, 0.0);
+}
+
+double EditorSession::setParameter(std::uint32_t id, double value)
+{
+    const auto index = indexOf(id);
+    Access::set(plugin, index, value);
+    const auto held = Access::value(plugin, index);
+    record(EditorChange::Kind::value, id, held);
+    return held;
+}
+
+void EditorSession::endGesture(std::uint32_t id)
+{
+    indexOf(id);
+    record(EditorChange::Kind::end, id, 0.0);
+}
+
+void EditorSession::record(EditorChange::Kind kind, std::uint32_t id, double value)
 {
     changes.push({kind, id, value});
     if (host.told)
@@ -286,7 +312,7 @@ void EditorSession::snapshotWhenAsked()
     if (!view.pageReady())
         return;
 
-    const int second = static_cast<int>(1000 / tickMilliseconds);
+    const auto second = static_cast<int>(1000 / tickMilliseconds);
     if (++ticks != second && ticks != 2 * second)
         return;
 

@@ -31,6 +31,7 @@ if(SYMBOLENGINE_TESTS)
         Tests/NumberTests.cpp
         Tests/PathsTests.cpp
         Tests/SettingsFileTests.cpp
+        Tests/SystemTests.cpp
         Tests/TextTests.cpp
         Tests/ToCharsReference.cpp
         Tests/ValueTests.cpp)

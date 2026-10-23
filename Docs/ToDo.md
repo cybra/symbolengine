@@ -37,6 +37,7 @@
 - [x] Dolby's 9.1.4 and 9.1.6 in VST3 and Audio Units, their wide pair passed between a plugin and the fork's wrappers by an extension of the fork's own, since CLAP has no numbers for it; a CLAP host is never given them.
 - [ ] Dolby's 9.1.x in AAX, when AAX is built: the fork's AAX wrapper reads 5.1's surround pair as the side pair, where VST3 and Audio Units read it as the rear pair, which it has to agree with first.
 - [x] Parameters hosts see and record from 0 to 1 on a linear or ratio scale, shown in their own units, as plugins already released with such parameters have them.
+- [x] Editors that tick up to 120 times a second, and the plugin's own functions changing parameters in gestures the host records; core opens web addresses in the browser.
 - [ ] Its earlier versions' saved state and parameter numbers kept, checked against sessions saved with them.
 - [x] Example: a gain, passing every validator on every system.
 - [x] Example: a filter with an editor and a level meter.
