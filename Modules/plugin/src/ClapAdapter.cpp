@@ -163,20 +163,37 @@ public:
             hostGui = static_cast<const clap_host_gui*>(host->get_extension(host, CLAP_EXT_GUI));
 
             buses = plugin->buses();
+            Layouts given;
             for (const auto& bus : buses.inputs)
-                inputChannels.emplace_back(bus.channels, nullptr);
+                given.inputs.push_back(bus.layout);
             for (const auto& bus : buses.outputs)
-                outputChannels.emplace_back(bus.channels, nullptr);
-            for (const auto& channels : inputChannels)
-                inputSpans.emplace_back(channels);
-            for (const auto& channels : outputChannels)
-                outputSpans.emplace_back(channels);
+                given.outputs.push_back(bus.layout);
+            detail::Access::setLayouts(*plugin, std::move(given));
+            makeChannels();
             return true;
         }
         catch (...)
         {
             return false;
         }
+    }
+
+    // Room for each bus's channel pointers in the layouts it has now, made while the plugin isn't processing.
+    void makeChannels()
+    {
+        const auto& layouts = plugin->layouts();
+        inputChannels.clear();
+        outputChannels.clear();
+        inputSpans.clear();
+        outputSpans.clear();
+        for (const auto& layout : layouts.inputs)
+            inputChannels.emplace_back(layout.channels(), nullptr);
+        for (const auto& layout : layouts.outputs)
+            outputChannels.emplace_back(layout.channels(), nullptr);
+        for (const auto& channels : inputChannels)
+            inputSpans.emplace_back(channels);
+        for (const auto& channels : outputChannels)
+            outputSpans.emplace_back(channels);
     }
 
     bool activate(double sampleRate, std::uint32_t maximumFrames) noexcept
@@ -315,19 +332,19 @@ public:
 
     bool buffersMatch(const clap_process& call) const noexcept
     {
-        if (call.audio_inputs_count != buses.inputs.size() || call.audio_outputs_count != buses.outputs.size())
+        if (call.audio_inputs_count != inputChannels.size() || call.audio_outputs_count != outputChannels.size())
             return false;
-        for (std::size_t i = 0; i < buses.inputs.size(); ++i)
+        for (std::size_t i = 0; i < inputChannels.size(); ++i)
         {
             const auto& buffer = call.audio_inputs[i];
-            if (buffer.channel_count != buses.inputs[i].channels ||
+            if (buffer.channel_count != inputChannels[i].size() ||
                 (buffer.channel_count > 0 && buffer.data32 == nullptr))
                 return false;
         }
-        for (std::size_t i = 0; i < buses.outputs.size(); ++i)
+        for (std::size_t i = 0; i < outputChannels.size(); ++i)
         {
             const auto& buffer = call.audio_outputs[i];
-            if (buffer.channel_count != buses.outputs[i].channels ||
+            if (buffer.channel_count != outputChannels[i].size() ||
                 (buffer.channel_count > 0 && buffer.data32 == nullptr))
                 return false;
         }
@@ -381,7 +398,7 @@ public:
             if (start < frames)
                 run(call, start, frames);
 
-            for (std::size_t bus = 0; bus < buses.outputs.size(); ++bus)
+            for (std::size_t bus = 0; bus < outputChannels.size(); ++bus)
                 call.audio_outputs[bus].constant_mask = 0;
 
             return CLAP_PROCESS_CONTINUE;
@@ -526,21 +543,177 @@ public:
 
     bool portInfo(std::uint32_t index, bool input, clap_audio_port_info& info) const noexcept
     {
-        const auto& list = input ? buses.inputs : buses.outputs;
-        const auto& other = input ? buses.outputs : buses.inputs;
-        if (index >= list.size())
+        const auto& names = input ? buses.inputs : buses.outputs;
+        const auto& list = input ? plugin->layouts().inputs : plugin->layouts().outputs;
+        const auto& other = input ? plugin->layouts().outputs : plugin->layouts().inputs;
+        if (index >= list.size() || index >= names.size())
             return false;
 
-        const auto& bus = list[index];
+        const auto& layout = list[index];
         info = {};
         info.id = index;
-        copyText(info.name, sizeof info.name, bus.name);
+        copyText(info.name, sizeof info.name, names[index].name);
         if (index == 0)
             info.flags |= CLAP_AUDIO_PORT_IS_MAIN;
-        info.channel_count = bus.channels;
-        info.port_type = bus.channels == 1 ? CLAP_PORT_MONO : bus.channels == 2 ? CLAP_PORT_STEREO : nullptr;
-        info.in_place_pair = index < other.size() && other[index].channels == bus.channels ? index : CLAP_INVALID_ID;
+        info.channel_count = layout.channels();
+        info.port_type = layout.channels() == 0              ? nullptr
+                         : layout == ChannelLayout::mono()   ? CLAP_PORT_MONO
+                         : layout == ChannelLayout::stereo() ? CLAP_PORT_STEREO
+                                                             : CLAP_PORT_SURROUND;
+        info.in_place_pair = index < other.size() && other[index] == layout ? index : CLAP_INVALID_ID;
         return true;
+    }
+
+    // Layouts
+    //
+    // A host asks for layouts as CLAP's configurable audio ports: a port's type and channel map, or only its channel
+    // count, which takes the first standard layout with that many channels the plugin accepts.
+
+    std::uint32_t channelMap(bool input, std::uint32_t index, std::uint8_t* map, std::uint32_t capacity) const noexcept
+    {
+        const auto& list = input ? plugin->layouts().inputs : plugin->layouts().outputs;
+        if (index >= list.size() || map == nullptr)
+            return 0;
+        const auto speakers = list[index].speakers();
+        const auto count = std::min<std::size_t>(capacity, speakers.size());
+        for (std::size_t i = 0; i < count; ++i)
+            map[i] = static_cast<std::uint8_t>(speakers[i]);
+        return static_cast<std::uint32_t>(count);
+    }
+
+    bool maskSupported(std::uint64_t mask) const noexcept
+    {
+        try
+        {
+            const auto layout = ChannelLayout::fromMask(mask);
+            if (!layout || layout->channels() == 0)
+                return false;
+
+            // On the main output, the main input, or both.
+            for (const bool in : {false, true})
+                for (const bool out : {true, false})
+                {
+                    auto asked = plugin->layouts();
+                    if ((!in && !out) || (in && asked.inputs.empty()) || (out && asked.outputs.empty()))
+                        continue;
+                    if (in)
+                        asked.inputs[0] = *layout;
+                    if (out)
+                        asked.outputs[0] = *layout;
+                    if (plugin->accepts(asked))
+                        return true;
+                }
+            return false;
+        }
+        catch (...)
+        {
+            return false;
+        }
+    }
+
+    // A port given only its channel count, and the layouts it could take.
+    struct Open
+    {
+        ChannelLayout* layout;
+        std::vector<ChannelLayout> choices;
+    };
+
+    bool firstAccepted(Layouts& asked, std::vector<Open>& open, std::size_t next) const
+    {
+        if (next == open.size())
+            return plugin->accepts(asked);
+        for (const auto& choice : open[next].choices)
+        {
+            *open[next].layout = choice;
+            if (firstAccepted(asked, open, next + 1))
+                return true;
+        }
+        return false;
+    }
+
+    std::optional<Layouts> layoutsFor(const clap_audio_port_configuration_request* requests, std::uint32_t count) const
+    {
+        if (requests == nullptr && count > 0)
+            return std::nullopt;
+
+        auto asked = plugin->layouts();
+        std::vector<Open> open;
+        for (std::uint32_t i = 0; i < count; ++i)
+        {
+            const auto& request = requests[i];
+            auto& list = request.is_input ? asked.inputs : asked.outputs;
+            if (request.port_index >= list.size())
+                return std::nullopt;
+            auto& layout = list[request.port_index];
+            const char* type = request.port_type;
+
+            if (type == nullptr)
+            {
+                Open port{&layout, {}};
+                if (layout.channels() == request.channel_count)
+                    port.choices.push_back(layout);
+                if (request.channel_count == 0 && layout.channels() != 0)
+                    port.choices.emplace_back();
+                for (const auto& standard : ChannelLayout::standard())
+                    if (standard.channels() == request.channel_count && standard != layout)
+                        port.choices.push_back(standard);
+                if (port.choices.empty())
+                    return std::nullopt;
+                open.push_back(std::move(port));
+            }
+            else if (std::strcmp(type, CLAP_PORT_MONO) == 0 && request.channel_count == 1)
+                layout = ChannelLayout::mono();
+            else if (std::strcmp(type, CLAP_PORT_STEREO) == 0 && request.channel_count == 2)
+                layout = ChannelLayout::stereo();
+            else if (std::strcmp(type, CLAP_PORT_SURROUND) == 0 && request.port_details != nullptr)
+            {
+                const auto* map = static_cast<const std::uint8_t*>(request.port_details);
+                std::vector<Speaker> speakers;
+                for (std::uint32_t channel = 0; channel < request.channel_count; ++channel)
+                    speakers.push_back(static_cast<Speaker>(map[channel]));
+                ChannelLayout mapped(std::move(speakers));
+                if (!mapped.valid())
+                    return std::nullopt;
+                layout = std::move(mapped);
+            }
+            else
+                return std::nullopt;
+        }
+
+        if (!firstAccepted(asked, open, 0))
+            return std::nullopt;
+        return asked;
+    }
+
+    bool canApply(const clap_audio_port_configuration_request* requests, std::uint32_t count) const noexcept
+    {
+        try
+        {
+            return !active && layoutsFor(requests, count).has_value();
+        }
+        catch (...)
+        {
+            return false;
+        }
+    }
+
+    bool apply(const clap_audio_port_configuration_request* requests, std::uint32_t count) noexcept
+    {
+        try
+        {
+            if (active)
+                return false;
+            auto layouts = layoutsFor(requests, count);
+            if (!layouts)
+                return false;
+            detail::Access::setLayouts(*plugin, std::move(*layouts));
+            makeChannels();
+            return true;
+        }
+        catch (...)
+        {
+            return false;
+        }
     }
 
     std::uint32_t latency() const noexcept
@@ -769,6 +942,20 @@ const clap_plugin_audio_ports audioPorts{
               clap_audio_port_info* info) { return info != nullptr && Instance::of(p).portInfo(index, input, *info); },
 };
 
+const clap_plugin_surround surround{
+    .is_channel_mask_supported = [](const clap_plugin* p,
+                                    std::uint64_t mask) { return Instance::of(p).maskSupported(mask); },
+    .get_channel_map = [](const clap_plugin* p, bool input, std::uint32_t index, std::uint8_t* map,
+                          std::uint32_t capacity) { return Instance::of(p).channelMap(input, index, map, capacity); },
+};
+
+const clap_plugin_configurable_audio_ports configurablePorts{
+    .can_apply_configuration = [](const clap_plugin* p, const clap_audio_port_configuration_request* requests,
+                                  std::uint32_t count) { return Instance::of(p).canApply(requests, count); },
+    .apply_configuration = [](const clap_plugin* p, const clap_audio_port_configuration_request* requests,
+                              std::uint32_t count) { return Instance::of(p).apply(requests, count); },
+};
+
 const clap_plugin_latency latencies{
     .get = [](const clap_plugin* p) { return Instance::of(p).latency(); },
 };
@@ -824,6 +1011,11 @@ const void* Instance::extension(const char* id) const noexcept
         return &state;
     if (std::strcmp(id, CLAP_EXT_AUDIO_PORTS) == 0)
         return &audioPorts;
+    if (std::strcmp(id, CLAP_EXT_SURROUND) == 0 || std::strcmp(id, CLAP_EXT_SURROUND_COMPAT) == 0)
+        return &surround;
+    if (std::strcmp(id, CLAP_EXT_CONFIGURABLE_AUDIO_PORTS) == 0 ||
+        std::strcmp(id, CLAP_EXT_CONFIGURABLE_AUDIO_PORTS_COMPAT) == 0)
+        return &configurablePorts;
     if (std::strcmp(id, CLAP_EXT_LATENCY) == 0)
         return &latencies;
     if (std::strcmp(id, CLAP_EXT_TAIL) == 0)

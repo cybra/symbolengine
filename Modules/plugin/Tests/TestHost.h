@@ -182,6 +182,97 @@ struct Stereo
     clap_audio_buffer output{};
 };
 
+// Audio with any number of channels in and out, and a process call over it.
+struct Audio
+{
+    Audio(std::uint32_t frames, std::uint32_t inputs, std::uint32_t outputs)
+        : frameCount(frames), in(inputs, std::vector<float>(frames)), out(outputs, std::vector<float>(frames, 99.0f))
+    {
+        for (std::uint32_t i = 0; i < frames; ++i)
+            for (auto& channel : in)
+                channel[i] = static_cast<float>(i + 1) / static_cast<float>(frames);
+        for (auto& channel : in)
+            inPointers.push_back(channel.data());
+        for (auto& channel : out)
+            outPointers.push_back(channel.data());
+        input = {inPointers.data(), nullptr, inputs, 0, 0};
+        output = {outPointers.data(), nullptr, outputs, 0, 0};
+    }
+
+    Audio(const Audio&) = delete;
+    Audio& operator=(const Audio&) = delete;
+
+    clap_process_status run(const clap_plugin* plugin)
+    {
+        Changes none;
+        clap_output_events outEvents{nullptr, [](const clap_output_events*, const clap_event_header*) { return true; }};
+        clap_process call{};
+        call.steady_time = -1;
+        call.frames_count = frameCount;
+        call.audio_inputs = &input;
+        call.audio_outputs = &output;
+        call.audio_inputs_count = 1;
+        call.audio_outputs_count = 1;
+        call.in_events = &none.list;
+        call.out_events = &outEvents;
+        return plugin->process(plugin, &call);
+    }
+
+    std::uint32_t frameCount;
+    std::vector<std::vector<float>> in;
+    std::vector<std::vector<float>> out;
+    std::vector<float*> inPointers;
+    std::vector<float*> outPointers;
+    clap_audio_buffer input{};
+    clap_audio_buffer output{};
+};
+
+// A port configuration as a host asks for one: by type and channel map, or by channel count alone.
+struct Request
+{
+    static Request typed(bool input, std::uint32_t channels, const char* type)
+    {
+        return {{input, 0, channels, type, nullptr}, {}};
+    }
+
+    static Request mapped(bool input, std::vector<std::uint8_t> map)
+    {
+        Request request{{input, 0, static_cast<std::uint32_t>(map.size()), CLAP_PORT_SURROUND, nullptr},
+                        std::move(map)};
+        return request;
+    }
+
+    static Request counted(bool input, std::uint32_t channels) { return {{input, 0, channels, nullptr, nullptr}, {}}; }
+
+    clap_audio_port_configuration_request request;
+    std::vector<std::uint8_t> map;
+};
+
+// Whether a plugin can take, or takes, the requests together.
+inline bool configure(const clap_plugin* plugin, std::vector<Request> requests, bool apply)
+{
+    std::vector<clap_audio_port_configuration_request> list;
+    for (auto& request : requests)
+    {
+        if (!request.map.empty())
+            request.request.port_details = request.map.data();
+        list.push_back(request.request);
+    }
+    const auto& ports = *static_cast<const clap_plugin_configurable_audio_ports*>(
+        plugin->get_extension(plugin, CLAP_EXT_CONFIGURABLE_AUDIO_PORTS));
+    return apply ? ports.apply_configuration(plugin, list.data(), static_cast<std::uint32_t>(list.size()))
+                 : ports.can_apply_configuration(plugin, list.data(), static_cast<std::uint32_t>(list.size()));
+}
+
+// The speaker of each channel of a port, as the plugin tells a host.
+inline std::vector<std::uint8_t> channelMap(const clap_plugin* plugin, bool input)
+{
+    const auto& surround = *static_cast<const clap_plugin_surround*>(plugin->get_extension(plugin, CLAP_EXT_SURROUND));
+    std::vector<std::uint8_t> map(32);
+    map.resize(surround.get_channel_map(plugin, input, 0, map.data(), static_cast<std::uint32_t>(map.size())));
+    return map;
+}
+
 // A stream a plugin saves its state into or loads it from.
 struct Bytes
 {

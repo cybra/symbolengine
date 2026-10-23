@@ -58,11 +58,13 @@ function(symbolengine_vst3_validator out)
     set(${out} ${CMAKE_BINARY_DIR}/vst3-validator/bin/Release/validator${CMAKE_EXECUTABLE_SUFFIX} PARENT_SCOPE)
 endfunction()
 
-# symbolengine_validate_plugin(<target> [VST3_CLASS_ID <id>])
+# symbolengine_validate_plugin(<target> [VST3_CLASS_ID <id>] [VST3_ARRANGEMENTS <In>Out>...])
 #
-# VST3_CLASS_ID also checks that Steinberg's validator finds the VST3 build under that class ID.
+# VST3_CLASS_ID also checks that Steinberg's validator finds the VST3 build under that class ID. VST3_ARRANGEMENTS
+# checks that, of the speaker arrangements the validator asks for, the plugin takes exactly these, as the validator
+# names them, such as Mono>Stereo.
 function(symbolengine_validate_plugin target)
-    cmake_parse_arguments(PARSE_ARGV 1 validate "" "VST3_CLASS_ID" "")
+    cmake_parse_arguments(PARSE_ARGV 1 validate "" "VST3_CLASS_ID" "VST3_ARRANGEMENTS")
 
     get_target_property(formats ${target}_impl SYMBOLENGINE_FORMATS)
     get_target_property(au_codes ${target}_impl SYMBOLENGINE_AU_CODES)
@@ -100,6 +102,13 @@ function(symbolengine_validate_plugin target)
                     -P ${PROJECT_SOURCE_DIR}/cmake/RunAndExpect.cmake)
         else()
             add_test(NAME "${target}: VST3 validator" COMMAND ${validator} ${vst3_folder})
+        endif()
+
+        if(validate_VST3_ARRANGEMENTS)
+            string(JOIN "," arrangements ${validate_VST3_ARRANGEMENTS})
+            add_test(NAME "${target}: VST3 speaker arrangements"
+                COMMAND ${CMAKE_COMMAND} -DVALIDATOR=${validator} -DPLUGIN=${vst3_folder} -DEXPECTED=${arrangements}
+                    -P ${PROJECT_SOURCE_DIR}/cmake/Vst3Arrangements.cmake)
         endif()
 
         if(SYMBOLENGINE_PLUGINVAL)

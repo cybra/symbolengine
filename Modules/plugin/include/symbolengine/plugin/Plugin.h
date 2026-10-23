@@ -1,5 +1,6 @@
 #pragma once
 
+#include <symbolengine/core/ChannelLayout.h>
 #include <symbolengine/core/Value.h>
 
 #include <atomic>
@@ -85,13 +86,22 @@ private:
 struct Bus
 {
     std::string name{};
-    std::uint32_t channels = 2;
+    ChannelLayout layout = ChannelLayout::stereo();   // the layout it starts with
 };
 
 struct Buses
 {
-    std::vector<Bus> inputs{Bus{"Input", 2}};
-    std::vector<Bus> outputs{Bus{"Output", 2}};
+    std::vector<Bus> inputs{Bus{"Input", ChannelLayout::stereo()}};
+    std::vector<Bus> outputs{Bus{"Output", ChannelLayout::stereo()}};
+};
+
+/** The layout of each bus, in the order Buses lists them. */
+struct Layouts
+{
+    std::vector<ChannelLayout> inputs{};
+    std::vector<ChannelLayout> outputs{};
+
+    bool operator==(const Layouts& other) const = default;
 };
 
 /** The audio a plugin processes in one call: each bus's channels, frames() samples long. An output may be the same
@@ -208,6 +218,18 @@ public:
     /** The audio inputs and outputs, asked once after the plugin is made. Stereo in and out unless overridden. */
     virtual Buses buses() const;
 
+    /** Message thread, while the plugin isn't prepared: whether it can take these layouts, one for each bus, which a
+        host asks before it changes them. By default only the layouts buses() gave. A plugin that takes mono or stereo
+        with its output matching its input, say:
+
+            return layouts.inputs[0] == layouts.outputs[0] &&
+                   (layouts.outputs[0] == ChannelLayout::mono() || layouts.outputs[0] == ChannelLayout::stereo()); */
+    virtual bool accepts(const Layouts& layouts) const;
+
+    /** The layout of each bus, which buses() gave until the host changes it. It changes only while the plugin isn't
+        prepared, so from prepare() on it holds for every block, read on any thread. */
+    const Layouts& layouts() const noexcept { return current; }
+
     /** Message thread: processing is about to start at this sample rate, in blocks of up to maximumFrames. The place
         to allocate what process() needs. */
     virtual void prepare(double sampleRate, std::uint32_t maximumFrames);
@@ -284,6 +306,7 @@ private:
     std::deque<std::atomic<double>> values;   // a deque, so each value stays where its ParameterValue points
     std::unordered_map<std::uint32_t, std::size_t> indexOf;
     detail::HostLink* host = nullptr;
+    Layouts current;
     std::uint32_t editorWidth = 0, editorHeight = 0;   // 0 until this instance's editor has a size of its own
 };
 

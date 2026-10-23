@@ -1,4 +1,5 @@
 set(sources
+    src/ChannelLayout.cpp
     src/Files.cpp
     src/Json.cpp
     src/Numbers.cpp
@@ -24,6 +25,7 @@ symbolengine_add_module(core SOURCES ${sources} LIBRARIES ${libraries})
 
 if(SYMBOLENGINE_TESTS)
     symbolengine_add_tests(core SOURCES
+        Tests/ChannelLayoutTests.cpp
         Tests/FilesTests.cpp
         Tests/JsonTests.cpp
         Tests/NumberTests.cpp

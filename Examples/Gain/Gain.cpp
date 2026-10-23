@@ -2,8 +2,10 @@
 
 #include <symbolengine/plugin.h>
 
+#include <algorithm>
 #include <cmath>
 
+using namespace symbolengine;
 using namespace symbolengine::plugin;
 
 class Gain final : public Plugin
@@ -17,10 +19,18 @@ public:
                 .version = "0.1.0",
                 .description = "Raises or lowers the level.",
                 .url = "https://symbolengine.dev",
-                .features = {"audio-effect", "utility", "stereo"}};
+                .features = {"audio-effect", "utility", "mono", "stereo", "surround"}};
     }
 
     Gain() : gain(addParameter(decibels(1, "Gain", -60.0, 24.0, 0.0))) {}
+
+    // Any standard layout, from mono to 9.1.6, the output matching the input.
+    bool accepts(const Layouts& layouts) const override
+    {
+        const auto standard = ChannelLayout::standard();
+        return layouts.inputs[0] == layouts.outputs[0] &&
+               std::find(standard.begin(), standard.end(), layouts.outputs[0]) != standard.end();
+    }
 
     void process(Block& block) override
     {

@@ -42,6 +42,9 @@ struct Access
 
     static void attach(Plugin& plugin, HostLink* host) noexcept { plugin.host = host; }
 
+    /** Sets the layouts the host chose, while the plugin isn't prepared. */
+    static void setLayouts(Plugin& plugin, Layouts layouts) { plugin.current = std::move(layouts); }
+
     /** This instance's editor size in points, or 0 by 0 until it has one. */
     static std::pair<std::uint32_t, std::uint32_t> editorSize(const Plugin& plugin) noexcept
     {

@@ -4,6 +4,7 @@
 
 #include <symbolengine/plugin.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <filesystem>
@@ -21,6 +22,7 @@ namespace tests
 {
 
 using namespace symbolengine::plugin;
+using symbolengine::ChannelLayout;
 
 class TestGain final : public Plugin
 {
@@ -52,6 +54,13 @@ public:
     {
         if (last == this)
             last = nullptr;
+    }
+
+    // Mono or stereo, its output matching its input.
+    bool accepts(const Layouts& layouts) const override
+    {
+        return layouts.inputs[0] == layouts.outputs[0] &&
+               (layouts.outputs[0] == ChannelLayout::mono() || layouts.outputs[0] == ChannelLayout::stereo());
     }
 
     void prepare(double sampleRate, std::uint32_t) override
@@ -193,5 +202,48 @@ public:
 
     static inline TestLatency* last = nullptr;
     std::uint32_t frames = 32;
+};
+
+// Mono or stereo in, and out to any standard layout, each output channel given the first input channel.
+class TestSpread final : public Plugin
+{
+public:
+    static Description describe()
+    {
+        return {.id = "test.spread", .name = "Test Spread", .vendor = "Tests", .version = "1.0.0"};
+    }
+
+    TestSpread() { last = this; }
+
+    ~TestSpread() override
+    {
+        if (last == this)
+            last = nullptr;
+    }
+
+    Buses buses() const override
+    {
+        return {.inputs = {Bus{"Dialogue", ChannelLayout::mono()}}, .outputs = {Bus{"Room", ChannelLayout::stereo()}}};
+    }
+
+    bool accepts(const Layouts& layouts) const override
+    {
+        const auto& in = layouts.inputs[0];
+        const auto standard = ChannelLayout::standard();
+        return (in == ChannelLayout::mono() || in == ChannelLayout::stereo()) &&
+               std::find(standard.begin(), standard.end(), layouts.outputs[0]) != standard.end();
+    }
+
+    void prepare(double, std::uint32_t) override { prepared = layouts(); }
+
+    void process(Block& block) override
+    {
+        for (std::size_t channel = 0; channel < block.output().size(); ++channel)
+            for (std::uint32_t i = 0; i < block.frames(); ++i)
+                block.output()[channel][i] = block.input()[0][i];
+    }
+
+    static inline TestSpread* last = nullptr;
+    Layouts prepared;
 };
 }

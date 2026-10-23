@@ -19,6 +19,16 @@ Buses Plugin::buses() const
     return {};
 }
 
+bool Plugin::accepts(const Layouts& layouts) const
+{
+    Layouts given;
+    for (const auto& bus : buses().inputs)
+        given.inputs.push_back(bus.layout);
+    for (const auto& bus : buses().outputs)
+        given.outputs.push_back(bus.layout);
+    return layouts == given;
+}
+
 void Plugin::prepare(double, std::uint32_t) {}
 
 void Plugin::release() {}

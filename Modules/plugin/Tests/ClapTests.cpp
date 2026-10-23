@@ -25,6 +25,7 @@ const double halfGain = 20.0 * std::log10(0.5);
 
 using tests::TestGain;
 using tests::TestLatency;
+using tests::TestSpread;
 
 const clap_plugin_params& paramsOf(const Made& made)
 {
@@ -45,12 +46,12 @@ void start(const Made& made)
 }
 }
 
-SYMBOLENGINE_PLUGINS(TestGain, TestLatency)
+SYMBOLENGINE_PLUGINS(TestGain, TestLatency, TestSpread)
 
 TEST_CASE("The factory describes every plugin the binary offers")
 {
     const auto& f = factory();
-    REQUIRE(f.get_plugin_count(&f) == 2);
+    REQUIRE(f.get_plugin_count(&f) == 3);
 
     const auto* first = f.get_plugin_descriptor(&f, 0);
     REQUIRE(first != nullptr);
@@ -67,7 +68,8 @@ TEST_CASE("The factory describes every plugin the binary offers")
 
     CHECK(std::string(f.get_plugin_descriptor(&f, 1)->id) == "test.latency");
     CHECK(f.get_plugin_descriptor(&f, 1)->features[0] == nullptr);
-    CHECK(f.get_plugin_descriptor(&f, 2) == nullptr);
+    CHECK(std::string(f.get_plugin_descriptor(&f, 2)->id) == "test.spread");
+    CHECK(f.get_plugin_descriptor(&f, 3) == nullptr);
 
     TestHost host;
     CHECK(f.create_plugin(&f, &host.host, "test.missing") == nullptr);
@@ -306,6 +308,133 @@ TEST_CASE("Ports are stereo in and stereo out, which may share memory")
     CHECK_FALSE(ports.get(made.plugin, 1, false, &info));
 }
 
+TEST_CASE("A plugin takes only the layouts it accepts, and only while it isn't active")
+{
+    TestHost host;
+    Made made(host, "test.gain");
+    const auto& ports = made.extension<clap_plugin_audio_ports>(CLAP_EXT_AUDIO_PORTS);
+
+    // Mono or stereo, the output matching the input.
+    CHECK(configure(made.plugin, {Request::typed(true, 1, CLAP_PORT_MONO), Request::typed(false, 1, CLAP_PORT_MONO)},
+                    false));
+    CHECK_FALSE(configure(made.plugin, {Request::typed(true, 1, CLAP_PORT_MONO)}, false));
+    CHECK_FALSE(configure(made.plugin, {Request::counted(true, 6), Request::counted(false, 6)}, false));
+    CHECK_FALSE(configure(made.plugin, {Request::typed(true, 2, CLAP_PORT_MONO), Request::counted(false, 2)}, false));
+
+    REQUIRE(configure(made.plugin, {Request::counted(true, 1), Request::counted(false, 1)}, true));
+    clap_audio_port_info info{};
+    REQUIRE(ports.get(made.plugin, 0, false, &info));
+    CHECK(info.channel_count == 1);
+    CHECK(std::string(info.port_type) == CLAP_PORT_MONO);
+    CHECK(info.in_place_pair == 0);
+    CHECK(channelMap(made.plugin, true) == std::vector<std::uint8_t>{CLAP_SURROUND_FC});
+    CHECK(TestGain::last->layouts().outputs[0] == ChannelLayout::mono());
+
+    start(made);
+    Audio mono(16, 1, 1);
+    CHECK(mono.run(made.plugin) == CLAP_PROCESS_CONTINUE);
+    CHECK(mono.out[0][15] == Catch::Approx(1.0f));
+    Audio stereo(16, 2, 2);
+    CHECK(stereo.run(made.plugin) == CLAP_PROCESS_ERROR);
+
+    // Not while it's active.
+    const auto both = {Request::typed(true, 2, CLAP_PORT_STEREO), Request::typed(false, 2, CLAP_PORT_STEREO)};
+    CHECK_FALSE(configure(made.plugin, both, false));
+    CHECK_FALSE(configure(made.plugin, both, true));
+    made.plugin->stop_processing(made.plugin);
+    made.plugin->deactivate(made.plugin);
+    CHECK(configure(made.plugin, both, true));
+    CHECK(TestGain::last->layouts().inputs[0] == ChannelLayout::stereo());
+}
+
+TEST_CASE("A plugin that doesn't say which layouts it accepts takes only those it started with")
+{
+    TestHost host;
+    Made made(host, "test.latency");
+    CHECK(configure(made.plugin, {Request::typed(true, 2, CLAP_PORT_STEREO), Request::counted(false, 2)}, true));
+    CHECK_FALSE(configure(made.plugin, {Request::typed(true, 1, CLAP_PORT_MONO)}, false));
+    CHECK_FALSE(configure(made.plugin, {Request::counted(false, 6)}, false));
+}
+
+TEST_CASE("A host asks for a layout by its channel map or its channel count, and is told each channel's speaker")
+{
+    TestHost host;
+    Made made(host, "test.spread");
+    const auto& ports = made.extension<clap_plugin_audio_ports>(CLAP_EXT_AUDIO_PORTS);
+
+    clap_audio_port_info info{};
+    REQUIRE(ports.get(made.plugin, 0, true, &info));
+    CHECK(std::string(info.name) == "Dialogue");
+    CHECK(info.channel_count == 1);
+    CHECK(info.in_place_pair == CLAP_INVALID_ID);
+
+    // 7.1.4 by its channel map.
+    const std::vector<std::uint8_t> seven14{CLAP_SURROUND_FL,  CLAP_SURROUND_FR,  CLAP_SURROUND_FC,  CLAP_SURROUND_LFE,
+                                            CLAP_SURROUND_BL,  CLAP_SURROUND_BR,  CLAP_SURROUND_SL,  CLAP_SURROUND_SR,
+                                            CLAP_SURROUND_TFL, CLAP_SURROUND_TFR, CLAP_SURROUND_TBL, CLAP_SURROUND_TBR};
+    REQUIRE(configure(made.plugin, {Request::mapped(false, seven14)}, true));
+    REQUIRE(ports.get(made.plugin, 0, false, &info));
+    CHECK(info.channel_count == 12);
+    CHECK(std::string(info.port_type) == CLAP_PORT_SURROUND);
+    CHECK(channelMap(made.plugin, false) == seven14);
+
+    // By count alone, the first standard layout with that many channels.
+    REQUIRE(configure(made.plugin, {Request::counted(false, 8)}, true));
+    CHECK(TestSpread::last->layouts().outputs[0] == ChannelLayout::surround71());
+    REQUIRE(configure(made.plugin, {Request::counted(false, 16)}, true));
+    CHECK(TestSpread::last->layouts().outputs[0] == ChannelLayout::surround916Itu());
+    CHECK(channelMap(made.plugin, false).size() == 16);
+
+    // Prepared, it has the layouts the host chose, and fills each output channel.
+    REQUIRE(configure(made.plugin, {Request::typed(true, 2, CLAP_PORT_STEREO), Request::counted(false, 6)}, true));
+    start(made);
+    CHECK(TestSpread::last->prepared.inputs[0] == ChannelLayout::stereo());
+    CHECK(TestSpread::last->prepared.outputs[0] == ChannelLayout::surround51());
+    Audio audio(16, 2, 6);
+    CHECK(audio.run(made.plugin) == CLAP_PROCESS_CONTINUE);
+    CHECK(audio.out[5][15] == Catch::Approx(1.0f));
+    made.plugin->stop_processing(made.plugin);
+    made.plugin->deactivate(made.plugin);
+
+    // What no layout can be, or this plugin doesn't take.
+    CHECK_FALSE(configure(made.plugin, {Request::mapped(false, {CLAP_SURROUND_FL, CLAP_SURROUND_FL})}, false));
+    CHECK_FALSE(configure(made.plugin, {Request::mapped(false, {CLAP_SURROUND_FR, CLAP_SURROUND_FL})}, false));
+    CHECK_FALSE(configure(made.plugin, {Request::mapped(false, {CLAP_SURROUND_FL, 20})}, false));
+    CHECK_FALSE(configure(made.plugin, {Request::counted(false, 17)}, false));
+    CHECK_FALSE(configure(made.plugin, {Request::counted(true, 6)}, false));
+    CHECK_FALSE(configure(made.plugin, {Request::typed(false, 4, CLAP_PORT_AMBISONIC)}, false));
+    auto elsewhere = Request::counted(false, 2);
+    elsewhere.request.port_index = 1;
+    CHECK_FALSE(configure(made.plugin, {elsewhere}, false));
+}
+
+TEST_CASE("A host learns which speaker sets a plugin takes")
+{
+    TestHost host;
+    Made spread(host, "test.spread");
+    Made gain(host, "test.gain");
+    const auto mask = [](std::initializer_list<int> speakers) {
+        std::uint64_t bits = 0;
+        for (const auto speaker : speakers)
+            bits |= std::uint64_t{1} << speaker;
+        return bits;
+    };
+    const auto supported = [](const Made& made, std::uint64_t bits) {
+        return made.extension<clap_plugin_surround>(CLAP_EXT_SURROUND).is_channel_mask_supported(made.plugin, bits);
+    };
+
+    const auto fiveOne = mask(
+        {CLAP_SURROUND_FL, CLAP_SURROUND_FR, CLAP_SURROUND_FC, CLAP_SURROUND_LFE, CLAP_SURROUND_BL, CLAP_SURROUND_BR});
+    CHECK(supported(spread, fiveOne));
+    CHECK(supported(spread, mask({CLAP_SURROUND_FC})));
+    CHECK_FALSE(supported(spread, mask({CLAP_SURROUND_FL, CLAP_SURROUND_FC})));
+    CHECK_FALSE(supported(spread, 0));
+    CHECK_FALSE(supported(spread, std::uint64_t{1} << 20));
+
+    CHECK(supported(gain, mask({CLAP_SURROUND_FL, CLAP_SURROUND_FR})));
+    CHECK_FALSE(supported(gain, fiveOne));
+}
+
 TEST_CASE("Audio buffers that don't match the ports are refused")
 {
     TestHost host;
@@ -393,5 +522,5 @@ TEST_CASE("Each plugin's VST3 build is given the class ID it states, or none to 
     const array_of_16_bytes expected = COMPONENT_ID(0xABCDEF01, 0x53796D62, 0x54657374, 0x4C617421);
     CHECK(std::memcmp(*latency->componentId, expected, 16) == 0);
 
-    CHECK(vst3->get_vst3_info(vst3, 2) == nullptr);
+    CHECK(vst3->get_vst3_info(vst3, 3) == nullptr);
 }
