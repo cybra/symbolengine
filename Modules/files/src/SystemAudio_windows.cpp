@@ -19,9 +19,9 @@
 
 // MPEG-4 audio, ADTS and Windows Media's ASF through Media Foundation's source reader, which decodes to floats with the channels in WAV's
 // order; Windows has no reader for CAF, nor for WAV and AIFF-C coded in ways of their own. Media Foundation acts on an
-// MPEG-4 file's edit list, but plays a file that gives its encoder's priming in iTunSMPB instead, as Apple's encoder
-// writes it, from its first sample, priming and all; for that file the decoder's samples are counted from where
-// iTunSMPB says the audio starts. The first stretch decoded after a jump carries the time it starts at, which
+// MPEG-4 file's edit list, giving the encoder's priming the time of the audio after it, but times a file that gives
+// its priming in iTunSMPB instead, as Apple's encoder writes it, from its first sample, priming and all; for that file
+// the decoder's samples are counted from where iTunSMPB says the audio starts. The first stretch decoded after a jump carries the time it starts at, which
 // places it and those after it, so a read starts at exactly the sample asked for; a jump starts half a second before
 // that sample, so the decoder settles first.
 //
@@ -197,14 +197,46 @@ private:
         heldStart = 0;
         placed = false;
         ended = false;
+        waiting = false;
+        pending.clear();
         return moved;
     }
 
-    // Decodes the next stretch onto what is held; false at the end or on a problem.
+    // Places a decoded stretch that starts at the frame given: the first after a jump by that frame, letting go of what
+    // lies before the audio, a stretch or more of the encoder's priming, and each after it following on.
+    void place(const std::vector<float>& stretch, long long first)
+    {
+        const auto channelCount = static_cast<std::size_t>(information.channels);
+        std::size_t skip = 0;
+        if (!placed)
+        {
+            const auto before = first < 0 ? static_cast<std::size_t>(-first) : std::size_t{0};
+            if (before * channelCount >= stretch.size())
+                return;
+            skip = before * channelCount;
+            heldStart = static_cast<std::uint64_t>(first + static_cast<long long>(before));
+            placed = true;
+        }
+        held.insert(held.end(), stretch.begin() + static_cast<std::ptrdiff_t>(skip), stretch.end());
+    }
+
+    // Decodes on until a stretch is placed; false at the end or on a problem. Each stretch waits for the next: Media
+    // Foundation gives the priming of a file with an edit list the time of the audio after it, so before the audio is
+    // placed, a stretch the next one starts no later than is that priming, and is let go.
     bool decodeMore(std::error_code& error)
     {
-        while (!ended)
+        const auto before = held.size();
+        while (held.size() == before)
         {
+            if (ended)
+            {
+                if (!waiting)
+                    return false;
+                place(pending, pendingFirst);
+                waiting = false;
+                continue;
+            }
+
             DWORD flags = 0;
             LONGLONG time = 0;
             Com<IMFSample> sample;
@@ -226,33 +258,18 @@ private:
                 error = AudioFileError::damaged;
                 return false;
             }
-
             const auto* samples = reinterpret_cast<const float*>(bytes);
-            const auto count = static_cast<std::size_t>(length) / sizeof(float);
-            const auto channelCount = static_cast<std::size_t>(information.channels);
-
-            // The first stretch to reach the audio is placed by its time, and samples before the audio, the encoder's
-            // priming, are let go, a stretch or more of them; each stretch after it follows on.
-            std::size_t skip = 0;
-            if (!placed)
-            {
-                const auto first = std::llround(static_cast<double>(time) * information.sampleRate / 1.0e7) -
-                                   static_cast<long long>(priming);
-                const auto before = first < 0 ? static_cast<std::size_t>(-first) : std::size_t{0};
-                if (before * channelCount >= count)
-                {
-                    buffer->Unlock();
-                    continue;
-                }
-                skip = before * channelCount;
-                heldStart = static_cast<std::uint64_t>(first + static_cast<long long>(before));
-                placed = true;
-            }
-            held.insert(held.end(), samples + skip, samples + count);
+            std::vector<float> next(samples, samples + static_cast<std::size_t>(length) / sizeof(float));
             buffer->Unlock();
-            return true;
+
+            const auto first = std::llround(static_cast<double>(time) * information.sampleRate / 1.0e7) - static_cast<long long>(priming);
+            if (waiting && (placed || first > pendingFirst))
+                place(pending, pendingFirst);
+            pending = std::move(next);
+            pendingFirst = first;
+            waiting = true;
         }
-        return false;
+        return true;
     }
 
     std::size_t readFrames(std::uint64_t from, float* const* channels, std::size_t frames, std::error_code& error) override
@@ -309,12 +326,15 @@ private:
     std::unique_ptr<RandomAccessFile> file;
     bool adts = false;
     bool asf = false;
-    std::uint64_t priming = 0;
+    std::uint64_t priming = 0;    // what Media Foundation's times count that the audio doesn't: iTunSMPB's priming
     Com<IMFSourceReader> reader;
     std::vector<float> held;
     std::uint64_t heldStart = 0;
     bool placed = false;
     bool ended = false;
+    std::vector<float> pending;
+    long long pendingFirst = 0;
+    bool waiting = false;
 };
 }
 
