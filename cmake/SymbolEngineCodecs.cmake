@@ -1,0 +1,158 @@
+include_guard(GLOBAL)
+
+include(FetchContent)
+
+# Xiph.Org's codecs for the files module, each pinned by checksum and under the BSD license whose notices a product
+# includes with its others: libogg, libvorbis, libFLAC, libopus, opusfile and libopusenc. Their own builds aren't run;
+# their library sources are compiled here, with their settings given as definitions and their processor-specific code
+# left out, so they build alike everywhere, and their objects go inside the files module's library.
+
+FetchContent_Declare(symbolengine_ogg
+    URL https://github.com/xiph/ogg/archive/refs/tags/v1.3.6.tar.gz
+    URL_HASH SHA256=95b643da661155d79db9de2fca55daed3a8d491039829def246aacb3d9201c81
+    SOURCE_SUBDIR fetched-only)
+FetchContent_Declare(symbolengine_vorbis
+    URL https://github.com/xiph/vorbis/archive/refs/tags/v1.3.7.tar.gz
+    URL_HASH SHA256=270c76933d0934e42c5ee0a54a36280e2d87af1de3cc3e584806357e237afd13
+    SOURCE_SUBDIR fetched-only)
+FetchContent_Declare(symbolengine_flac
+    URL https://github.com/xiph/flac/archive/refs/tags/1.5.0.tar.gz
+    URL_HASH SHA256=aea54ed186ad07a34750399cb27fc216a2b62d0ffcd6dc2e3064a3518c3146f8
+    SOURCE_SUBDIR fetched-only)
+FetchContent_Declare(symbolengine_opus
+    URL https://github.com/xiph/opus/archive/refs/tags/v1.5.2.tar.gz
+    URL_HASH SHA256=9480e329e989f70d69886ded470c7f8cfe6c0667cc4196d4837ac9e668fb7404
+    SOURCE_SUBDIR fetched-only)
+FetchContent_Declare(symbolengine_opusfile
+    URL https://github.com/xiph/opusfile/archive/refs/tags/v0.12.tar.gz
+    URL_HASH SHA256=a20a1dff1cdf0719d1e995112915e9966debf1470ee26bb31b2f510ccf00ef40
+    SOURCE_SUBDIR fetched-only)
+FetchContent_Declare(symbolengine_opusenc
+    URL https://github.com/xiph/libopusenc/archive/refs/tags/v0.3.tar.gz
+    URL_HASH SHA256=5637474cdf4ff693977fe74039049349fef7b65e3a94ad8bde51ecfcd1e94a8e
+    SOURCE_SUBDIR fetched-only)
+FetchContent_MakeAvailable(symbolengine_ogg symbolengine_vorbis symbolengine_flac symbolengine_opus symbolengine_opusfile
+                           symbolengine_opusenc)
+
+set(ogg ${symbolengine_ogg_SOURCE_DIR})
+set(vorbis ${symbolengine_vorbis_SOURCE_DIR})
+set(flac ${symbolengine_flac_SOURCE_DIR})
+set(opus ${symbolengine_opus_SOURCE_DIR})
+set(opusfile ${symbolengine_opusfile_SOURCE_DIR})
+set(opusenc ${symbolengine_opusenc_SOURCE_DIR})
+
+# libogg's sizes, which its own build works out into config_types.h.
+set(codec_generated ${CMAKE_CURRENT_BINARY_DIR}/codecs)
+file(WRITE ${codec_generated}/ogg/config_types.h.new [=[
+#ifndef __CONFIG_TYPES_H__
+#define __CONFIG_TYPES_H__
+#include <stdint.h>
+typedef int16_t ogg_int16_t;
+typedef uint16_t ogg_uint16_t;
+typedef int32_t ogg_int32_t;
+typedef uint32_t ogg_uint32_t;
+typedef int64_t ogg_int64_t;
+typedef uint64_t ogg_uint64_t;
+#endif
+]=])
+file(COPY_FILE ${codec_generated}/ogg/config_types.h.new ${codec_generated}/ogg/config_types.h ONLY_IF_DIFFERENT)
+
+# The libraries' public headers, which the files module's own sources include too.
+set(codec_includes
+    ${codec_generated} ${ogg}/include ${vorbis}/include ${flac}/include ${opus}/include ${opusfile}/include ${opusenc}/include)
+
+set(ogg_sources ${ogg}/src/bitwise.c ${ogg}/src/framing.c)
+
+set(vorbis_sources)
+foreach(file mdct smallft block envelope window lsp lpc analysis synthesis psy info floor1 floor0 res0 mapping0 registry
+             codebook sharedbook lookup bitrate vorbisfile vorbisenc)
+    list(APPEND vorbis_sources ${vorbis}/lib/${file}.c)
+endforeach()
+
+set(flac_sources)
+foreach(file bitmath bitreader bitwriter cpu crc fixed float format lpc md5 memory metadata_iterators metadata_object
+             stream_decoder stream_encoder stream_encoder_framing window)
+    list(APPEND flac_sources ${flac}/src/libFLAC/${file}.c)
+endforeach()
+if(WIN32)
+    list(APPEND flac_sources ${flac}/src/share/win_utf8_io/win_utf8_io.c)
+endif()
+
+# Opus's sources, as its opus_sources.mk, celt_sources.mk and silk_sources.mk list them for a floating-point build.
+set(opus_sources)
+foreach(file opus opus_decoder opus_encoder extensions opus_multistream opus_multistream_encoder opus_multistream_decoder
+             repacketizer opus_projection_encoder opus_projection_decoder mapping_matrix analysis mlp mlp_data)
+    list(APPEND opus_sources ${opus}/src/${file}.c)
+endforeach()
+foreach(file bands celt celt_encoder celt_decoder cwrs entcode entdec entenc kiss_fft laplace mathops mdct modes pitch
+             celt_lpc quant_bands rate vq)
+    list(APPEND opus_sources ${opus}/celt/${file}.c)
+endforeach()
+foreach(file CNG code_signs init_decoder decode_core decode_frame decode_parameters decode_indices decode_pulses
+             decoder_set_fs dec_API enc_API encode_indices encode_pulses gain_quant interpolate LP_variable_cutoff
+             NLSF_decode NSQ NSQ_del_dec PLC shell_coder tables_gain tables_LTP tables_NLSF_CB_NB_MB tables_NLSF_CB_WB
+             tables_other tables_pitch_lag tables_pulses_per_block VAD control_audio_bandwidth quant_LTP_gains VQ_WMat_EC
+             HP_variable_cutoff NLSF_encode NLSF_VQ NLSF_unpack NLSF_del_dec_quant process_NLSFs stereo_LR_to_MS
+             stereo_MS_to_LR check_control_input control_SNR init_encoder control_codec A2NLSF ana_filt_bank_1
+             biquad_alt bwexpander_32 bwexpander debug decode_pitch inner_prod_aligned lin2log log2lin
+             LPC_analysis_filter LPC_inv_pred_gain table_LSF_cos NLSF2A NLSF_stabilize NLSF_VQ_weights_laroia
+             pitch_est_tables resampler resampler_down2_3 resampler_down2 resampler_private_AR2
+             resampler_private_down_FIR resampler_private_IIR_FIR resampler_private_up2_HQ resampler_rom sigm_Q15 sort
+             sum_sqr_shift stereo_decode_pred stereo_encode_pred stereo_find_predictor stereo_quant_pred LPC_fit)
+    list(APPEND opus_sources ${opus}/silk/${file}.c)
+endforeach()
+foreach(file apply_sine_window_FLP corrMatrix_FLP encode_frame_FLP find_LPC_FLP find_LTP_FLP find_pitch_lags_FLP
+             find_pred_coefs_FLP LPC_analysis_filter_FLP LTP_analysis_filter_FLP LTP_scale_ctrl_FLP
+             noise_shape_analysis_FLP process_gains_FLP regularize_correlations_FLP residual_energy_FLP
+             warped_autocorrelation_FLP wrappers_FLP autocorrelation_FLP burg_modified_FLP bwexpander_FLP energy_FLP
+             inner_product_FLP k2a_FLP LPC_inv_pred_gain_FLP pitch_analysis_core_FLP scale_copy_vector_FLP
+             scale_vector_FLP schur_FLP sort_FLP)
+    list(APPEND opus_sources ${opus}/silk/float/${file}.c)
+endforeach()
+
+set(opusfile_sources ${opusfile}/src/info.c ${opusfile}/src/internal.c ${opusfile}/src/opusfile.c ${opusfile}/src/stream.c)
+
+set(opusenc_sources)
+foreach(file ogg_packer opus_header opusenc picture resample unicode_support)
+    list(APPEND opusenc_sources ${opusenc}/src/${file}.c)
+endforeach()
+
+add_library(symbolengine_codecs OBJECT
+    ${ogg_sources} ${vorbis_sources} ${flac_sources} ${opus_sources} ${opusfile_sources} ${opusenc_sources})
+set_target_properties(symbolengine_codecs PROPERTIES
+    POSITION_INDEPENDENT_CODE ON C_VISIBILITY_PRESET hidden C_STANDARD 99)
+target_include_directories(symbolengine_codecs SYSTEM PRIVATE ${codec_includes})
+
+# Each library's own private headers, apart, as some share names, such as Vorbis' and Opus' mdct.h.
+set_source_files_properties(${vorbis_sources} PROPERTIES INCLUDE_DIRECTORIES "${vorbis}/lib")
+set_source_files_properties(${flac_sources} PROPERTIES INCLUDE_DIRECTORIES "${flac}/src/libFLAC/include")
+set_source_files_properties(${opus_sources} PROPERTIES INCLUDE_DIRECTORIES "${opus};${opus}/celt;${opus}/silk;${opus}/silk/float;${opus}/src")
+
+# Their code isn't held to SymbolEngine's warnings.
+if(MSVC)
+    target_compile_options(symbolengine_codecs PRIVATE /w)
+    target_compile_definitions(symbolengine_codecs PRIVATE _CRT_SECURE_NO_WARNINGS _USE_MATH_DEFINES)
+else()
+    target_compile_options(symbolengine_codecs PRIVATE -w)
+endif()
+
+# Every function stays hidden inside whatever links it, as SymbolEngine's own do, which Opus, libopusenc and opusfile
+# would otherwise make visible on GCC and Clang; and the codecs' own debugging output is left out of every build.
+target_compile_definitions(symbolengine_codecs PRIVATE FLAC__NO_DLL OPUS_EXPORT= OPE_EXPORT= NDEBUG)
+if(WIN32)
+    set_source_files_properties(${flac_sources} PROPERTIES COMPILE_DEFINITIONS "PACKAGE_VERSION=\"1.5.0\";HAVE_LROUND=1;FLAC__HAS_OGG=0")
+else()
+    set_source_files_properties(${flac_sources} PROPERTIES COMPILE_DEFINITIONS "PACKAGE_VERSION=\"1.5.0\";HAVE_LROUND=1;FLAC__HAS_OGG=0;HAVE_FSEEKO=1")
+endif()
+set_source_files_properties(${opus_sources} PROPERTIES COMPILE_DEFINITIONS "OPUS_BUILD;USE_ALLOCA;HAVE_LRINT;HAVE_LRINTF")
+set_source_files_properties(${opusfile_sources} PROPERTIES COMPILE_DEFINITIONS "OP_HAVE_LRINTF")
+
+# opusfile's header makes its functions visible on GCC and Clang when it takes the compiler for GCC 4 or later; its
+# sources are given a header first that says no, as CMake's definitions can't take a macro with arguments.
+if(NOT MSVC)
+    file(WRITE ${codec_generated}/opusfile_hidden.h.new "#define OP_GNUC_PREREQ(_maj, _min) 0\n")
+    file(COPY_FILE ${codec_generated}/opusfile_hidden.h.new ${codec_generated}/opusfile_hidden.h ONLY_IF_DIFFERENT)
+    set_source_files_properties(${opusfile_sources} PROPERTIES COMPILE_OPTIONS "-include;${codec_generated}/opusfile_hidden.h")
+endif()
+set_source_files_properties(${opusenc_sources} PROPERTIES COMPILE_DEFINITIONS
+    "OPE_BUILD;OUTSIDE_SPEEX;RANDOM_PREFIX=libopusenc;FLOATING_POINT;RESAMPLE_FULL_SINC_TABLE;PACKAGE_NAME=\"libopusenc\";PACKAGE_VERSION=\"0.3\"")

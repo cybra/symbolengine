@@ -71,8 +71,10 @@ float sampleAt(Encoding encoding, const unsigned char* p) noexcept
     return 0.0f;
 }
 
-// The whole number a float writes as in a container of the bits given: the nearest to it times 2^(bits - 1), held
-// within the container's range; nothing that isn't a number writes as silence.
+}
+
+// The nearest whole number to a float times 2^(bits - 1), held within the range of the bits given; nothing that isn't a
+// number writes as silence.
 std::int64_t wholeFor(float sample, int bits) noexcept
 {
     if (std::isnan(sample))
@@ -87,6 +89,8 @@ std::int64_t wholeFor(float sample, int bits) noexcept
     return static_cast<std::int64_t>(std::nearbyint(scaled));
 }
 
+namespace
+{
 void putLittle(unsigned char* p, std::uint64_t value, int bytes) noexcept
 {
     for (int i = 0; i < bytes; ++i)

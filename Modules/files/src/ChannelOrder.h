@@ -1,0 +1,28 @@
+#pragma once
+
+// The order Ogg Vorbis keeps channels in, which Opus keeps too, set against WAV's, which every reader and writer gives
+// channels in: three channels are left, center and right, and from five on the center comes second and the LFE last.
+namespace symbolengine::detail
+{
+
+/** The Vorbis channel holding a file's channel of WAV's order, for a file of so many channels. */
+inline int vorbisChannelFor(int channels, int channel) noexcept
+{
+    static constexpr int three[]{0, 2, 1};
+    static constexpr int five[]{0, 2, 1, 3, 4};
+    static constexpr int six[]{0, 2, 1, 5, 3, 4};
+    static constexpr int seven[]{0, 2, 1, 6, 5, 3, 4};
+    static constexpr int eight[]{0, 2, 1, 7, 5, 6, 3, 4};
+
+    switch (channels)
+    {
+        case 3: return three[channel];
+        case 5: return five[channel];
+        case 6: return six[channel];
+        case 7: return seven[channel];
+        case 8: return eight[channel];
+        default: return channel;
+    }
+}
+
+}

@@ -1,18 +1,35 @@
+include(SymbolEngineCodecs)
+
+set(libraries)
+if(UNIX AND NOT APPLE)
+    list(APPEND libraries m)
+endif()
+
 symbolengine_add_module(files
     SOURCES
         src/AudioFile.cpp
         src/Aiff.cpp
         src/BroadcastWave.cpp
+        src/Flac.cpp
+        src/OggVorbis.cpp
+        src/Opus.cpp
         src/RandomAccessFile.cpp
         src/Samples.cpp
         src/Wav.cpp
-    DEPENDS core)
+        $<TARGET_OBJECTS:symbolengine_codecs>
+    DEPENDS core
+    LIBRARIES ${libraries})
+
+# The codecs' headers, seen by the module's own sources alone, and their settings as the codecs were built with.
+target_include_directories(symbolengine_files SYSTEM PRIVATE ${codec_includes})
+target_compile_definitions(symbolengine_files PRIVATE FLAC__NO_DLL OPUS_EXPORT= OPE_EXPORT=)
 
 if(SYMBOLENGINE_TESTS)
     symbolengine_add_tests(files SOURCES
         Tests/AiffTests.cpp
         Tests/AudioFileTests.cpp
         Tests/BroadcastWaveTests.cpp
+        Tests/CodecTests.cpp
         Tests/WavTests.cpp)
 
     # The reference files, made by other encoders (Tests/Data/make_reference_files.py), are read where they are.

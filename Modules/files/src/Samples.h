@@ -27,6 +27,9 @@ enum class Encoding
 
 int bytesPerSample(Encoding encoding) noexcept;
 
+/** The whole number a float writes as in the bits given, up to 32, as every whole-number format writes it. */
+std::int64_t wholeFor(float sample, int bits) noexcept;
+
 /** Reads frames of interleaved samples into each channel's buffer, starting at offset in each. */
 void decode(Encoding encoding, const unsigned char* bytes, int channels, std::size_t frames, float* const* out,
             std::size_t offset) noexcept;

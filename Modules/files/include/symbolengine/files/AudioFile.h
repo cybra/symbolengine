@@ -10,10 +10,11 @@
 #include <utility>
 #include <vector>
 
-/** Reading and writing audio files: WAV, including RF64 and BW64 for files past 4 GB, and AIFF and AIFF-C. A file is
-    read and written a stretch at a time, so files of any length take little memory, and samples are floats, whole
-    numbers divided by 2 to the power of one less than their bits, so a 16-bit sample reads as itself divided by 32768
-    and writes back as the same number. */
+/** Reading and writing audio files: WAV, including RF64 and BW64 for files past 4 GB, AIFF and AIFF-C, FLAC, Ogg Vorbis
+    and Opus. A file is read and written a stretch at a time, so files of any length take little memory, and samples
+    are floats, whole numbers divided by 2 to the power of one less than their bits, so a 16-bit sample reads as itself
+    divided by 32768 and writes back as the same number. Channels come in WAV's order whatever the format keeps them
+    in: Ogg Vorbis' and Opus' own order is turned to it as they are read and written. */
 namespace symbolengine
 {
 
@@ -30,11 +31,11 @@ struct AudioChunk
 /** What an audio file holds. */
 struct AudioInfo
 {
-    std::string format{};          // "WAV" or "AIFF", as people name them
-    double sampleRate = 0.0;
+    std::string format{};          // "WAV", "AIFF", "FLAC", "Ogg Vorbis" or "Opus", as people name them
+    double sampleRate = 0.0;       // an Opus file's is 48 kHz, which it always plays at
     int channels = 0;
     std::uint64_t frames = 0;      // the length, in samples of each channel
-    int bits = 0;                  // as stored: 8, 16, 24, 32 or 64
+    int bits = 0;                  // as stored: 8, 16, 24, 32 or 64, or 0 for Ogg Vorbis and Opus, which keep none
     bool floatingPoint = false;    // samples stored as floats rather than whole numbers
 
     /** The speakers a WAV's channels are for, as WAVE_FORMAT_EXTENSIBLE gives them (1 front left, 2 front right,
@@ -46,6 +47,10 @@ struct AudioInfo
         (JUNK, PAD and FLLR), and any over 64 MB. Written back as they are, they keep a recording's broadcast
         extension, iXML, cue points and the rest. */
     std::vector<AudioChunk> chunks{};
+
+    /** A FLAC, Ogg Vorbis or Opus file's tags, its Vorbis comments: each a name, such as TITLE, ARTIST or DATE, and
+        its value, in the order the file has them. */
+    std::vector<std::pair<std::string, std::string>> tags{};
 };
 
 /** An audio file opened for reading. One thread at a time reads it. */
@@ -80,11 +85,11 @@ protected:
 /** What a new audio file holds, as createAudio() writes it. */
 struct AudioFileSettings
 {
-    std::string format = "WAV";    // "WAV" or "AIFF"
-    double sampleRate = 48000.0;
-    int channels = 2;              // 1 or more
-    int bits = 24;                 // whole numbers in 8, 16, 24 or 32 bits; floats in 32 or 64
-    bool floatingPoint = false;    // floats are written as AIFF-C in an AIFF file
+    std::string format = "WAV";    // "WAV", "AIFF", "FLAC", "Ogg Vorbis" or "Opus"
+    double sampleRate = 48000.0;   // Opus takes any rate, and plays at 48 kHz
+    int channels = 2;              // 1 or more; FLAC up to 8, Opus up to 255
+    int bits = 24;                 // whole numbers in 8, 16, 24 or 32 bits, FLAC in 16 or 24; floats in 32 or 64
+    bool floatingPoint = false;    // floats are written as AIFF-C in an AIFF file; Ogg Vorbis and Opus ignore both
 
     /** For a WAV, the speakers its channels are for, as in AudioInfo; 0 for the usual ones for its number of
         channels, which are none past eight. */
@@ -93,6 +98,13 @@ struct AudioFileSettings
     /** Chunks to write as they are, before the samples, such as those AudioInfo gave of another file of the same
         format. Ids that describe the samples or lay the file out are left out. */
     std::vector<AudioChunk> chunks{};
+
+    /** For FLAC, Ogg Vorbis and Opus, tags to write as Vorbis comments, as AudioInfo gives them. */
+    std::vector<std::pair<std::string, std::string>> tags{};
+
+    double quality = 0.4;          // Ogg Vorbis' quality, from -0.1 to 1 as libvorbis takes it; 0.4 is about 128 kbps in stereo
+    int bitRate = 128000;          // Opus' bit rate, in bits a second for all its channels together
+    int compression = 5;           // FLAC's compression, from 0, the quickest, to 8, the smallest
 };
 
 /** An audio file being written. Samples are written in order, and finish() completes the file; a writer let go of
