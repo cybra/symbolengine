@@ -230,7 +230,7 @@ struct Window::Impl
             windowClass.cbSize = sizeof windowClass;
             windowClass.lpfnWndProc = procedure;
             windowClass.hInstance = module;
-            windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+            windowClass.hCursor = LoadCursorW(nullptr, reinterpret_cast<LPCWSTR>(IDC_ARROW));
             windowClass.lpszClassName = className.c_str();
             RegisterClassExW(&windowClass);
             return className;
