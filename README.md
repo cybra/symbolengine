@@ -79,4 +79,5 @@ A product built on SymbolEngine includes these, each under a permissive license 
 - [Vision](Docs/01_vision.md): why it exists, who it is for, what it promises, its license, platforms and name.
 - [Architecture](Docs/02_architecture.md): its modules, what each is built on, its rules for threads and real time, and what real plugins and devices have taught.
 - [ToDo](Docs/ToDo.md): where things stand, the open questions and the phases.
+- [Upstream reports](Docs/Upstream/README.md): bugs found in the libraries SymbolEngine builds on, written up for their own trackers.
 - [Contributing](CONTRIBUTING.md): building, testing, the rules for code, and signing off.

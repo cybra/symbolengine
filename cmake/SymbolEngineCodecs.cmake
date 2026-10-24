@@ -83,7 +83,7 @@ foreach(file mdct smallft block envelope window lsp lpc analysis synthesis psy i
 endforeach()
 
 # Its encoder sets up 5.1's LFE residue once for each block size, and the second time loses the first; a copy of
-# vorbisenc.c lets the first go before it does.
+# vorbisenc.c lets the first go before it does, until libvorbis has the fix (Docs/Upstream/libvorbis-51-residue-leak.md).
 file(READ ${vorbis}/lib/vorbisenc.c vorbisenc)
 set(vorbis_residue "  vorbis_info_residue0 *r=ci->residue_param[number]=\n    _ogg_malloc(sizeof(*r));")
 string(FIND "${vorbisenc}" "${vorbis_residue}" found)

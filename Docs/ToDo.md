@@ -51,6 +51,7 @@
 - [x] files: FLAC, Ogg Vorbis and Opus, with their tags, through Xiph.Org's libraries built into the module, checked against ffmpeg's and the flac tool's files and read back by them.
 - [x] files: MP3, read gaplessly where LAME's or Xing's information says where the audio lies, and M4A, AAC and CAF through the systems' decoders on Mac and Windows, checked against LAME's, Apple's and ffmpeg's files.
 - [ ] files: M4A, AAC and CAF on Linux.
+- [ ] files: libvorbis' own `vorbisenc.c` again once Xiph.Org takes the fix for its 5.1 encoder's leak ([the report](Upstream/libvorbis-51-residue-leak.md)).
 - [x] ui: the web view on Mac and Windows, with pages served from files built into the program, and calls and events between page and native code.
 - [ ] ui and app: windows, native menus, dialogs, file choosers, drag and drop, clipboard, keyboard, one instance, worker processes; Linux's web view.
 
