@@ -109,6 +109,22 @@ public:
     /** Puts it in the middle of the main screen, at its size. */
     void center();
 
+    /** Has it fill the screen it is on, or brings it back from that: maximized on Windows, and on a Mac filling the
+        screen beside the Dock and under the menu bar, as a double-click on its title bar does. */
+    void setMaximized(bool maximized);
+    bool isMaximized() const;
+
+    /** Where it was, and how large, the last time it wasn't maximized or minimized, as bounds() gives it, for keeping
+        between launches. */
+    Bounds restoredBounds() const;
+
+    /** On Windows 11, colors its title bar, as 0xRRGGBB, as a program whose window starts with a bar of its own color
+        does; elsewhere, and on a Mac, it does nothing. */
+    void setTitleBarColor(std::uint32_t background, std::uint32_t text);
+
+    /** Gives the view it holds the keyboard, as after a dialog has had it. */
+    void focusContent();
+
     /** The NSWindow on a Mac, and the HWND on Windows. */
     void* nativeHandle() const;
 

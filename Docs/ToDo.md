@@ -57,7 +57,8 @@
 - [x] ui: the web view on Mac and Windows, with pages served from files built into the program, and calls and events between page and native code.
 - [x] ui: a program's own windows holding a page, sized alike on every screen, their places held to a screen, see-through until the page draws; functions a page calls that answer later; WebView2 given the keyboard with its window.
 - [x] ui: the system's own dialogs, questions with buttons of the program's naming and choosers for files and folders.
-- [ ] ui and app: native menus, drag and drop, clipboard, keyboard, one instance, worker processes; Linux's web view.
+- [x] ui: the Mac's menu bar, with shortcuts, ticks and submenus; windows maximized and back, keeping where they were, with Windows 11 title bar colors.
+- [ ] ui and app: drag and drop, clipboard, keyboard, one instance, worker processes; Linux's web view.
 
 ## Phase 3: Devices
 

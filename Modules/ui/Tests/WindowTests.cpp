@@ -210,3 +210,45 @@ TEST_CASE("A window shows see-through until told otherwise, and letting go of it
 
     CHECK(standsAlone(view.nativeView()));
 }
+
+TEST_CASE("A maximized window fills the screen it is on, and goes back to where it was")
+{
+    choc::messageloop::initialise();
+
+    ui::Window window({.size = {400, 300}, .maximizable = true});
+    window.setVisible(true);
+    const auto before = window.bounds();
+    CHECK(!window.isMaximized());
+    CHECK(window.restoredBounds() == before);
+
+    window.setMaximized(true);
+    CHECK(runUntil([&] { return window.isMaximized(); }));
+    const auto area = window.workArea();
+    CHECK(window.size().width > before.width);
+    CHECK(window.size().height > before.height);
+    CHECK(window.size().width <= area.width);
+    CHECK(window.restoredBounds() == before);
+
+    window.setMaximized(false);
+    CHECK(runUntil([&] { return !window.isMaximized(); }));
+    CHECK(window.bounds() == before);
+}
+
+#if defined(__APPLE__)
+TEST_CASE("A window's view has the keyboard whenever the window does")
+{
+    choc::messageloop::initialise();
+
+    ui::WebView view({.resources = sizeReporter(), .name = "window-test"});
+    REQUIRE(view.available());
+    ui::Window window({.size = {300, 200}});
+    window.setContent(view.nativeView());
+    const auto handle = static_cast<id>(window.nativeHandle());
+    CHECK(choc::objc::call<id>(handle, "firstResponder") == static_cast<id>(view.nativeView()));
+
+    choc::objc::call<BOOL>(handle, "makeFirstResponder:", static_cast<id>(nullptr));
+    CHECK(choc::objc::call<id>(handle, "firstResponder") != static_cast<id>(view.nativeView()));
+    window.focusContent();
+    CHECK(choc::objc::call<id>(handle, "firstResponder") == static_cast<id>(view.nativeView()));
+}
+#endif

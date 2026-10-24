@@ -54,6 +54,7 @@ struct Window::Impl
 {
     Window* owner = nullptr;
     NSWindow* window = nil;
+    Bounds restored{};
     NSView* container = nil;
     id delegate = nil;
     std::vector<id> observers;
@@ -182,16 +183,25 @@ Window::Window(Options options) : impl(std::make_unique<Impl>())
       if (owner->onActiveChanged)
           owner->onActiveChanged(false);
     });
+    // Where it was, kept as it moves while it neither fills the screen nor is minimized.
+    Impl* state = impl.get();
+    const auto keepRestored = [state] {
+        if (!state->window.miniaturized && !state->owner->isMaximized())
+            state->restored = fromAppKit(state->contentRect());
+    };
     observe(NSWindowDidMoveNotification, ^(NSNotification*) {
+      keepRestored();
       if (owner->onMovedOrResized)
           owner->onMovedOrResized();
     });
     observe(NSWindowDidResizeNotification, ^(NSNotification*) {
+      keepRestored();
       if (owner->onMovedOrResized)
           owner->onMovedOrResized();
     });
 
     center();
+    w.restored = fromAppKit(w.contentRect());
 }
 
 Window::~Window()
@@ -230,6 +240,10 @@ void Window::setContent(void* view)
     content.frame = w.container.bounds;
     content.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [w.container addSubview:content];
+
+    // The view it holds has the keyboard whenever the window does.
+    w.window.initialFirstResponder = content;
+    [w.window makeFirstResponder:content];
 }
 
 void Window::setTitle(const std::string& title)
@@ -340,6 +354,43 @@ void Window::center()
     frame.origin.x = area.origin.x + (area.size.width - frame.size.width) / 2;
     frame.origin.y = area.origin.y + (area.size.height - frame.size.height) / 2;
     [w.window setFrame:Impl::fitted(frame) display:YES];
+}
+
+void Window::setMaximized(bool maximized)
+{
+    auto& w = *impl;
+    if (maximized == isMaximized())
+        return;
+
+    if (!maximized)
+    {
+        setBounds(w.restored);
+        return;
+    }
+
+    NSScreen* screen = w.window.screen != nil ? w.window.screen : mainScreen();
+    if (screen != nil)
+        [w.window setFrame:screen.visibleFrame display:YES];
+}
+
+bool Window::isMaximized() const
+{
+    NSScreen* screen = impl->window.screen;
+    return screen != nil && NSEqualRects(impl->window.frame, screen.visibleFrame);
+}
+
+Bounds Window::restoredBounds() const
+{
+    return isMaximized() ? impl->restored : bounds();
+}
+
+void Window::setTitleBarColor(std::uint32_t, std::uint32_t) {}
+
+void Window::focusContent()
+{
+    auto& w = *impl;
+    if (NSView* content = w.container.subviews.firstObject)
+        [w.window makeFirstResponder:content];
 }
 
 void* Window::nativeHandle() const

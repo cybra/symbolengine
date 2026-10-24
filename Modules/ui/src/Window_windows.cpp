@@ -23,8 +23,9 @@ namespace
 // The close button's call, posted so it comes once the click is over.
 constexpr UINT closeButtonPressed = WM_APP + 0x5E01;
 
-// DWMWA_USE_IMMERSIVE_DARK_MODE, which only the newer SDKs name: a dark title bar, from Windows 10's 20H1 on.
-constexpr DWORD darkTitleBar = 20;
+// Window attributes only the newer SDKs name: a dark title bar, from Windows 10's 20H1 on, and Windows 11's title bar
+// and title colors.
+constexpr DWORD darkTitleBar = 20, captionColor = 35, captionTextColor = 36;
 
 constexpr DWORD windowStyle(bool resizable, bool maximizable)
 {
@@ -94,6 +95,7 @@ struct Window::Impl
     HBRUSH background = nullptr;
     DWORD style = 0;
     Size minimum{};
+    Bounds restored{};
     Appearance appearance = Appearance::system;
 
     UINT dpi() const
@@ -114,6 +116,15 @@ struct Window::Impl
         GetClientRect(window, &client);
         MapWindowPoints(window, nullptr, reinterpret_cast<POINT*>(&client), 2);
         return client;
+    }
+
+    // Where it was, kept as it moves while it is neither maximized nor minimized.
+    void keepRestored()
+    {
+        if (IsIconic(window) || IsZoomed(window))
+            return;
+        const auto client = clientOnScreen();
+        restored = {client.left, client.top, client.right - client.left, client.bottom - client.top};
     }
 
     void fillWithContent() const
@@ -184,11 +195,13 @@ struct Window::Impl
 
             case WM_SIZE:
                 impl->fillWithContent();
+                impl->keepRestored();
                 if (owner.onMovedOrResized)
                     owner.onMovedOrResized();
                 break;
 
             case WM_MOVE:
+                impl->keepRestored();
                 if (owner.onMovedOrResized)
                     owner.onMovedOrResized();
                 break;
@@ -276,6 +289,7 @@ Window::Window(Options options) : impl(std::make_unique<Impl>())
     w.applyAppearance();
     setSize(options.size);
     center();
+    w.keepRestored();
 }
 
 Window::~Window()
@@ -410,6 +424,36 @@ void Window::center()
     const auto left = area.left + (area.right - area.left - width) / 2;
     const auto top = area.top + (area.bottom - area.top - height) / 2;
     w.place(Impl::fitted({left, top, left + width, top + height}));
+}
+
+void Window::setMaximized(bool maximized)
+{
+    if (maximized != isMaximized())
+        ShowWindow(impl->window, maximized ? SW_MAXIMIZE : SW_RESTORE);
+}
+
+bool Window::isMaximized() const
+{
+    return IsZoomed(impl->window) != FALSE;
+}
+
+Bounds Window::restoredBounds() const
+{
+    return impl->restored;
+}
+
+void Window::setTitleBarColor(std::uint32_t background, std::uint32_t text)
+{
+    const COLORREF caption = RGB((background >> 16) & 0xFF, (background >> 8) & 0xFF, background & 0xFF);
+    const COLORREF title = RGB((text >> 16) & 0xFF, (text >> 8) & 0xFF, text & 0xFF);
+    DwmSetWindowAttribute(impl->window, captionColor, &caption, sizeof caption);
+    DwmSetWindowAttribute(impl->window, captionTextColor, &title, sizeof title);
+}
+
+void Window::focusContent()
+{
+    if (impl->content != nullptr)
+        SetFocus(impl->content);
 }
 
 void* Window::nativeHandle() const
