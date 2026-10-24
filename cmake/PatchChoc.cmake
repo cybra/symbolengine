@@ -1,10 +1,12 @@
 # cmake -DFILE=<choc_WebView.h> -P PatchChoc.cmake
 #
-# Changes CHOC's web view in two ways, on Windows:
+# Changes CHOC's web view in three ways, on Windows:
 #  - a userDataFolder option, so a program or plugin chooses where WebView2 keeps its data instead of a folder named
 #    after the program that loaded it;
 #  - the keyboard passed on to the page when the web view's window is given it, as a WKWebView takes it on a Mac,
-#    so keys reach the page as soon as its window is active, without a click inside it first.
+#    so keys reach the page as soon as its window is active, without a click inside it first;
+#  - a background color option, which WebView2 shows where the page hasn't drawn, as while its window grows, instead
+#    of white.
 # Each change looks for the text it replaces and stops the build if CHOC has changed it, so a new version of CHOC is
 # never patched wrongly, and is skipped if it has been made already.
 
@@ -43,6 +45,41 @@ replace_once("COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);" [[        if (msg =
         if (msg == WM_SETFOCUS)
             if (auto w = getPimpl (h); w != nullptr && w->coreWebViewController)
                 w->coreWebViewController->MoveFocus (COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+]])
+
+replace_once("windowsBackgroundColor" [[        bool transparentBackground = false;
+]] [[        bool transparentBackground = false;
+
+        /// Windows only: the color WebView2 shows where the page hasn't drawn, as
+        /// 0xRRGGBB, when the background isn't transparent.
+        std::optional<uint32_t> windowsBackgroundColor;
+]])
+
+replace_once("options.windowsBackgroundColor.has_value()" [[        if (options.transparentBackground)
+        {
+            COMPtr<ICoreWebView2Controller2> controller2;
+
+            if (controller->QueryInterface (ICoreWebView2Controller2::getIID(), (void**) controller2.getAddress()) == S_OK
+                  && controller2 != nullptr)
+            {
+                controller2->put_DefaultBackgroundColor ({ 0, 0, 0, 0 });
+            }
+        }
+]] [[        if (options.transparentBackground || options.windowsBackgroundColor.has_value())
+        {
+            COMPtr<ICoreWebView2Controller2> controller2;
+
+            if (controller->QueryInterface (ICoreWebView2Controller2::getIID(), (void**) controller2.getAddress()) == S_OK
+                  && controller2 != nullptr)
+            {
+                const auto c = options.windowsBackgroundColor.value_or (0);
+
+                if (options.transparentBackground)
+                    controller2->put_DefaultBackgroundColor ({ 0, 0, 0, 0 });
+                else
+                    controller2->put_DefaultBackgroundColor ({ 255, (BYTE) (c >> 16), (BYTE) (c >> 8), (BYTE) c });
+            }
+        }
 ]])
 
 file(WRITE "${FILE}" "${source}")

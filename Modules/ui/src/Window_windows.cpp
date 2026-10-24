@@ -9,6 +9,7 @@
 #include <windows.h>
 
 #include <dwmapi.h>
+#include <shellapi.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -243,6 +244,11 @@ struct Window::Impl
             windowClass.hInstance = module;
             windowClass.hCursor = LoadCursorW(nullptr, reinterpret_cast<LPCWSTR>(IDC_ARROW));
             windowClass.lpszClassName = className.c_str();
+
+            // The program's own icons, the first in its file, for the title bar and the taskbar.
+            wchar_t file[MAX_PATH] = {};
+            if (GetModuleFileNameW(module, file, MAX_PATH) > 0)
+                ExtractIconExW(file, 0, &windowClass.hIcon, &windowClass.hIconSm, 1);
             RegisterClassExW(&windowClass);
             return className;
         }();

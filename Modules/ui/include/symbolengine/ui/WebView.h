@@ -3,6 +3,7 @@
 #include <symbolengine/core/Value.h>
 
 #include <filesystem>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -58,6 +59,11 @@ public:
 
         bool developerTools = false;   // the browser's inspector, on the page's context menu
 
+        /** On Windows, the color WebView2 shows where the page hasn't drawn, such as while its window grows, as
+            0xRRGGBB. Without one it is see-through, which shows white there. A Mac's web view always shows its
+            window's own background. */
+        std::optional<std::uint32_t> background{};
+
         /** On a Mac, Command-C, X, V, Z and A act on the page's text as they do in Safari, which a page in another
             program's window, such as a plugin's editor in a host, needs. A program whose own Edit menu has them turns
             this off, so the keys reach its menu. */
@@ -97,8 +103,8 @@ public:
     /** Runs a script in the page. */
     void run(std::string script);
 
-    /** Runs a script in the page and gives what its last expression came to, as JSON has it, or, if it threw, null and
-        what went wrong. */
+    /** Runs a script in the page and gives what its last expression came to, as JSON has it, or, if it threw, null,
+        and on a Mac what went wrong. */
     void run(std::string script, std::function<void(const Value& result, const std::string& error)> done);
 
     /** Saves a picture of the page as it is drawn now to a PNG file, for checks run from a script, and then says

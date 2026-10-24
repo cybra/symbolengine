@@ -158,6 +158,13 @@ WebView::WebView(Options options) : impl(std::make_unique<Impl>(std::move(option
     settings.fetchResource = [this](const std::string& path) { return impl->fetch(path); };
     settings.customSchemeURI = addressFor(impl->options.name);
     settings.userDataFolder = paths::toUtf8(impl->options.dataFolder);
+#if defined(_WIN32)
+    if (impl->options.background.has_value())
+    {
+        settings.transparentBackground = false;
+        settings.windowsBackgroundColor = *impl->options.background;
+    }
+#endif
 
     // WebView2 takes a binding only once it has started, which may be after the page has begun loading, so the
     // native function is bound when the view says it is ready; on a Mac that is while it is being made.
