@@ -159,6 +159,9 @@ def main():
     ffmpeg("tones-stereo-44100-ffmpeg.m4a", "tone", 2, 44100, "aac", ["-b:a", "160k", "-aac_pns", "0"], frames=22050)
     afconvert("alac24-stereo-48000.m4a", "bwf-pcm24-stereo-48000.wav", "m4af", "alac")
     afconvert("pcm16-stereo-44100.caf", "pcm16-stereo-44100.wav", "caff", "LEI16")
+    # Kinds only the systems' decoders know: Sun's AU, which AudioToolbox reads, and WMA, which Media Foundation does.
+    ffmpeg("pcm16-stereo-44100.au", "s16", 2, 44100, "pcm_s16be", ["-f", "au"])
+    ffmpeg("tones-stereo-44100.wma", "tone", 2, 44100, "wmav2", ["-b:a", "192k"], frames=22050)
     ffmpeg("tones-stereo-48000.aac", "tone", 2, 48000, "aac", ["-b:a", "256k", "-aac_pns", "0", "-f", "adts"], frames=24000)
 
 

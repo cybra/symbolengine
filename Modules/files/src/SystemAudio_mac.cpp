@@ -5,7 +5,10 @@
 #include <AudioToolbox/AudioToolbox.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstddef>
+#include <cstring>
+#include <string>
 
 // MPEG-4 audio, CAF, ADTS, and WAV and AIFF-C coded in ways of their own, through Apple's AudioToolbox: ExtAudioFile
 // decodes AAC, ALAC, ADPCM and the rest, leaving out AAC's priming samples where the file says how many there are, and
@@ -28,6 +31,34 @@ SInt64 sizeCallback(void* source)
     return static_cast<SInt64>(static_cast<FileStream*>(source)->size);
 }
 
+std::string text(CFStringRef string)
+{
+    if (string == nullptr)
+        return {};
+    const auto most = CFStringGetMaximumSizeForEncoding(CFStringGetLength(string), kCFStringEncodingUTF8) + 1;
+    std::string bytes(static_cast<std::size_t>(most), '\0');
+    if (!CFStringGetCString(string, bytes.data(), most, kCFStringEncodingUTF8))
+        return {};
+    bytes.resize(std::strlen(bytes.c_str()));
+    return bytes;
+}
+
+std::string typeName(AudioFileID file)
+{
+    AudioFileTypeID type = 0;
+    auto size = static_cast<UInt32>(sizeof type);
+    if (AudioFileGetProperty(file, kAudioFilePropertyFileFormat, &size, &type) != noErr)
+        return {};
+
+    CFStringRef name = nullptr;
+    size = sizeof name;
+    if (AudioFileGetGlobalInfo(kAudioFileGlobalInfo_FileTypeName, sizeof type, &type, &size, &name) != noErr || name == nullptr)
+        return {};
+    auto named = text(name);
+    CFRelease(name);
+    return named;
+}
+
 class SystemReader final : public AudioFileReader
 {
 public:
@@ -42,6 +73,8 @@ public:
             case SystemFormat::adts: information.format = "AAC"; hint = kAudioFileAAC_ADTSType; break;
             case SystemFormat::wav: information.format = "WAV"; hint = kAudioFileWAVEType; break;
             case SystemFormat::aiff: information.format = "AIFF"; hint = kAudioFileAIFCType; break;
+            case SystemFormat::asf:
+            case SystemFormat::other: break;
         }
     }
 
@@ -73,6 +106,10 @@ public:
             error = stream.error ? stream.error : make_error_code(AudioFileError::unsupported);
             return;
         }
+
+        // A file AudioToolbox told the kind of is named as AudioToolbox names that kind.
+        if (information.format.empty())
+            information.format = typeName(opened);
 
         information.sampleRate = format.mSampleRate;
         information.channels = static_cast<int>(format.mChannelsPerFrame);
@@ -161,6 +198,26 @@ private:
     std::vector<std::byte> buffers;
     std::uint64_t next = 0;
 };
+}
+
+std::vector<std::string> systemExtensions()
+{
+    CFArrayRef found = nullptr;
+    auto size = static_cast<UInt32>(sizeof found);
+    if (AudioFileGetGlobalInfo(kAudioFileGlobalInfo_AllExtensions, 0, nullptr, &size, &found) != noErr || found == nullptr)
+        return {};
+
+    std::vector<std::string> extensions;
+    for (CFIndex i = 0; i < CFArrayGetCount(found); ++i)
+    {
+        auto extension = "." + text(static_cast<CFStringRef>(CFArrayGetValueAtIndex(found, i)));
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (extension.size() > 1 && std::find(extensions.begin(), extensions.end(), extension) == extensions.end())
+            extensions.push_back(std::move(extension));
+    }
+    CFRelease(found);
+    return extensions;
 }
 
 std::unique_ptr<AudioFileReader> openSystemAudio(std::unique_ptr<RandomAccessFile> file, const std::filesystem::path& path,

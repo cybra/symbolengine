@@ -31,8 +31,8 @@ struct AudioChunk
 /** What an audio file holds. */
 struct AudioInfo
 {
-    std::string format{};          // "WAV", "AIFF", "FLAC", "Ogg Vorbis", "Opus", "MP3", "M4A", "AAC" or "CAF", as
-                                   // people name them
+    std::string format{};          // "WAV", "AIFF", "FLAC", "Ogg Vorbis", "Opus", "MP3", "M4A", "AAC", "CAF" or
+                                   // "WMA", as people name them, or the system's name for another kind it reads
     double sampleRate = 0.0;       // an Opus file's is 48 kHz, which it always plays at
     int channels = 0;
     std::uint64_t frames = 0;      // the length, in samples of each channel
@@ -175,9 +175,15 @@ const std::error_category& audioFileCategory() noexcept;
     and other MPEG-4 audio, AAC in ADTS and CAF are read by the system's own decoders: on a Mac all three, on Windows
     the first two, through Media Foundation, and on Linux none, which is AudioFileError::unsupported. A WAV or AIFF-C
     whose samples are coded in a way of their own, such as ADPCM or µ-law, is read by the Mac's decoder, and is
-    unsupported elsewhere. */
+    unsupported elsewhere; so is Windows Media's WMA on Windows. A file of any other kind is read by AudioToolbox
+    when it knows it, as it knows AC-3, AMR and Sun's AU, and is otherwise AudioFileError::notAudio. */
 std::unique_ptr<AudioFileReader> openAudio(const std::filesystem::path& file);
 std::unique_ptr<AudioFileReader> openAudio(const std::filesystem::path& file, std::error_code& error);
+
+/** The extensions of the files openAudio() reads on this system, each with its dot and in lower case: the formats
+    read everywhere first, then those of the system's own decoders. openAudio() goes by what a file holds, so these are
+    for choosing files, as an open dialog does. */
+std::vector<std::string> readableExtensions();
 
 /** Creates an audio file, replacing any file of that name, to write with the settings given. Throws as openAudio()
     does, or, given a std::error_code, sets it and returns nullptr. */

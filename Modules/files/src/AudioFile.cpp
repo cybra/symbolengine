@@ -180,6 +180,10 @@ std::unique_ptr<AudioFileReader> openAudio(const std::filesystem::path& file, st
         return detail::openMp3(std::move(opened), file, error);
 
     // Ogg, by what its first packet starts with, which begins after the page's header and its table of lengths.
+    // ASF, Windows Media's container, by the GUID its header object starts with.
+    if (is(0, std::string_view("\x30\x26\xB2\x75\x8E\x66\xCF\x11\xA6\xD9\x00\xAA\x00\x62\xCE\x6C", 16)))
+        return detail::openSystemAudio(std::move(opened), file, detail::SystemFormat::asf, error);
+
     if (is(0, "OggS") && got > 27)
     {
         const auto packet = 27 + static_cast<std::size_t>(start[26]);
@@ -194,6 +198,9 @@ std::unique_ptr<AudioFileReader> openAudio(const std::filesystem::path& file, st
         }
     }
 
+    // Anything else, the system's decoder may know, as AudioToolbox knows AC-3, AMR and Sun's AU.
+    if (auto other = detail::openSystemAudio(std::move(opened), file, detail::SystemFormat::other, error); other != nullptr)
+        return other;
     error = AudioFileError::notAudio;
     return nullptr;
 }
@@ -205,6 +212,15 @@ std::unique_ptr<AudioFileReader> openAudio(const std::filesystem::path& file)
     if (error)
         throw std::filesystem::filesystem_error("can't open the audio file", file, error);
     return reader;
+}
+
+std::vector<std::string> readableExtensions()
+{
+    std::vector<std::string> extensions{".wav", ".wave", ".bwf", ".aif", ".aiff", ".aifc", ".flac", ".ogg", ".oga", ".opus", ".mp3", ".mp2"};
+    for (auto& extension : detail::systemExtensions())
+        if (std::find(extensions.begin(), extensions.end(), extension) == extensions.end())
+            extensions.push_back(std::move(extension));
+    return extensions;
 }
 
 std::unique_ptr<AudioFileWriter> createAudio(const std::filesystem::path& file, const AudioFileSettings& settings,

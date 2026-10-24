@@ -5,6 +5,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <string_view>
 
 using namespace symbolengine;
@@ -147,6 +148,84 @@ TEST_CASE("An MPEG-4 file's priming and length come from its edit list or iTunSM
     CHECK(!error);
     CHECK(nothing.priming == 0);
     CHECK(!nothing.frames.has_value());
+}
+
+TEST_CASE("A file of a kind only the system knows, as AudioToolbox knows Sun's AU, reads through it on a Mac, and isn't audio elsewhere")
+{
+    std::error_code error;
+    auto reader = files::openAudio(reference("pcm16-stereo-44100.au"), error);
+#if defined(__APPLE__)
+    REQUIRE(reader != nullptr);
+    INFO("AudioToolbox calls it " << reader->info().format);
+    CHECK(!reader->info().format.empty());
+    CHECK(reader->info().channels == 2);
+    CHECK(reader->info().sampleRate == 44100);
+    REQUIRE(reader->info().frames == pattern::referenceFrames);
+    std::vector<std::vector<float>> expected(2);
+    for (int c = 0; c < 2; ++c)
+        for (std::uint64_t frame = 0; frame < pattern::referenceFrames; ++frame)
+            expected[static_cast<std::size_t>(c)].push_back(pattern::read(frame, c, 16));
+    CHECK(pattern::readAll(*reader) == expected);
+#else
+    CHECK(reader == nullptr);
+    CHECK(error == AudioFileError::notAudio);
+#endif
+}
+
+TEST_CASE("WMA reads through Media Foundation on Windows, each channel's tone in place, and is unsupported elsewhere")
+{
+    std::error_code error;
+    auto reader = files::openAudio(reference("tones-stereo-44100.wma"), error);
+#if defined(_WIN32)
+    REQUIRE(reader != nullptr);
+    CHECK(reader->info().format == "WMA");
+    CHECK(reader->info().sampleRate == 44100);
+    CHECK(reader->info().channels == 2);
+    REQUIRE(reader->info().frames >= 20000);
+
+    // Where the tones start depends on the decoder; it's the same for both channels, and not far in.
+    const auto samples = pattern::readAll(*reader);
+    std::size_t start[2]{};
+    for (int c = 0; c < 2; ++c)
+    {
+        const auto& channel = samples[static_cast<std::size_t>(c)];
+        start[c] = toneStart(channel, c, 44100, 4096, 16000);
+        CAPTURE(c, start[c]);
+        CHECK(start[c] < 4096);
+        CHECK(pattern::toneMatch({channel.begin() + static_cast<std::ptrdiff_t>(start[c]),
+                                  channel.begin() + static_cast<std::ptrdiff_t>(start[c] + 16000)}, c, 44100) > 20.0);
+    }
+    CHECK(start[0] == start[1]);
+#else
+    CHECK(reader == nullptr);
+    CHECK(error == AudioFileError::unsupported);
+#endif
+}
+
+TEST_CASE("The extensions read on this system are listed once each, with their dots and in lower case")
+{
+    const auto extensions = files::readableExtensions();
+    const auto has = [&](const char* extension) { return std::find(extensions.begin(), extensions.end(), extension) != extensions.end(); };
+    for (const char* everywhere : {".wav", ".aiff", ".flac", ".ogg", ".opus", ".mp3"})
+    {
+        CAPTURE(everywhere);
+        CHECK(has(everywhere));
+    }
+    for (const auto& extension : extensions)
+    {
+        CAPTURE(extension);
+        CHECK(extension.size() > 1);
+        CHECK(extension.front() == '.');
+        CHECK(std::none_of(extension.begin(), extension.end(), [](char c) { return c >= 'A' && c <= 'Z'; }));
+        CHECK(std::count(extensions.begin(), extensions.end(), extension) == 1);
+    }
+#if defined(__APPLE__)
+    CHECK((has(".m4a") && has(".caf") && has(".aac")));
+#elif defined(_WIN32)
+    CHECK((has(".m4a") && has(".wma") && !has(".caf")));
+#else
+    CHECK(!has(".m4a"));
+#endif
 }
 
 TEST_CASE("CAF reads through the Mac's decoder, and where there's none it, M4A and AAC are said to be unsupported")

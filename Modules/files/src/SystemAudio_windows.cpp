@@ -17,7 +17,7 @@
 #include <algorithm>
 #include <cmath>
 
-// MPEG-4 audio and ADTS through Media Foundation's source reader, which decodes to floats with the channels in WAV's
+// MPEG-4 audio, ADTS and Windows Media's ASF through Media Foundation's source reader, which decodes to floats with the channels in WAV's
 // order; Windows has no reader for CAF, nor for WAV and AIFF-C coded in ways of their own. Media Foundation acts on an
 // MPEG-4 file's edit list, but plays a file that gives its encoder's priming in iTunSMPB instead, as Apple's encoder
 // writes it, from its first sample, priming and all; for that file the decoder's samples are counted from where
@@ -108,10 +108,10 @@ class SystemReader final : public AudioFileReader
 {
 public:
     SystemReader(std::unique_ptr<RandomAccessFile> f, const std::filesystem::path& p, SystemFormat kind)
-        : file(std::move(f)), adts(kind == SystemFormat::adts)
+        : file(std::move(f)), adts(kind == SystemFormat::adts), asf(kind == SystemFormat::asf)
     {
         path = p;
-        information.format = adts ? "AAC" : "M4A";
+        information.format = adts ? "AAC" : asf ? "WMA" : "M4A";
     }
 
     void start(std::error_code& error)
@@ -124,7 +124,7 @@ public:
         if (!found.ready ||
             FAILED(found.createFile(MF_ACCESSMODE_READ, MF_OPENMODE_FAIL_IF_NOT_EXIST, MF_FILEFLAGS_NONE, path.c_str(), bytes.put())) ||
             FAILED(bytes->QueryInterface(IID_PPV_ARGS(described.put()))) ||
-            FAILED(described->SetString(MF_BYTESTREAM_CONTENT_TYPE, adts ? L"audio/aac" : L"audio/mp4")) ||
+            FAILED(described->SetString(MF_BYTESTREAM_CONTENT_TYPE, adts ? L"audio/aac" : asf ? L"video/x-ms-asf" : L"audio/mp4")) ||
             FAILED(found.createReader(bytes.object, nullptr, reader.put())))
         {
             error = AudioFileError::unsupported;
@@ -163,7 +163,7 @@ public:
             information.frames = static_cast<std::uint64_t>(std::llround(static_cast<double>(duration.uhVal.QuadPart) * rate / 1.0e7));
         PropVariantClear(&duration);
 
-        if (!adts)
+        if (!adts && !asf)
         {
             const auto told = readMp4Audio(*file, rate, error);
             if (error)
@@ -308,6 +308,7 @@ private:
 
     std::unique_ptr<RandomAccessFile> file;
     bool adts = false;
+    bool asf = false;
     std::uint64_t priming = 0;
     Com<IMFSourceReader> reader;
     std::vector<float> held;
@@ -317,10 +318,15 @@ private:
 };
 }
 
+std::vector<std::string> systemExtensions()
+{
+    return {".m4a", ".m4b", ".mp4", ".aac", ".wma", ".asf", ".wm"};
+}
+
 std::unique_ptr<AudioFileReader> openSystemAudio(std::unique_ptr<RandomAccessFile> file, const std::filesystem::path& path,
                                                  SystemFormat format, std::error_code& error)
 {
-    if (format != SystemFormat::mpeg4 && format != SystemFormat::adts)
+    if (format != SystemFormat::mpeg4 && format != SystemFormat::adts && format != SystemFormat::asf)
     {
         error = AudioFileError::unsupported;
         return nullptr;
