@@ -53,10 +53,11 @@ It needs CMake 3.25 or later and a C++20 compiler, and runs on macOS 11 or later
 | Module | Now |
 |---|---|
 | core | Values with JSON, XML documents, UTF-8 text, paths and the system's folders, files written safely, settings files, SHA-256, speaker layouts |
+| files | Audio files read and written a stretch at a time, at any length: WAV, with RF64 past 4 GB, its broadcast extension and every other chunk kept, and AIFF and AIFF-C |
 | ui | Pages in the system's own web view, WKWebView on a Mac and WebView2 on Windows, served from files built into the program, calling native functions and receiving events through a script every page is given |
 | plugin | Plugins written once as a class, with parameters, state, buses from mono to 9.1.6, latency and tail, and an editor as a web page on Mac and Windows; built as CLAP, VST3 and Audio Units, keeping the class ID and codes of a plugin released before, and checked by CLAP's validator, Steinberg's, auval and pluginval |
 
-The [architecture](Docs/02_architecture.md) describes the modules to come: files, devices, app and host, and the rest of ui.
+The [architecture](Docs/02_architecture.md) describes the modules to come: devices, app and host, the rest of files, and the rest of ui.
 
 ## What a product includes
 

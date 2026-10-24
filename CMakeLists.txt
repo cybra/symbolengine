@@ -36,6 +36,7 @@ if(SYMBOLENGINE_TESTS)
 endif()
 
 add_subdirectory(Modules/core)
+add_subdirectory(Modules/files)
 if(SYMBOLENGINE_UI)
     add_subdirectory(Modules/ui)
 endif()

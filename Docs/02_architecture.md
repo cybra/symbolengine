@@ -7,7 +7,7 @@ Each module is a CMake target usable on its own, with its own tests, guide and e
 | Module | What it does | Built on |
 |---|---|---|
 | core | UTF-8 text helpers over `std::string`, paths over `std::filesystem`, values with JSON, XML documents, speaker layouts, the message loop and timers, threads, spin locks, lock-free FIFOs, logging, settings files written safely, SHA-256 | C++20, CHOC |
-| files | Reading and writing audio files: WAV with BWF and iXML, AIFF, FLAC, Ogg Vorbis; reading MP3; AAC, M4A and CAF through the system's own decoders; streaming readers for files of any length | CHOC, AudioToolbox, Media Foundation |
+| files | Reading and writing audio files: WAV with BWF and iXML and RF64, AIFF, FLAC, Ogg Vorbis, Opus; reading MP3; AAC, M4A and CAF through the system's own decoders; streaming readers for files of any length | CHOC, AudioToolbox, Media Foundation |
 | devices | Audio and MIDI devices: Core Audio, Windows Audio in shared and exclusive mode, ASIO with the developer's own SDK, ALSA, PipeWire and JACK; device lists and changes, latency in and out, inputs and outputs run apart or together | System APIs, CHOC's device layer where it fits |
 | ui | The system's web view (WKWebView, WebView2, WebKitGTK) with a typed bridge: native functions the page calls and awaits, events the native side sends, and resources served from memory; windows, native menus, dialogs, file choosers, drag and drop, the clipboard, keyboard handling | CHOC's web view, AppKit, Win32, GTK |
 | app | A desktop application around it: one instance or many, worker processes with a message channel, opening files from the system, updates' hooks | core, ui |
@@ -27,6 +27,14 @@ XML is read and written for documents of data, such as settings, lists and sessi
 ## Web pages
 
 A page is served from files built into the program with `symbolengine_add_files`, by path from `/index.html`, and every page is also served `symbolengine.js`, its side of the bridge: `symbolengine.call` reaches a native function the program exposed and gives what it returned, or the message of what it threw, and `symbolengine.on` receives the events the program sends. Values cross as JSON, so a page and the native side read each other's numbers and text exactly. Some systems start loading a page before the web view says it is ready, so the bridge waits for the native side before its first call, and the native side holds what it sends until the page has said it is listening; nothing sent early is lost on any system. A page's name becomes its address, so pages with different names keep what they store apart even in one program; a plugin's editor is named after the plugin's id, so two plugins in one host never read or overwrite each other's stored data. On Windows each program, or each plugin, also gives WebView2 a data folder of its own; CHOC has no setting for one, so the build adds it to CHOC's web view when it fetches it (`cmake/PatchChoc.cmake`), and stops if CHOC's code has changed under the patch. Linux's web view, WebKitGTK, follows the first release.
+
+## Audio files
+
+The files module reads and writes audio files a stretch at a time, so a file of any length takes little memory, with each channel's samples as floats. A whole number reads as itself divided by 2 to the power of one less than its bits, so a 16-bit sample is divided by 32768, and writes back as the same number; a float is written as the nearest whole number to it times that, held within the format's range, and anything that isn't a number as silence. Float files keep their floats as they are, past full scale too. A file is recognized by what it holds, never its name.
+
+WAV is read whether it says its sizes in RIFF's 32 bits or in RF64's and BW64's ds64 chunk, its sample format plain or in WAVE_FORMAT_EXTENSIBLE, whose speakers it gives. A WAV is written with a JUNK chunk where a ds64 chunk fits, so it becomes RF64 in place when it passes 4 GB; as plain PCM up to two channels, floats with a fact chunk, and WAVE_FORMAT_EXTENSIBLE for more channels or speakers given. AIFF and AIFF-C are read with their samples in either byte order or as floats, and written as AIFF, or AIFF-C for floats. A file's other chunks, such as a broadcast extension, iXML, cue points and LIST, are kept as they are and written back the same, so a recording's details survive an edit; a broadcast extension also reads and writes field by field. A file whose writing was stopped, or that says more than it holds, reads up to its last whole frame, and a chunk of odd length is read whether its pad byte is there or not.
+
+The reader is checked against files written by other programs, ffmpeg's and Apple's, sample for sample, and what it writes is read back by them in the same way.
 
 ## Threads and real time
 

@@ -7,11 +7,11 @@ if(CONSUME STREQUAL "fetch")
     FetchContent_Declare(SymbolEngine SOURCE_DIR ${SYMBOLENGINE_SOURCE})
     FetchContent_MakeAvailable(SymbolEngine)
 else()
-    find_package(SymbolEngine 0.1 REQUIRED COMPONENTS core)
+    find_package(SymbolEngine 0.1 REQUIRED COMPONENTS core files)
 endif()
 
 add_executable(consumer main.cpp)
-target_link_libraries(consumer PRIVATE SymbolEngine::core)
+target_link_libraries(consumer PRIVATE SymbolEngine::core SymbolEngine::files)
 
 if(CONSUME STREQUAL "fetch" AND TARGET SymbolEngine::plugin)
     symbolengine_add_plugin(ConsumerGain
