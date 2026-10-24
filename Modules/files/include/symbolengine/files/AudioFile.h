@@ -35,7 +35,8 @@ struct AudioInfo
                                    // "WMA", as people name them, or the system's name for another kind it reads
     double sampleRate = 0.0;       // an Opus file's is 48 kHz, which it always plays at
     int channels = 0;
-    std::uint64_t frames = 0;      // the length, in samples of each channel
+    std::uint64_t frames = 0;      // the length, in samples of each channel; for AAC in ADTS and WMA on Windows,
+                                   // the decoder's estimate until the file has been read to its end
     int bits = 0;                  // as stored: 8, 16, 24, 32 or 64, or 0 for the formats that keep none, such as
                                    // Ogg Vorbis, Opus, MP3 and AAC
     bool floatingPoint = false;    // samples stored as floats rather than whole numbers

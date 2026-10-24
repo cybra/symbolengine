@@ -252,8 +252,13 @@ private:
         {
             if (ended)
             {
+                // The length an ADTS or ASF file gives is an estimate; at the end it is what was decoded.
                 if (!waiting)
+                {
+                    if (placed)
+                        information.frames = std::min(information.frames, heldStart + heldFrames());
                     return false;
+                }
                 place(pending, pendingFirst);
                 waiting = false;
                 continue;

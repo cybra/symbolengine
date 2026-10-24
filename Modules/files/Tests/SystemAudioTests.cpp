@@ -116,6 +116,9 @@ TEST_CASE("AAC in ADTS, which says nothing of its priming, reads as the system d
                                   channel.begin() + static_cast<std::ptrdiff_t>(start[c] + 20000)}, c, 48000) > 20.0);
     }
     CHECK(start[0] == start[1]);
+
+    // Its length is the decoder's estimate until it has been read to the end, and then what the decoder gave.
+    CHECK(pattern::stretch(*reader, info.frames - 1000, 1000).front().size() == 1000);
 }
 
 #endif
@@ -196,6 +199,7 @@ TEST_CASE("WMA reads through Media Foundation on Windows, each channel's tone in
                                   channel.begin() + static_cast<std::ptrdiff_t>(start[c] + 16000)}, c, 44100) > 20.0);
     }
     CHECK(start[0] == start[1]);
+    CHECK(pattern::stretch(*reader, reader->info().frames - 1000, 1000).front().size() == 1000);
 #else
     CHECK(reader == nullptr);
     CHECK(error == AudioFileError::unsupported);
