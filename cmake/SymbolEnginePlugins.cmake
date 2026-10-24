@@ -12,8 +12,8 @@ FetchContent_Declare(symbolengine_clap
     URL_HASH SHA256=58fdb977c6678859c15d57942378b651399178f49a3a8ecad1813b9f231dc096
     SOURCE_SUBDIR fetched-only)
 FetchContent_Declare(symbolengine_clap_wrapper
-    URL https://github.com/cybra/clap-wrapper/archive/2beb81f281a453afcfc0c14d6474ba9f2beb4cd0.tar.gz # v0.17.0 and ours
-    URL_HASH SHA256=c8f505234a795bdbe7be409caa04b8143cba48976b22df3832b169e7cee52d58
+    URL https://github.com/cybra/clap-wrapper/archive/03b9731e6433b39908d49a9be2d3851fd6b7635e.tar.gz # v0.17.0 and ours
+    URL_HASH SHA256=f5375d042fb453a091cb7cc09d23a79105f8f76fae13d95d318695ca4b1b880f
     SOURCE_SUBDIR fetched-only)
 FetchContent_MakeAvailable(symbolengine_clap symbolengine_clap_wrapper)
 

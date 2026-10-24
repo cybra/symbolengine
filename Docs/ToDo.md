@@ -35,6 +35,7 @@
 - [x] Buses in any standard layout from mono to 7.1.4 and the ITU 9.1.6, or the plugin's own, through CLAP's surround and configurable audio ports and clap-wrapper's VST3 speaker arrangements, with Steinberg's validator checking exactly which arrangements a plugin takes.
 - [x] Audio Unit layouts through SymbolEngine's fork of clap-wrapper: the layouts a plugin takes offered to the host up to Atmos 7.1.4, Logic's channel orders among them, and each channel handed to the plugin as its speaker, checked by auval and by a host in the tests.
 - [ ] Audio Unit layouts checked in Logic itself.
+- [x] An Audio Unit's state saved straight after the host sets a value has that value, with no render between, as before it is initialized, initialized with nothing rendered, after the host stops and while it plays, never leaving a block silent (`Tests/AudioUnitHost/State.cpp`).
 - [x] Dolby's 9.1.4 and 9.1.6 in VST3 and Audio Units, their wide pair passed between a plugin and the fork's wrappers by an extension of the fork's own, since CLAP has no numbers for it; a CLAP host is never given them.
 - [ ] Dolby's 9.1.x in AAX, when AAX is built: the fork's AAX wrapper reads 5.1's surround pair as the side pair, where VST3 and Audio Units read it as the rear pair, which it has to agree with first.
 - [x] Parameters hosts see and record from 0 to 1 on a linear or ratio scale, shown in their own units, as plugins already released with such parameters have them.
