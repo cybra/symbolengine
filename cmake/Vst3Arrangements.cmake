@@ -4,7 +4,13 @@
 # passes when the plugin took exactly those expected, named as the validator names them, such as Mono>50. clap-wrapper
 # says "AUDIO in" each time it sets a plugin's buses up, which it does only once the plugin has taken an arrangement.
 
-execute_process(COMMAND ${VALIDATOR} -e ${PLUGIN} RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE output)
+# The validator prints on standard output and clap-wrapper on standard error, so both go to one file, where each lands
+# in the order it was written; read through two pipes, an arrangement and its "AUDIO in" could arrive the other way round.
+string(SHA1 key "${PLUGIN}")
+set(log "${CMAKE_CURRENT_BINARY_DIR}/vst3-arrangements-${key}.txt")
+execute_process(COMMAND ${VALIDATOR} -e ${PLUGIN} RESULT_VARIABLE result OUTPUT_FILE ${log} ERROR_FILE ${log})
+file(READ ${log} output)
+file(REMOVE ${log})
 
 if(NOT result EQUAL 0)
     message("${output}")
