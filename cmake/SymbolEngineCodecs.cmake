@@ -12,9 +12,10 @@ FetchContent_Declare(symbolengine_ogg
     URL https://github.com/xiph/ogg/archive/refs/tags/v1.3.6.tar.gz
     URL_HASH SHA256=95b643da661155d79db9de2fca55daed3a8d491039829def246aacb3d9201c81
     SOURCE_SUBDIR fetched-only)
+# libvorbis from after its last release, 1.3.7 of 2020, for the fixes made since, among them a use-after-free in seeking.
 FetchContent_Declare(symbolengine_vorbis
-    URL https://github.com/xiph/vorbis/archive/refs/tags/v1.3.7.tar.gz
-    URL_HASH SHA256=270c76933d0934e42c5ee0a54a36280e2d87af1de3cc3e584806357e237afd13
+    URL https://github.com/xiph/vorbis/archive/1b75110b5a2754ba1931d82dd83cb822b266a21d.tar.gz
+    URL_HASH SHA256=bd0f08c8a63debdce27dd71de7d953f9c92e410d1cfe263220bcb49fff2ab749
     SOURCE_SUBDIR fetched-only)
 FetchContent_Declare(symbolengine_flac
     URL https://github.com/xiph/flac/archive/refs/tags/1.5.0.tar.gz
@@ -77,9 +78,24 @@ set(ogg_sources ${ogg}/src/bitwise.c ${ogg}/src/framing.c)
 
 set(vorbis_sources)
 foreach(file mdct smallft block envelope window lsp lpc analysis synthesis psy info floor1 floor0 res0 mapping0 registry
-             codebook sharedbook lookup bitrate vorbisfile vorbisenc)
+             codebook sharedbook lookup bitrate vorbisfile)
     list(APPEND vorbis_sources ${vorbis}/lib/${file}.c)
 endforeach()
+
+# Its encoder sets up 5.1's LFE residue once for each block size, and the second time loses the first; a copy of
+# vorbisenc.c lets the first go before it does.
+file(READ ${vorbis}/lib/vorbisenc.c vorbisenc)
+set(vorbis_residue "  vorbis_info_residue0 *r=ci->residue_param[number]=\n    _ogg_malloc(sizeof(*r));")
+string(FIND "${vorbisenc}" "${vorbis_residue}" found)
+if(found EQUAL -1)
+    message(FATAL_ERROR "libvorbis' vorbisenc.c no longer sets up residues as SymbolEngine's copy of it expects")
+endif()
+string(REPLACE "${vorbis_residue}"
+    "  vorbis_info_residue0 *r;\n  if(ci->residue_param[number])_ogg_free(ci->residue_param[number]);\n  r=ci->residue_param[number]=\n    _ogg_malloc(sizeof(*r));"
+    vorbisenc "${vorbisenc}")
+file(WRITE ${codec_generated}/vorbisenc.c.new "${vorbisenc}")
+file(COPY_FILE ${codec_generated}/vorbisenc.c.new ${codec_generated}/vorbisenc.c ONLY_IF_DIFFERENT)
+list(APPEND vorbis_sources ${codec_generated}/vorbisenc.c)
 
 set(flac_sources)
 foreach(file bitmath bitreader bitwriter cpu crc fixed float format lpc md5 memory metadata_iterators metadata_object

@@ -38,11 +38,8 @@ public:
         io.seek_data = &stream;
     }
 
-    ~Mp3Reader() override
-    {
-        if (opened)
-            mp3dec_ex_close(&decoder);
-    }
+    // Closed whether or not it opened, as a file that failed to open still holds what minimp3 took for reading it.
+    ~Mp3Reader() override { mp3dec_ex_close(&decoder); }
 
     void start(std::error_code& error)
     {
@@ -55,7 +52,6 @@ public:
             error = stream.error ? stream.error : make_error_code(AudioFileError::notAudio);
             return;
         }
-        opened = true;
 
         information.format = decoder.info.layer == 1 ? "MP1" : decoder.info.layer == 2 ? "MP2" : "MP3";
         information.sampleRate = decoder.info.hz;
@@ -102,7 +98,6 @@ private:
     FileStream stream;
     mp3dec_io_t io{};
     mp3dec_ex_t decoder{};
-    bool opened = false;
     std::vector<float> decoded;
     std::uint64_t next = 0;
 };
