@@ -34,13 +34,14 @@ std::string pageWith(std::string_view script)
            std::string(script) + "</script></head><body>A page for the tests</body></html>";
 }
 
-// Runs a page until it calls "done" or twenty seconds pass, and gives what it reported with "report".
+// Runs a page until it calls "done" and is ready, or twenty seconds pass, and gives what it reported with "report". A
+// page may call "done" as it loads, before it has said it is ready.
 std::map<std::string, Value> runPage(ui::WebView::Options options, std::function<void(ui::WebView&)> before = {})
 {
     choc::messageloop::initialise();
 
     std::map<std::string, Value> reports;
-    bool timedOut = false;
+    bool timedOut = false, finished = false;
 
     ui::WebView view(std::move(options));
     REQUIRE(view.available());
@@ -51,11 +52,19 @@ std::map<std::string, Value> runPage(ui::WebView::Options options, std::function
         return Value();
     });
     view.expose("done", [&](const Value&) {
-        choc::messageloop::stop();
+        finished = true;
         return Value();
     });
     if (before)
         before(view);
+
+    // Stopped once, as each stop leaves the loop a message of its own.
+    choc::messageloop::Timer look(10, [&] {
+        if (!finished || !view.pageReady())
+            return true;
+        choc::messageloop::stop();
+        return false;
+    });
 
     choc::messageloop::Timer timeout(20000, [&] {
         timedOut = true;
@@ -247,6 +256,7 @@ TEST_CASE("A script run in the page gives what it came to, or what went wrong")
         view.expose("done", [](const Value&) { return Value(); });
     });
 
+    INFO("the sum's error: " << sumError);
     CHECK(sum == Value(3));
     CHECK(sumError.empty());
     CHECK(object["name"].stringOr("") == "caf\xC3\xA9");

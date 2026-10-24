@@ -1,12 +1,14 @@
 # cmake -DFILE=<choc_WebView.h> -P PatchChoc.cmake
 #
-# Changes CHOC's web view in three ways, on Windows:
+# Changes CHOC's web view in four ways, the first three on Windows:
 #  - a userDataFolder option, so a program or plugin chooses where WebView2 keeps its data instead of a folder named
 #    after the program that loaded it;
 #  - the keyboard passed on to the page when the web view's window is given it, as a WKWebView takes it on a Mac,
 #    so keys reach the page as soon as its window is active, without a click inside it first;
 #  - a background color option, which WebView2 shows where the page hasn't drawn, as while its window grows, instead
-#    of white.
+#    of white;
+#  - on a Mac and on Windows, the program's functions bound before the first page starts loading, rather than just
+#    after, when the page could already have been made without them, and waited for them forever.
 # Each change looks for the text it replaces and stops the build if CHOC has changed it, so a new version of CHOC is
 # never patched wrongly, and is skipped if it has been made already.
 
@@ -80,6 +82,54 @@ replace_once("options.windowsBackgroundColor.has_value()" [[        if (options.
                     controller2->put_DefaultBackgroundColor ({ 255, (BYTE) (c >> 16), (BYTE) (c >> 8), (BYTE) c });
             }
         }
+]])
+
+replace_once("Bound before the first page loads (Mac)" [[        if (options->fetchResource)
+            navigate ({});
+
+        CHOC_AUTORELEASE_END
+
+        if (options->webviewIsReady)
+            options->webviewIsReady (owner);
+
+        return true;
+]] [[        CHOC_AUTORELEASE_END
+
+        // Bound before the first page loads (Mac), so it has the functions from the start.
+        if (options->webviewIsReady)
+            options->webviewIsReady (owner);
+
+        if (options->fetchResource)
+        {
+            CHOC_AUTORELEASE_BEGIN
+            navigate ({});
+            CHOC_AUTORELEASE_END
+        }
+
+        return true;
+]])
+
+replace_once("Bound before the first page loads (Windows)" [[        if (options.fetchResource)
+            navigate ({});
+
+        COMPtr<ICoreWebView2Settings> settings;
+]] [[        COMPtr<ICoreWebView2Settings> settings;
+]])
+
+replace_once("Bound before the first page loads (Windows)" [[        resizeContentToFit();
+
+        if (options.webviewIsReady)
+            options.webviewIsReady (owner);
+    }
+]] [[        resizeContentToFit();
+
+        // Bound before the first page loads (Windows), so it has the functions from the start.
+        if (options.webviewIsReady)
+            options.webviewIsReady (owner);
+
+        if (options.fetchResource)
+            navigate ({});
+    }
 ]])
 
 file(WRITE "${FILE}" "${source}")
