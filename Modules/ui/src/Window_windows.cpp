@@ -64,6 +64,16 @@ RECT workAreaOf(HMONITOR monitor)
     return info.rcWork;
 }
 
+// Takes a view out of the window, leaving it a hidden window of its own: a child given no parent is made a popup, as
+// Windows asks, or the desktop becomes its parent.
+void release(HWND view)
+{
+    ShowWindow(view, SW_HIDE);
+    SetParent(view, nullptr);
+    const auto style = GetWindowLongPtrW(view, GWL_STYLE);
+    SetWindowLongPtrW(view, GWL_STYLE, (style & ~static_cast<LONG_PTR>(WS_CHILD)) | static_cast<LONG_PTR>(WS_POPUP));
+}
+
 // Whether the computer is set to dark apps, as Settings, Personalization, Colors has it.
 bool systemIsDark()
 {
@@ -265,10 +275,7 @@ Window::~Window()
 {
     auto& w = *impl;
     if (w.content != nullptr)
-    {
-        ShowWindow(w.content, SW_HIDE);
-        SetParent(w.content, nullptr);
-    }
+        release(w.content);
 
     SetWindowLongPtrW(w.window, GWLP_USERDATA, 0);
     DestroyWindow(w.window);
@@ -279,10 +286,7 @@ void Window::setContent(void* view)
 {
     auto& w = *impl;
     if (w.content != nullptr)
-    {
-        ShowWindow(w.content, SW_HIDE);
-        SetParent(w.content, nullptr);
-    }
+        release(w.content);
 
     w.content = static_cast<HWND>(view);
     if (w.content == nullptr)
