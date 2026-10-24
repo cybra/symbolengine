@@ -119,6 +119,13 @@ TEST_CASE("AAC in ADTS, which says nothing of its priming, reads as the system d
 
     // Its length is the decoder's estimate until it has been read to the end, and then what the decoder gave.
     CHECK(pattern::stretch(*reader, info.frames - 1000, 1000).front().size() == 1000);
+
+    // Stretches out of order, each the same as where it sits in the whole.
+    for (const std::uint64_t at : {std::uint64_t{15000}, std::uint64_t{3}, std::uint64_t{9000}, std::uint64_t{0}, info.frames - 500})
+    {
+        CAPTURE(at);
+        CHECK(pattern::largestDifference(pattern::stretch(*reader, at, 400), samples, at) < 1.0e-5f);
+    }
 }
 
 #endif
@@ -200,6 +207,11 @@ TEST_CASE("WMA reads through Media Foundation on Windows, each channel's tone in
     }
     CHECK(start[0] == start[1]);
     CHECK(pattern::stretch(*reader, reader->info().frames - 1000, 1000).front().size() == 1000);
+    for (const std::uint64_t at : {std::uint64_t{15000}, std::uint64_t{3}, std::uint64_t{9000}, std::uint64_t{0}, reader->info().frames - 500})
+    {
+        CAPTURE(at);
+        CHECK(pattern::largestDifference(pattern::stretch(*reader, at, 400), samples, at) < 1.0e-5f);
+    }
 #else
     CHECK(reader == nullptr);
     CHECK(error == AudioFileError::unsupported);

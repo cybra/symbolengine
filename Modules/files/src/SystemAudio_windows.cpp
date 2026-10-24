@@ -201,12 +201,14 @@ public:
 private:
     std::size_t heldFrames() const { return held.size() / static_cast<std::size_t>(information.channels); }
 
-    // Moves to a little before a frame, from where decoding reaches it settled.
+    // Moves to a little before a frame, from where decoding reaches it settled. ADTS keeps no index, so Media
+    // Foundation finds a place in it by estimate, and ASF's times are in milliseconds, so for those two decoding starts
+    // again from the start and counts its way there.
     bool seek(std::uint64_t frame)
     {
         const auto settle = static_cast<std::uint64_t>(information.sampleRate / 2);
         const auto decoded = frame + priming + static_cast<std::uint64_t>(origin);
-        const auto start = decoded > settle ? decoded - settle : 0;
+        const auto start = adts || asf || decoded <= settle ? 0 : decoded - settle;
 
         PROPVARIANT position;
         PropVariantInit(&position);
