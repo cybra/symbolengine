@@ -5,6 +5,7 @@
 #include <symbolengine/core/Text.h>
 
 #include <choc/gui/choc_WebView.h>
+#include <choc/text/choc_JSON.h>
 
 #include <map>
 #include <memory>
@@ -70,7 +71,7 @@ struct WebView::Impl
     std::unique_ptr<choc::ui::WebView> view;
     std::map<std::string, std::function<Value(const Value&)>, std::less<>> functions;
     std::map<std::string, std::function<void(const Value&, Reply)>, std::less<>> laterFunctions;
-    std::vector<std::string> waiting;   // scripts held until the page is ready
+    std::vector<std::pair<std::string, choc::ui::WebView::CompletionHandler>> waiting;   // held until the page is ready
     bool ready = false;
 
     // Held by each answer still to come, which goes nowhere once the web view has gone.
@@ -107,8 +108,8 @@ struct WebView::Impl
             if (name == "__ready")
             {
                 ready = true;
-                for (const auto& script : std::exchange(waiting, {}))
-                    view->evaluateJavascript(script);
+                for (auto& [script, done] : std::exchange(waiting, {}))
+                    view->evaluateJavascript(script, std::move(done));
                 return json::write(Object{{"value", nullptr}});
             }
 
@@ -138,12 +139,12 @@ struct WebView::Impl
         }
     }
 
-    void run(std::string script)
+    void run(std::string script, choc::ui::WebView::CompletionHandler done = {})
     {
         if (ready)
-            view->evaluateJavascript(script);
+            view->evaluateJavascript(script, std::move(done));
         else
-            waiting.push_back(std::move(script));
+            waiting.emplace_back(std::move(script), std::move(done));
     }
 };
 
@@ -151,6 +152,7 @@ WebView::WebView(Options options) : impl(std::make_unique<Impl>(std::move(option
 {
     choc::ui::WebView::Options settings;
     settings.enableDebugMode = impl->options.developerTools;
+    settings.enableDefaultClipboardKeyShortcutsInSafari = impl->options.editingKeys;
     settings.acceptsFirstMouseClick = true;
     settings.transparentBackground = true;
     settings.fetchResource = [this](const std::string& path) { return impl->fetch(path); };
@@ -223,6 +225,22 @@ void WebView::run(std::string script)
 {
     if (impl->view != nullptr)
         impl->run(std::move(script));
+}
+
+void WebView::run(std::string script, std::function<void(const Value& result, const std::string& error)> done)
+{
+    if (impl->view == nullptr)
+    {
+        done(nullptr, "there is no web view");
+        return;
+    }
+
+    impl->run(std::move(script), [done = std::move(done)](const std::string& error, const choc::value::ValueView& result) {
+        Value value;
+        if (error.empty() && !result.isVoid())
+            value = json::parse(choc::json::toString(result));
+        done(value, error);
+    });
 }
 
 }

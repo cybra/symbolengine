@@ -57,6 +57,11 @@ public:
         std::filesystem::path dataFolder{};
 
         bool developerTools = false;   // the browser's inspector, on the page's context menu
+
+        /** On a Mac, Command-C, X, V, Z and A act on the page's text as they do in Safari, which a page in another
+            program's window, such as a plugin's editor in a host, needs. A program whose own Edit menu has them turns
+            this off, so the keys reach its menu. */
+        bool editingKeys = true;
     };
 
     explicit WebView(Options options);
@@ -91,6 +96,10 @@ public:
 
     /** Runs a script in the page. */
     void run(std::string script);
+
+    /** Runs a script in the page and gives what its last expression came to, as JSON has it, or, if it threw, null and
+        what went wrong. */
+    void run(std::string script, std::function<void(const Value& result, const std::string& error)> done);
 
     /** Saves a picture of the page as it is drawn now to a PNG file, for checks run from a script, and then says
         whether it was written. On a Mac only for now; elsewhere it says false. */

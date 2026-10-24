@@ -224,6 +224,36 @@ TEST_CASE("A function's answer can come later, after the call has returned, and 
     CHECK(reports.at("throws").stringOr("") == "no answer");
 }
 
+TEST_CASE("A script run in the page gives what it came to, or what went wrong")
+{
+    Value sum, object, thrown;
+    std::string sumError = "not run", thrownError;
+    const auto page = pageWith("symbolengine.call('ready');");
+
+    runPage({.resources = onePage(page)}, [&](ui::WebView& view) {
+        view.expose("ready", [&](const Value&) {
+            view.run("1 + 2", [&](const Value& result, const std::string& error) {
+                sum = result;
+                sumError = error;
+            });
+            view.run("({ name: 'caf\u00e9', list: [1, 'x', null] })", [&](const Value& result, const std::string&) { object = result; });
+            view.run("throw new Error('no answer')", [&](const Value& result, const std::string& error) {
+                thrown = result;
+                thrownError = error;
+                choc::messageloop::stop();
+            });
+            return Value();
+        });
+        view.expose("done", [](const Value&) { return Value(); });
+    });
+
+    CHECK(sum == Value(3));
+    CHECK(sumError.empty());
+    CHECK(json::write(object) == R"({"name":"café","list":[1,"x",null]})");
+    CHECK(thrown.isNull());
+    CHECK(!thrownError.empty());
+}
+
 TEST_CASE("Pages with different names keep what they store apart, and pages with the same name share it")
 {
     // Names new to this run, so what an earlier run stored can't answer for this one.
