@@ -6,7 +6,7 @@ Each module is a CMake target usable on its own, with its own tests, guide and e
 
 | Module | What it does | Built on |
 |---|---|---|
-| core | UTF-8 text helpers over `std::string`, paths over `std::filesystem`, values with JSON, XML documents, speaker layouts, the message loop and timers, threads, spin locks, lock-free FIFOs, logging, settings files written safely | C++20, CHOC |
+| core | UTF-8 text helpers over `std::string`, paths over `std::filesystem`, values with JSON, XML documents, speaker layouts, the message loop and timers, threads, spin locks, lock-free FIFOs, logging, settings files written safely, SHA-256 | C++20, CHOC |
 | files | Reading and writing audio files: WAV with BWF and iXML, AIFF, FLAC, Ogg Vorbis; reading MP3; AAC, M4A and CAF through the system's own decoders; streaming readers for files of any length | CHOC, AudioToolbox, Media Foundation |
 | devices | Audio and MIDI devices: Core Audio, Windows Audio in shared and exclusive mode, ASIO with the developer's own SDK, ALSA, PipeWire and JACK; device lists and changes, latency in and out, inputs and outputs run apart or together | System APIs, CHOC's device layer where it fits |
 | ui | The system's web view (WKWebView, WebView2, WebKitGTK) with a typed bridge: native functions the page calls and awaits, events the native side sends, and resources served from memory; windows, native menus, dialogs, file choosers, drag and drop, the clipboard, keyboard handling | CHOC's web view, AppKit, Win32, GTK |

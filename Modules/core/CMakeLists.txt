@@ -5,6 +5,7 @@ set(sources
     src/Numbers.cpp
     src/Paths.cpp
     src/SettingsFile.cpp
+    src/Sha256.cpp
     src/System.cpp
     src/Text.cpp
     src/Utf8.cpp
@@ -32,6 +33,7 @@ if(SYMBOLENGINE_TESTS)
         Tests/NumberTests.cpp
         Tests/PathsTests.cpp
         Tests/SettingsFileTests.cpp
+        Tests/Sha256Tests.cpp
         Tests/SystemTests.cpp
         Tests/TextTests.cpp
         Tests/ToCharsReference.cpp
