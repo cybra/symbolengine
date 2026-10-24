@@ -163,6 +163,28 @@ public:
             information.frames = static_cast<std::uint64_t>(std::llround(static_cast<double>(duration.uhVal.QuadPart) * rate / 1.0e7));
         PropVariantClear(&duration);
 
+        // Where Media Foundation's times start, from the first stretch decoded, then back to the start: past 0 in a
+        // file that starts its times later, as an ASF file can.
+        {
+            DWORD flags = 0;
+            LONGLONG time = 0;
+            Com<IMFSample> first;
+            if (SUCCEEDED(reader->ReadSample(audioStream, 0, nullptr, &flags, &time, first.put())) && first.object != nullptr)
+                origin = std::max(0LL, std::llround(static_cast<double>(time) * rate / 1.0e7));
+
+            PROPVARIANT start;
+            PropVariantInit(&start);
+            start.vt = VT_I8;
+            start.hVal.QuadPart = 0;
+            const auto back = SUCCEEDED(reader->SetCurrentPosition(GUID_NULL, start));
+            PropVariantClear(&start);
+            if (!back)
+            {
+                error = AudioFileError::unsupported;
+                return;
+            }
+        }
+
         if (!adts && !asf)
         {
             const auto told = readMp4Audio(*file, rate, error);
@@ -183,7 +205,7 @@ private:
     bool seek(std::uint64_t frame)
     {
         const auto settle = static_cast<std::uint64_t>(information.sampleRate / 2);
-        const auto decoded = frame + priming;
+        const auto decoded = frame + priming + static_cast<std::uint64_t>(origin);
         const auto start = decoded > settle ? decoded - settle : 0;
 
         PROPVARIANT position;
@@ -262,7 +284,7 @@ private:
             std::vector<float> next(samples, samples + static_cast<std::size_t>(length) / sizeof(float));
             buffer->Unlock();
 
-            const auto first = std::llround(static_cast<double>(time) * information.sampleRate / 1.0e7) - static_cast<long long>(priming);
+            const auto first = std::llround(static_cast<double>(time) * information.sampleRate / 1.0e7) - origin - static_cast<long long>(priming);
             if (waiting && (placed || first > pendingFirst))
                 place(pending, pendingFirst);
             pending = std::move(next);
@@ -327,6 +349,7 @@ private:
     bool adts = false;
     bool asf = false;
     std::uint64_t priming = 0;    // what Media Foundation's times count that the audio doesn't: iTunSMPB's priming
+    long long origin = 0;         // and the time its first stretch has
     Com<IMFSourceReader> reader;
     std::vector<float> held;
     std::uint64_t heldStart = 0;
