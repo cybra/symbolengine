@@ -131,9 +131,12 @@ TEST_CASE("A WAV cut short reads to its last whole frame, and one saying no size
     auto bytes = files::read(file);
     bytes.resize(bytes.size() - 2000 - 2);
     files::writeSafely(file, bytes);
-    auto reader = files::openAudio(file);
-    CHECK(reader->info().frames == 499);
-    CHECK(pattern::readAll(*reader)[1][498] == pattern::read(498, 1, 16));
+    {
+        // Let go of before the file is written again, which Windows doesn't allow while it's open.
+        auto reader = files::openAudio(file);
+        CHECK(reader->info().frames == 499);
+        CHECK(pattern::readAll(*reader)[1][498] == pattern::read(498, 1, 16));
+    }
 
     for (const std::uint32_t said : {0u, 0xFFFFFFFFu})
     {
