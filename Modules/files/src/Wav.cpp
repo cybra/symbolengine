@@ -169,7 +169,8 @@ private:
             dataBytes += scratch.size();
     }
 
-    void finishFile(std::error_code& error) override
+    // The sizes for the samples so far, after the pad byte samples of odd length need, which the next samples write over.
+    void writeSizes(std::error_code& error)
     {
         auto end = dataStart + dataBytes;
         if (dataBytes % 2 != 0)
@@ -179,43 +180,55 @@ private:
             ++end;
         }
 
-        if (!error)
+        if (error)
+            return;
+
+        std::string sizes;
+        const auto big = end - 8 > unknownSize || dataBytes > unknownSize;
+
+        if (big)
         {
-            std::string sizes;
-            const auto big = end - 8 > unknownSize || dataBytes > unknownSize;
-
-            if (big)
-            {
-                std::string start = "RF64";
-                addLittle32(start, unknownSize);
-                start += "WAVE";
-                start += "ds64";
-                addLittle32(start, 28);
-                addLittle64(start, end - 8);
-                addLittle64(start, dataBytes);
-                addLittle64(start, count);
-                addLittle32(start, 0);
-                file->writeAt(0, start.data(), start.size(), error);
-                addLittle32(sizes, unknownSize);
-            }
-            else
-            {
-                std::string riff;
-                addLittle32(riff, static_cast<std::uint32_t>(end - 8));
-                file->writeAt(4, riff.data(), riff.size(), error);
-                addLittle32(sizes, static_cast<std::uint32_t>(dataBytes));
-            }
-
-            if (!error)
-                file->writeAt(dataSizeAt, sizes.data(), sizes.size(), error);
-
-            if (!error && factAt != 0)
-            {
-                std::string length;
-                addLittle32(length, count > unknownSize ? unknownSize : static_cast<std::uint32_t>(count));
-                file->writeAt(factAt, length.data(), length.size(), error);
-            }
+            std::string start = "RF64";
+            addLittle32(start, unknownSize);
+            start += "WAVE";
+            start += "ds64";
+            addLittle32(start, 28);
+            addLittle64(start, end - 8);
+            addLittle64(start, dataBytes);
+            addLittle64(start, count);
+            addLittle32(start, 0);
+            file->writeAt(0, start.data(), start.size(), error);
+            addLittle32(sizes, unknownSize);
         }
+        else
+        {
+            std::string riff;
+            addLittle32(riff, static_cast<std::uint32_t>(end - 8));
+            file->writeAt(4, riff.data(), riff.size(), error);
+            addLittle32(sizes, static_cast<std::uint32_t>(dataBytes));
+        }
+
+        if (!error)
+            file->writeAt(dataSizeAt, sizes.data(), sizes.size(), error);
+
+        if (!error && factAt != 0)
+        {
+            std::string length;
+            addLittle32(length, count > unknownSize ? unknownSize : static_cast<std::uint32_t>(count));
+            file->writeAt(factAt, length.data(), length.size(), error);
+        }
+    }
+
+    void flushFile(std::error_code& error) override
+    {
+        writeSizes(error);
+        if (!error)
+            file->sync(error);
+    }
+
+    void finishFile(std::error_code& error) override
+    {
+        writeSizes(error);
 
         std::error_code closing;
         file->close(closing);

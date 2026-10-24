@@ -139,3 +139,30 @@ TEST_CASE("An AIFF cut short reads to its last whole frame")
     CHECK(reader->info().frames == 499);
     CHECK(pattern::readAll(*reader)[0][498] == samples[498]);
 }
+
+TEST_CASE("An AIFF flushed has the sizes and length of the samples so far in its header")
+{
+    ScratchFolder folder;
+    const auto file = folder.path / "flushed.aiff";
+    const float samples[7]{0.5f, -0.5f, 0.25f, 0.75f, -1.0f, 0.125f, -0.125f};
+    const float* first[1]{samples};
+    const float* rest[1]{samples + 5};
+
+    // 24-bit mono, so five samples and seven are each followed by a pad byte.
+    auto writer = files::createAudio(file, {"AIFF", 44100, 1, 24, false, 0, {}});
+    writer->write(first, 5);
+    writer->flush();
+    auto bytes = files::read(file);
+    CHECK(big32(bytes, 4) == bytes.size() - 8);
+    CHECK(big32(bytes, 22) == 5);
+    CHECK(big32(bytes, 42) == 8 + 15);
+    CHECK(bytes.size() % 2 == 0);
+
+    writer->write(rest, 2);
+    writer->flush();
+    bytes = files::read(file);
+    CHECK(big32(bytes, 4) == bytes.size() - 8);
+    CHECK(big32(bytes, 22) == 7);
+    CHECK(big32(bytes, 42) == 8 + 21);
+    CHECK(pattern::readAll(*files::openAudio(file))[0] == std::vector<float>(samples, samples + 7));
+}

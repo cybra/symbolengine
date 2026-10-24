@@ -247,6 +247,38 @@ TEST_CASE("A WAV's samples of odd length are followed by a pad byte the sizes le
     CHECK(pattern::readAll(*reader)[0] == std::vector<float>{0.25f, -0.5f, 0.75f});
 }
 
+TEST_CASE("A WAV flushed has the sizes of the samples so far in its header, and the next samples go on after them")
+{
+    ScratchFolder folder;
+    const auto file = folder.path / "flushed.wav";
+    const float samples[5]{0.25f, -0.5f, 0.75f, 0.125f, -0.25f};
+    const float* first[1]{samples};
+    const float* rest[1]{samples + 3};
+
+    // 8-bit mono, so three samples are followed by a pad byte, which the next two write over.
+    auto writer = files::createAudio(file, {"WAV", 48000, 1, 8, false, 0, {}});
+    writer->write(first, 3);
+    writer->flush();
+    auto bytes = files::read(file);
+    CHECK(bytes.size() == 80 + 4);
+    CHECK(little32(bytes, 4) == bytes.size() - 8);
+    CHECK(little32(bytes, 76) == 3);
+
+    writer->write(rest, 2);
+    writer->flush();
+    bytes = files::read(file);
+    CHECK(bytes.size() == 80 + 6);
+    CHECK(little32(bytes, 4) == bytes.size() - 8);
+    CHECK(little32(bytes, 76) == 5);
+    CHECK(pattern::readAll(*files::openAudio(file))[0] == std::vector<float>(samples, samples + 5));
+
+    // A float WAV's fact chunk has its length so far too.
+    auto floats = files::createAudio(folder.path / "floats.wav", {"WAV", 48000, 1, 32, true, 0, {}});
+    floats->write(first, 3);
+    floats->flush();
+    CHECK(little32(files::read(folder.path / "floats.wav"), 82) == 3);
+}
+
 // Writes a file past 4 GB, which becomes RF64; hidden, as it takes a while and 4 GB of disk. Run it with its tag.
 TEST_CASE("A WAV past 4 GB becomes RF64 and reads back whole", "[.big]")
 {
@@ -278,4 +310,53 @@ TEST_CASE("A WAV past 4 GB becomes RF64 and reads back whole", "[.big]")
     const auto last = (frames - 10) % block;
     CHECK(left[0] == samples[last]);
     CHECK(right[9] == samples[(frames - 1) % block]);
+}
+
+// Flushes a file past 4 GB, which becomes RF64 before it is finished; hidden as the one above is.
+TEST_CASE("A WAV flushed past 4 GB becomes RF64 in place, and reads whole while it is still being written", "[.big]")
+{
+    ScratchFolder folder;
+    const auto file = folder.path / "big.wav";
+    constexpr std::size_t block = 1 << 16;
+    std::vector<float> samples(block);
+    for (std::size_t i = 0; i < block; ++i)
+        samples[i] = static_cast<float>(pattern::whole(i, 0, 16)) / 32768.0f;
+    const float* channels[2]{samples.data(), samples.data()};
+
+    const auto little64 = [](const std::string& bytes, std::size_t at)
+    { return static_cast<std::uint64_t>(little32(bytes, at)) | static_cast<std::uint64_t>(little32(bytes, at + 4)) << 32; };
+    const auto start = [&]
+    {
+        std::string bytes(48, '\0');
+        std::ifstream(file, std::ios::binary).read(bytes.data(), 48);
+        return bytes;
+    };
+
+    // 4.1 GB of 16-bit stereo.
+    const std::uint64_t frames = 1'100'000'000;
+    auto writer = files::createAudio(file, {"WAV", 48000, 2, 16, false, 0, {}});
+    for (std::uint64_t done = 0; done < frames; done += block)
+        writer->write(channels, static_cast<std::size_t>(std::min<std::uint64_t>(block, frames - done)));
+    writer->flush();
+
+    auto bytes = start();
+    CHECK(bytes.substr(0, 4) == "RF64");
+    CHECK(little32(bytes, 4) == 0xFFFFFFFF);
+    CHECK(bytes.substr(12, 4) == "ds64");
+    CHECK(little64(bytes, 20) == std::filesystem::file_size(file) - 8);
+    CHECK(little64(bytes, 28) == frames * 4);
+    CHECK(little64(bytes, 36) == frames);
+    CHECK(files::openAudio(file)->info().frames == frames);
+
+    writer->write(channels, 10);
+    writer->flush();
+    bytes = start();
+    CHECK(little64(bytes, 28) == (frames + 10) * 4);
+    const auto reader = files::openAudio(file);
+    REQUIRE(reader->info().frames == frames + 10);
+    std::vector<float> left(10), right(10);
+    float* out[2]{left.data(), right.data()};
+    CHECK(reader->read(frames, out, 10) == 10);
+    CHECK(left == std::vector<float>(samples.begin(), samples.begin() + 10));
+    writer->finish();
 }

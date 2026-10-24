@@ -133,6 +133,13 @@ public:
     void write(const float* const* channels, std::size_t frames);
     void write(const float* const* channels, std::size_t frames, std::error_code& error);
 
+    /** For a WAV or an AIFF, writes the file's header for the samples so far and has the system put the file on disk,
+        so the file reads to here if writing stops before finish(), as when the program or the computer does; a WAV
+        past 4 GB becomes RF64. A FLAC, Ogg Vorbis or Opus file is whole once finished, and this does nothing for it.
+        Throws or sets the std::error_code given as write() does. */
+    void flush();
+    void flush(std::error_code& error);
+
     /** Writes the file's header for its final length and closes it. A WAV past 4 GB becomes RF64. Throws or sets the
         std::error_code given as write() does; an AIFF can't pass 4 GB, and fails with AudioFileError::tooLong. */
     void finish();
@@ -142,6 +149,7 @@ protected:
     AudioFileWriter() = default;
 
     virtual void writeFrames(const float* const* channels, std::size_t frames, std::error_code& error) = 0;
+    virtual void flushFile(std::error_code&) {}
     virtual void finishFile(std::error_code& error) = 0;
 
     AudioFileSettings written{};

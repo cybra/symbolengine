@@ -89,6 +89,11 @@ std::int64_t wholeFor(float sample, int bits) noexcept
     return static_cast<std::int64_t>(std::nearbyint(scaled));
 }
 
+float readsBackAs(float sample, int bits) noexcept
+{
+    return static_cast<float>(wholeFor(sample, bits)) * (1.0f / static_cast<float>(std::int64_t{1} << (bits - 1)));
+}
+
 namespace
 {
 void putLittle(unsigned char* p, std::uint64_t value, int bytes) noexcept

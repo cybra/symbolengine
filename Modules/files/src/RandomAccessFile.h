@@ -33,6 +33,9 @@ public:
     /** Writes count bytes at the place given, all of them or an error. */
     void writeAt(std::uint64_t at, const void* bytes, std::size_t count, std::error_code& error);
 
+    /** Has the system put everything written so far on disk. */
+    void sync(std::error_code& error);
+
     /** Closes it, saying whether that went wrong; letting go of it closes it too. */
     void close(std::error_code& error);
 

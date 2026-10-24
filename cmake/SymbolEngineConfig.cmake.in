@@ -1,5 +1,9 @@
 @PACKAGE_INIT@
 
+# The files module starts threads of its own.
+include(CMakeFindDependencyMacro)
+find_dependency(Threads)
+
 include("${CMAKE_CURRENT_LIST_DIR}/SymbolEngineTargets.cmake")
 
 set(_symbolengine_modules @SYMBOLENGINE_MODULE_LIST@)

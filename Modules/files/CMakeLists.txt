@@ -13,10 +13,15 @@ else()
     list(APPEND libraries m)
 endif()
 
+# BackgroundAudioWriter's thread.
+find_package(Threads REQUIRED)
+list(APPEND libraries Threads::Threads)
+
 symbolengine_add_module(files
     SOURCES
         src/AudioFile.cpp
         src/Aiff.cpp
+        src/BackgroundAudioWriter.cpp
         src/BroadcastWave.cpp
         src/Flac.cpp
         src/Mp3.cpp
@@ -39,6 +44,7 @@ if(SYMBOLENGINE_TESTS)
     symbolengine_add_tests(files SOURCES
         Tests/AiffTests.cpp
         Tests/AudioFileTests.cpp
+        Tests/BackgroundAudioWriterTests.cpp
         Tests/BroadcastWaveTests.cpp
         Tests/CodecTests.cpp
         Tests/Mp3Tests.cpp

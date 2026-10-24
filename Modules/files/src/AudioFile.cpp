@@ -52,6 +52,26 @@ void AudioFileWriter::write(const float* const* channels, std::size_t frames)
         throw std::filesystem::filesystem_error("can't write the audio file", path, error);
 }
 
+void AudioFileWriter::flush(std::error_code& error)
+{
+    error.clear();
+    if (finished)
+    {
+        error = std::make_error_code(std::errc::bad_file_descriptor);
+        return;
+    }
+
+    flushFile(error);
+}
+
+void AudioFileWriter::flush()
+{
+    std::error_code error;
+    flush(error);
+    if (error)
+        throw std::filesystem::filesystem_error("can't write the audio file", path, error);
+}
+
 void AudioFileWriter::finish(std::error_code& error)
 {
     error.clear();

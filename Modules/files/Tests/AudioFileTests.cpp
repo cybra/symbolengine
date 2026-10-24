@@ -232,5 +232,7 @@ TEST_CASE("A finished writer writes nothing more")
     std::error_code error;
     writer->write(channels, 1, error);
     CHECK(error);
+    writer->flush(error);
+    CHECK(error);
     CHECK(files::openAudio(folder.path / "done.wav")->info().frames == 1);
 }

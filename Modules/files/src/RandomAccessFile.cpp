@@ -111,6 +111,12 @@ void RandomAccessFile::writeAt(std::uint64_t at, const void* bytes, std::size_t 
     }
 }
 
+void RandomAccessFile::sync(std::error_code& error)
+{
+    if (!FlushFileBuffers(handle->file))
+        error = lastError();
+}
+
 void RandomAccessFile::close(std::error_code& error)
 {
     if (handle->file != INVALID_HANDLE_VALUE && !CloseHandle(handle->file))
@@ -207,6 +213,17 @@ void RandomAccessFile::writeAt(std::uint64_t at, const void* bytes, std::size_t 
         }
         done += static_cast<std::size_t>(put);
     }
+}
+
+void RandomAccessFile::sync(std::error_code& error)
+{
+    int result = 0;
+    do
+        result = fsync(handle->file);
+    while (result != 0 && errno == EINTR);
+
+    if (result != 0)
+        error = lastError();
 }
 
 void RandomAccessFile::close(std::error_code& error)

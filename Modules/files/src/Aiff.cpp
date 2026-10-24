@@ -221,7 +221,8 @@ private:
             dataBytes += scratch.size();
     }
 
-    void finishFile(std::error_code& error) override
+    // The sizes for the samples so far, after the pad byte samples of odd length need, which the next samples write over.
+    void writeSizes(std::error_code& error)
     {
         auto end = dataStart + dataBytes;
         if (dataBytes % 2 != 0)
@@ -243,6 +244,18 @@ private:
         put(4, end - 8);
         put(framesAt, count);
         put(soundSizeAt, 8 + dataBytes);
+    }
+
+    void flushFile(std::error_code& error) override
+    {
+        writeSizes(error);
+        if (!error)
+            file->sync(error);
+    }
+
+    void finishFile(std::error_code& error) override
+    {
+        writeSizes(error);
 
         std::error_code closing;
         file->close(closing);
