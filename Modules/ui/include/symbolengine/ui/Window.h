@@ -39,9 +39,9 @@ enum class Appearance
     dark
 };
 
-/** A window of the program's own, with the system's title bar and its close and minimize buttons, holding one native
-    view, such as a WebView's, which fills it. Its size and place are those of what it holds, the title bar left out.
-    Made, used and destroyed on the message thread. */
+/** A window of the program's own, with the system's title bar and its close and minimize buttons, and its maximize
+    button if asked for, holding one native view, such as a WebView's, which fills it. Its size and place are those of
+    what it holds, the title bar left out. Made, used and destroyed on the message thread. */
 class Window
 {
 public:
@@ -51,6 +51,9 @@ public:
         Size size{800, 600};
         Size minimumSize{100, 100};
         bool resizable = true;
+
+        /** With the maximize button: a Mac's green button, which takes the window full screen, and Windows'. */
+        bool maximizable = false;
 
         /** What shows where the view hasn't drawn, as 0xRRGGBB, such as while the window is being resized. */
         std::uint32_t background = 0x000000;
@@ -79,7 +82,7 @@ public:
     /** Whether it has the keyboard. */
     bool isActive() const;
 
-    bool isMinimised() const;
+    bool isMinimized() const;
 
     /** Keeps it above every other program's windows, or lets it go behind them again. */
     void setAlwaysOnTop(bool onTop);
@@ -104,7 +107,7 @@ public:
     void setBounds(Bounds bounds);
 
     /** Puts it in the middle of the main screen, at its size. */
-    void centre();
+    void center();
 
     /** The NSWindow on a Mac, and the HWND on Windows. */
     void* nativeHandle() const;

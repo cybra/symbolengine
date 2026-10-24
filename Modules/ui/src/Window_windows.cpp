@@ -25,9 +25,10 @@ constexpr UINT closeButtonPressed = WM_APP + 0x5E01;
 // DWMWA_USE_IMMERSIVE_DARK_MODE, which only the newer SDKs name: a dark title bar, from Windows 10's 20H1 on.
 constexpr DWORD darkTitleBar = 20;
 
-constexpr DWORD windowStyle(bool resizable)
+constexpr DWORD windowStyle(bool resizable, bool maximizable)
 {
-    return WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN | (resizable ? WS_THICKFRAME : 0u);
+    return WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN | (resizable ? WS_THICKFRAME : 0u) |
+           (resizable && maximizable ? WS_MAXIMIZEBOX : 0u);
 }
 
 std::wstring wide(const std::string& text)
@@ -254,7 +255,7 @@ Window::Window(Options options) : impl(std::make_unique<Impl>())
     auto& w = *impl;
     w.owner = this;
     w.minimum = options.minimumSize;
-    w.style = windowStyle(options.resizable);
+    w.style = windowStyle(options.resizable, options.maximizable);
     w.background = CreateSolidBrush(RGB((options.background >> 16) & 0xFF, (options.background >> 8) & 0xFF,
                                         options.background & 0xFF));
 
@@ -268,7 +269,7 @@ Window::Window(Options options) : impl(std::make_unique<Impl>())
                                nullptr, nullptr, module, impl.get());
     w.applyAppearance();
     setSize(options.size);
-    centre();
+    center();
 }
 
 Window::~Window()
@@ -328,7 +329,7 @@ bool Window::isActive() const
     return GetForegroundWindow() == impl->window;
 }
 
-bool Window::isMinimised() const
+bool Window::isMinimized() const
 {
     return IsIconic(impl->window) != FALSE;
 }
@@ -393,7 +394,7 @@ void Window::setBounds(Bounds bounds)
     w.place(Impl::fitted(w.frameFor({bounds.x, bounds.y, bounds.x + bounds.width, bounds.y + bounds.height}, dpi)));
 }
 
-void Window::centre()
+void Window::center()
 {
     auto& w = *impl;
     RECT frame{};

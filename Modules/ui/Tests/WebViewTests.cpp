@@ -121,10 +121,10 @@ void setVariable(const char* name, const char* value)
 }
 
 #if defined(__APPLE__)
-// The colour of the pixel in the middle of a PNG, as red, green and blue from 0 to 255.
-std::array<int, 3> centreOf(const std::filesystem::path& png)
+// The color of the pixel in the middle of a PNG, as red, green and blue from 0 to 255.
+std::array<int, 3> centerOf(const std::filesystem::path& png)
 {
-    std::array<int, 3> colour{-1, -1, -1};
+    std::array<int, 3> color{-1, -1, -1};
     const auto path = png.string();
     CFURLRef url = CFURLCreateFromFileSystemRepresentation(nullptr, reinterpret_cast<const UInt8*>(path.c_str()),
                                                            static_cast<CFIndex>(path.size()), false);
@@ -139,7 +139,7 @@ std::array<int, 3> centreOf(const std::filesystem::path& png)
             CGBitmapContextCreate(pixel, 1, 1, 8, 4, space, static_cast<CGBitmapInfo>(kCGImageAlphaPremultipliedLast));
         const auto w = static_cast<CGFloat>(CGImageGetWidth(image)), h = static_cast<CGFloat>(CGImageGetHeight(image));
         CGContextDrawImage(context, CGRectMake(-w / 2, -h / 2, w, h), image);
-        colour = {pixel[0], pixel[1], pixel[2]};
+        color = {pixel[0], pixel[1], pixel[2]};
         CGContextRelease(context);
         CGColorSpaceRelease(space);
         CGImageRelease(image);
@@ -148,7 +148,7 @@ std::array<int, 3> centreOf(const std::filesystem::path& png)
     if (source != nullptr)
         CFRelease(source);
     CFRelease(url);
-    return colour;
+    return color;
 }
 #endif
 }
@@ -284,10 +284,10 @@ TEST_CASE("A snapshot saves the page as it is drawn")
     });
 
     REQUIRE(written);
-    const auto colour = centreOf(png);
-    CHECK(colour[0] > 240);   // red
-    CHECK(colour[1] < 20);
-    CHECK(colour[2] < 20);
+    const auto color = centerOf(png);
+    CHECK(color[0] > 240);   // red
+    CHECK(color[1] < 20);
+    CHECK(color[2] < 20);
 
     std::error_code ignored;
     std::filesystem::remove(png, ignored);

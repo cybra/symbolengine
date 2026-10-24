@@ -72,6 +72,17 @@ void pressCloseButton(ui::Window& window)
 #endif
 }
 
+// Whether its maximize button is there and works.
+bool canMaximize(ui::Window& window)
+{
+#if defined(__APPLE__)
+    const auto zoom = choc::objc::call<id>(static_cast<id>(window.nativeHandle()), "standardWindowButton:", 2);
+    return zoom != nullptr && choc::objc::call<BOOL>(zoom, "isEnabled");
+#else
+    return (GetWindowLongPtrW(static_cast<HWND>(window.nativeHandle()), GWL_STYLE) & WS_MAXIMIZEBOX) != 0;
+#endif
+}
+
 bool seeThrough(ui::Window& window)
 {
 #if defined(__APPLE__)
@@ -144,6 +155,16 @@ TEST_CASE("A window is held to its smallest size, and a place kept for it to a s
     const auto area = window.workArea();
     CHECK(area.width >= rescued.width);
     CHECK(area.height >= rescued.height);
+}
+
+TEST_CASE("A window has a maximize button only if asked for")
+{
+    choc::messageloop::initialise();
+
+    ui::Window plain({.size = {300, 200}});
+    ui::Window maximizable({.size = {300, 200}, .maximizable = true});
+    CHECK(!canMaximize(plain));
+    CHECK(canMaximize(maximizable));
 }
 
 TEST_CASE("The close button leaves the window to the program, which may let go of it then")

@@ -33,7 +33,7 @@ Bounds fromAppKit(NSRect r)
             static_cast<int>(std::lround(r.size.width)), static_cast<int>(std::lround(r.size.height))};
 }
 
-NSColor* colourOf(std::uint32_t rgb)
+NSColor* colorOf(std::uint32_t rgb)
 {
     return [NSColor colorWithSRGBRed:((rgb >> 16) & 0xFF) / 255.0
                                green:((rgb >> 8) & 0xFF) / 255.0
@@ -153,9 +153,12 @@ Window::Window(Options options) : impl(std::make_unique<Impl>())
                                                defer:NO];
     w.window.releasedWhenClosed = NO;
     w.window.tabbingMode = NSWindowTabbingModeDisallowed;
-    w.window.backgroundColor = colourOf(options.background);
+    w.window.backgroundColor = colorOf(options.background);
     w.window.contentMinSize = NSMakeSize(w.minimum.width, w.minimum.height);
-    [[w.window standardWindowButton:NSWindowZoomButton] setEnabled:NO];
+    if (options.resizable && options.maximizable)
+        w.window.collectionBehavior |= NSWindowCollectionBehaviorFullScreenPrimary;
+    else
+        [[w.window standardWindowButton:NSWindowZoomButton] setEnabled:NO];
     setTitle(options.title);
 
     w.container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, size.width, size.height)];
@@ -188,7 +191,7 @@ Window::Window(Options options) : impl(std::make_unique<Impl>())
           owner->onMovedOrResized();
     });
 
-    centre();
+    center();
 }
 
 Window::~Window()
@@ -265,7 +268,7 @@ bool Window::isActive() const
     return impl->window.keyWindow;
 }
 
-bool Window::isMinimised() const
+bool Window::isMinimized() const
 {
     return impl->window.miniaturized;
 }
@@ -325,7 +328,7 @@ void Window::setBounds(Bounds bounds)
     [w.window setFrame:frame display:YES];
 }
 
-void Window::centre()
+void Window::center()
 {
     auto& w = *impl;
     NSScreen* screen = mainScreen();
