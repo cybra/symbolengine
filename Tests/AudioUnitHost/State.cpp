@@ -187,13 +187,19 @@ int main(int argc, char** argv)
     check(waited < std::chrono::seconds(1), "Set just after a render: the state came within a second");
 
     // While a host plays, rendering a block every 2 ms on its own thread: the state has the value, and no block came out
-    // silent, as one would if saving held up a render. Each channel comes out marked with its speaker, never 0.
+    // silent, as one would if saving held up a render. Each channel comes out marked with its speaker, never 0. A save
+    // waits for the next render only while the host rendered within the last three blocks, so a block after the host
+    // itself went more than two blocks' time without one, as a busy machine can make it, is counted apart.
     std::atomic<bool> playing{true};
-    std::atomic<int> blocks{0}, silent{0};
+    std::atomic<int> blocks{0}, silent{0}, afterLate{0};
+    const auto lateAfter = std::chrono::duration<double>(2.0 * frames / format.mSampleRate);
     std::thread host([&] {
         auto stamp = time;
+        auto lastEnded = std::chrono::steady_clock::time_point{};
         while (playing)
         {
+            const auto started = std::chrono::steady_clock::now();
+            const auto late = lastEnded != std::chrono::steady_clock::time_point{} && started - lastEnded > lateAfter;
             stamp.mSampleTime += frames;
             AudioUnitRenderActionFlags playFlags = 0;
             if (AudioUnitRender(unit, &playFlags, &stamp, 0, frames, output) == noErr)
@@ -205,8 +211,9 @@ int main(int argc, char** argv)
                     const auto* got = static_cast<const float*>(output->mBuffers[channel].mData);
                     quiet |= std::any_of(got, got + frames, [](float value) { return value == 0.0f; });
                 }
-                silent += quiet ? 1 : 0;
+                (late ? afterLate : silent) += quiet ? 1 : 0;
             }
+            lastEnded = std::chrono::steady_clock::now();
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
     });
@@ -217,7 +224,8 @@ int main(int argc, char** argv)
     playing = false;
     host.join();
     check(blocks > 10 && silent == 0, "Set while playing: " + std::to_string(blocks.load()) + " blocks rendered, " +
-                                          std::to_string(silent.load()) + " of them silent");
+                                          std::to_string(silent.load()) + " of them silent, and " +
+                                          std::to_string(afterLate.load()) + " silent after the host was late");
 
     // Uninitialized again, as a host may save it.
     AudioUnitUninitialize(unit);
