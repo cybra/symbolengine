@@ -13,12 +13,31 @@
         look();
     });
 
+    // Calls whose answers come later, by number, each waiting from before it is made, so an answer that comes before
+    // the call's own reply still finds it.
+    let calls = 0;
+    const later = new Map();
+
     const callNative = async (name, args) => {
         await bound;
-        const reply = JSON.parse(await window.__symbolengine_call(name, JSON.stringify(args)));
+        const number = ++calls;
+        const answer = new Promise((resolve, reject) => later.set(number, { resolve, reject }));
+        const reply = JSON.parse(await window.__symbolengine_call(name, JSON.stringify(args), number));
+        if (reply.later)
+            return answer;
+        later.delete(number);
         if ("error" in reply)
             throw new Error(reply.error);
         return reply.value;
+    };
+
+    window.__symbolengine_answer = (number, reply) => {
+        const waiting = later.get(number);
+        later.delete(number);
+        if (waiting && "error" in reply)
+            waiting.reject(new Error(reply.error));
+        else if (waiting)
+            waiting.resolve(reply.value);
     };
 
     window.__symbolengine_receive = (event, data) => {

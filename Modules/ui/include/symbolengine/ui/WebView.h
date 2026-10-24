@@ -78,6 +78,14 @@ public:
         the call's promise gives the page; an exception it throws rejects the promise with the exception's message. */
     void expose(std::string name, std::function<Value(const Value& arguments)> function);
 
+    /** A function's answer, given once, on the message thread, when it is known. */
+    using Reply = std::function<void(const Value& answer)>;
+
+    /** Adds a function whose answer comes later, as after a dialog: the page's promise waits until the function calls
+        reply, which it may do before it returns or at any time after. Only the first answer counts, and one given
+        after the web view has gone goes nowhere. */
+    void exposeLater(std::string name, std::function<void(const Value& arguments, Reply reply)> function);
+
     /** Sends an event to the page's handlers for it. */
     void send(std::string_view event, const Value& data);
 

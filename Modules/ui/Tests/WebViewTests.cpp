@@ -16,6 +16,7 @@
 
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -181,6 +182,46 @@ TEST_CASE("A page loads its files and talks to the native side both ways")
     CHECK(reports.at("missing").stringOr("") != "200");
     REQUIRE(reports.contains("early"));
     CHECK(reports.at("early")["held"].boolOr(false));
+}
+
+TEST_CASE("A function's answer can come later, after the call has returned, and only the first counts")
+{
+    const auto page = pageWith(R"js(
+(async () => {
+    const [now, soon, twice] = await Promise.all([symbolengine.call("now", 1), symbolengine.call("soon", 2),
+                                                  symbolengine.call("twice", 3)]);
+    await symbolengine.call("report", "answers", [now, soon, twice]);
+    try {
+        await symbolengine.call("throws");
+    } catch (error) {
+        await symbolengine.call("report", "throws", error.message);
+    }
+    await symbolengine.call("done");
+})();
+)js");
+
+    ui::WebView::Reply waiting;
+    std::unique_ptr<choc::messageloop::Timer> answerSoon;
+    const auto reports = runPage({.resources = onePage(page)}, [&](ui::WebView& view) {
+        // Answered before the function returns, after it, and twice.
+        view.exposeLater("now", [](const Value& arguments, ui::WebView::Reply reply) { reply(arguments[0].asInt() * 10); });
+        view.exposeLater("soon", [&](const Value& arguments, ui::WebView::Reply reply) {
+            waiting = [reply, value = arguments[0].asInt() * 10](const Value&) { reply(value); };
+            answerSoon = std::make_unique<choc::messageloop::Timer>(200, [&] {
+                waiting(Value());
+                return false;
+            });
+        });
+        view.exposeLater("twice", [](const Value& arguments, ui::WebView::Reply reply) {
+            reply(arguments[0].asInt() * 10);
+            reply(-1);
+        });
+        view.exposeLater("throws", [](const Value&, ui::WebView::Reply) { throw std::runtime_error("no answer"); });
+    });
+
+    REQUIRE(reports.contains("answers"));
+    CHECK(json::write(reports.at("answers")) == "[10,20,30]");
+    CHECK(reports.at("throws").stringOr("") == "no answer");
 }
 
 TEST_CASE("Pages with different names keep what they store apart, and pages with the same name share it")

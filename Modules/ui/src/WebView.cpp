@@ -7,6 +7,7 @@
 #include <choc/gui/choc_WebView.h>
 
 #include <map>
+#include <memory>
 #include <vector>
 
 namespace symbolengine::ui::detail
@@ -67,8 +68,12 @@ struct WebView::Impl
     Options options;
     std::unique_ptr<choc::ui::WebView> view;
     std::map<std::string, std::function<Value(const Value&)>, std::less<>> functions;
+    std::map<std::string, std::function<void(const Value&, Reply)>, std::less<>> laterFunctions;
     std::vector<std::string> waiting;   // scripts held until the page is ready
     bool ready = false;
+
+    // Held by each answer still to come, which goes nowhere once the web view has gone.
+    std::shared_ptr<Impl*> self = std::make_shared<Impl*>(this);
 
     std::optional<choc::ui::WebView::Options::Resource> fetch(const std::string& requested) const
     {
@@ -91,9 +96,10 @@ struct WebView::Impl
                                                     found->mimeType.empty() ? mimeTypeFor(path) : found->mimeType);
     }
 
-    // The one native function the page's script calls: a function's name, and its arguments as JSON. The reply is
-    // JSON too, {"value": ...} or {"error": "..."}.
-    std::string call(std::string_view name, std::string_view arguments)
+    // The one native function the page's script calls: a function's name, its arguments as JSON, and the call's number.
+    // The reply is JSON too, {"value": ...} or {"error": "..."}, or {"later": true} for an answer that comes later as
+    // the same, through window.__symbolengine_answer with the call's number.
+    std::string call(std::string_view name, std::string_view arguments, std::int64_t number)
     {
         try
         {
@@ -103,6 +109,20 @@ struct WebView::Impl
                 for (const auto& script : std::exchange(waiting, {}))
                     view->evaluateJavascript(script);
                 return json::write(Object{{"value", nullptr}});
+            }
+
+            if (const auto later = laterFunctions.find(name); later != laterFunctions.end())
+            {
+                std::weak_ptr<Impl*> alive = self;
+                auto answered = std::make_shared<bool>(false);
+                later->second(json::parse(arguments), [alive, answered, number](const Value& answer) {
+                    const auto impl = alive.lock();
+                    if (impl == nullptr || std::exchange(*answered, true))
+                        return;
+                    (*impl)->run("window.__symbolengine_answer(" + json::write(Value(number)) + ", " +
+                                 json::write(Object{{"value", answer}}) + ");");
+                });
+                return json::write(Object{{"later", true}});
             }
 
             const auto function = functions.find(name);
@@ -140,10 +160,11 @@ WebView::WebView(Options options) : impl(std::make_unique<Impl>(std::move(option
     // native function is bound when the view says it is ready; on a Mac that is while it is being made.
     settings.webviewIsReady = [this](choc::ui::WebView& view) {
         view.bind("__symbolengine_call", [this](const choc::value::ValueView& arguments) -> choc::value::Value {
-            if (!arguments.isArray() || arguments.size() != 2)
+            if (!arguments.isArray() || arguments.size() != 3)
                 return choc::value::createString(json::write(Object{{"error", "the call wasn't made as expected"}}));
-            return choc::value::createString(
-                impl->call(arguments[0].getWithDefault<std::string>({}), arguments[1].getWithDefault<std::string>({})));
+            return choc::value::createString(impl->call(arguments[0].getWithDefault<std::string>({}),
+                                                        arguments[1].getWithDefault<std::string>({}),
+                                                        arguments[2].getWithDefault<std::int64_t>(0)));
         });
     };
 
@@ -174,7 +195,14 @@ bool WebView::pageReady() const noexcept
 
 void WebView::expose(std::string name, std::function<Value(const Value& arguments)> function)
 {
+    impl->laterFunctions.erase(name);
     impl->functions.insert_or_assign(std::move(name), std::move(function));
+}
+
+void WebView::exposeLater(std::string name, std::function<void(const Value& arguments, Reply reply)> function)
+{
+    impl->functions.erase(name);
+    impl->laterFunctions.insert_or_assign(std::move(name), std::move(function));
 }
 
 void WebView::send(std::string_view event, const Value& data)
