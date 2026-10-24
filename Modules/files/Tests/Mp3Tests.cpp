@@ -5,8 +5,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <iterator>
+#include <string>
 
 using namespace symbolengine;
 using pattern::reference;
@@ -19,6 +22,15 @@ constexpr std::size_t lameDelay = 576 + 529;
 std::vector<float> from(const std::vector<float>& channel, std::size_t first, std::size_t frames)
 {
     return {channel.begin() + static_cast<std::ptrdiff_t>(first), channel.begin() + static_cast<std::ptrdiff_t>(first + frames)};
+}
+
+// The loudest of a channel's first samples, which the encoder's delay keeps near silence before a tone at half scale.
+float loudestOfFirst(const std::vector<float>& channel, std::size_t frames)
+{
+    float loudest = 0.0f;
+    for (std::size_t i = 0; i < frames; ++i)
+        loudest = std::max(loudest, std::abs(channel[i]));
+    return loudest;
 }
 }
 
@@ -62,7 +74,41 @@ TEST_CASE("An MP3 without that information reads as it decodes, the encoder's an
 
     const auto samples = pattern::readAll(*reader).front();
     CHECK(pattern::toneMatch(from(samples, lameDelay, 24000), 0, 48000) > 20.0);
-    CHECK(pattern::toneMatch(from(samples, 0, 24000), 0, 48000) < 10.0);
+    CHECK(loudestOfFirst(samples, 500) < 0.05f);
+}
+
+TEST_CASE("An MP3 whose information another encoder wrote reads as it decodes, as that encoder may keep other things where LAME keeps the delay")
+{
+    ScratchFolder folder;
+    std::ifstream in(reference("tones-stereo-44100.mp3"), std::ios::binary);
+    std::string bytes{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    const auto info = bytes.find("Info");
+    const auto lame = bytes.find("LAME", info);
+    REQUIRE(info != std::string::npos);
+    REQUIRE(lame != std::string::npos);
+    REQUIRE(lame - info < 200);
+    bytes.replace(lame, 4, "GOGO");
+    const auto other = folder.path / "other.mp3";
+    std::ofstream(other, std::ios::binary).write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+
+    auto reader = files::openAudio(other);
+    const auto& found = reader->info();
+    CHECK(found.frames % 1152 == 0);
+    REQUIRE(found.frames >= 22050 + lameDelay);
+    const auto samples = pattern::readAll(*reader);
+    for (int c = 0; c < 2; ++c)
+    {
+        CAPTURE(c);
+        CHECK(pattern::toneMatch(from(samples[static_cast<std::size_t>(c)], lameDelay, 22050), c, 44100) > 20.0);
+        CHECK(loudestOfFirst(samples[static_cast<std::size_t>(c)], 500) < 0.05f);
+    }
+
+    // Stretches out of order, each the same as where it sits in the whole.
+    for (const std::uint64_t at : {15000u, 3u, 9000u, 0u})
+    {
+        CAPTURE(at);
+        CHECK(pattern::largestDifference(pattern::stretch(*reader, at, 1000), samples, at) < 1.0e-5f);
+    }
 }
 
 TEST_CASE("An MP3 cut short reads what it holds, and a file that only starts like one isn't audio")
