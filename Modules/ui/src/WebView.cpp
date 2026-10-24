@@ -121,8 +121,11 @@ struct WebView::Impl
                     const auto impl = alive.lock();
                     if (impl == nullptr || std::exchange(*answered, true))
                         return;
-                    (*impl)->run("window.__symbolengine_answer(" + json::write(Value(number)) + ", " +
-                                 json::write(Object{{"value", answer}}) + ");");
+
+                    // Not held for the page's readiness, since the page made the call and so is listening, and may be
+                    // waiting for this answer before it is ready.
+                    (*impl)->view->evaluateJavascript("window.__symbolengine_answer(" + json::write(Value(number)) + ", " +
+                                                      json::write(Object{{"value", answer}}) + ");");
                 });
                 return json::write(Object{{"later", true}});
             }

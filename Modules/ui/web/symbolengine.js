@@ -63,6 +63,10 @@
         },
     });
 
-    // Tells the native side the page is taking what it sends.
-    callNative("__ready", []);
+    // Tells the native side the page is taking what it sends, once its own scripts have run and added their handlers,
+    // so nothing the native side held for it arrives before them.
+    if (document.readyState === "loading")
+        document.addEventListener("DOMContentLoaded", () => callNative("__ready", []), { once: true });
+    else
+        callNative("__ready", []);
 })();
