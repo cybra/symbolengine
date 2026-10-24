@@ -21,10 +21,10 @@ FetchContent_Declare(symbolengine_choc
 FetchContent_MakeAvailable(symbolengine_choc)
 
 if(APPLE)
-    set(sources src/Native_mac.mm src/Snapshot_mac.mm src/Window_mac.mm)
-    set(libraries "-framework WebKit" "-framework AppKit" "-framework Foundation")
+    set(sources src/Dialogs_mac.mm src/Native_mac.mm src/Snapshot_mac.mm src/Window_mac.mm)
+    set(libraries "-framework WebKit" "-framework AppKit" "-framework Foundation" "-framework UniformTypeIdentifiers")
 else()
-    set(sources src/Native_windows.cpp src/Window_windows.cpp)
+    set(sources src/Dialogs_windows.cpp src/Native_windows.cpp src/Window_windows.cpp)
     set(libraries ole32 oleaut32 user32 shell32 version dwmapi advapi32)
 endif()
 
@@ -37,7 +37,7 @@ target_include_directories(symbolengine_ui SYSTEM PRIVATE ${symbolengine_choc_SO
 symbolengine_add_files(symbolengine_ui FOLDER web FUNCTION symbolengine_ui_bridge_files)
 
 if(SYMBOLENGINE_TESTS)
-    symbolengine_add_tests(ui SOURCES Tests/WebViewTests.cpp Tests/WindowTests.cpp)
+    symbolengine_add_tests(ui SOURCES Tests/DialogsTests.cpp Tests/WebViewTests.cpp Tests/WindowTests.cpp)
     target_include_directories(symbolengine_ui_tests SYSTEM PRIVATE ${symbolengine_choc_SOURCE_DIR})
     if(APPLE)
         target_link_libraries(symbolengine_ui_tests PRIVATE "-framework ImageIO" "-framework CoreGraphics")

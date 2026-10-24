@@ -56,7 +56,8 @@
 - [ ] files: libvorbis' own `vorbisenc.c` again once Xiph.Org takes the fix for its 5.1 encoder's leak ([the report](Upstream/libvorbis-51-residue-leak.md)).
 - [x] ui: the web view on Mac and Windows, with pages served from files built into the program, and calls and events between page and native code.
 - [x] ui: a program's own windows holding a page, sized alike on every screen, their places held to a screen, see-through until the page draws; functions a page calls that answer later; WebView2 given the keyboard with its window.
-- [ ] ui and app: native menus, dialogs, file choosers, drag and drop, clipboard, keyboard, one instance, worker processes; Linux's web view.
+- [x] ui: the system's own dialogs, questions with buttons of the program's naming and choosers for files and folders.
+- [ ] ui and app: native menus, drag and drop, clipboard, keyboard, one instance, worker processes; Linux's web view.
 
 ## Phase 3: Devices
 
