@@ -114,11 +114,25 @@ TEST_CASE("An RF64 file's sizes come from its ds64 chunk, which isn't kept with 
         CHECK((chunk.id != "ds64" && chunk.id != "JUNK" && chunk.id != "fmt " && chunk.id != "data"));
 }
 
-TEST_CASE("A WAV whose samples are compressed is said to be stored in a way that can't be read")
+TEST_CASE("A WAV whose samples are compressed is read by the Mac's decoder, and is said elsewhere to be stored in a way that can't be read")
 {
     std::error_code error;
-    CHECK(files::openAudio(reference("adpcm-mono-44100.wav"), error) == nullptr);
+    auto reader = files::openAudio(reference("adpcm-mono-44100.wav"), error);
+#if defined(__APPLE__)
+    REQUIRE(reader != nullptr);
+    CHECK(!error);
+    CHECK(reader->info().format == "WAV");
+    CHECK(reader->info().channels == 1);
+    CHECK(reader->info().sampleRate == 44100);
+
+    // Microsoft's ADPCM keeps its samples in blocks of 1018, the last filled out.
+    REQUIRE(reader->info().frames == 2036);
+    const auto samples = pattern::readAll(*reader).front();
+    CHECK(std::any_of(samples.begin(), samples.end(), [](float sample) { return std::abs(sample) > 0.1f; }));
+#else
+    CHECK(reader == nullptr);
     CHECK(error == AudioFileError::unsupported);
+#endif
 }
 
 TEST_CASE("A WAV cut short reads to its last whole frame, and one saying no size reads to its end")

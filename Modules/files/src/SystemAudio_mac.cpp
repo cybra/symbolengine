@@ -7,8 +7,9 @@
 #include <algorithm>
 #include <cstddef>
 
-// MPEG-4 audio, CAF and ADTS through Apple's AudioToolbox: ExtAudioFile decodes AAC, ALAC and the rest, leaving out
-// AAC's priming samples where the file says how many there are, and gives each channel in WAV's order.
+// MPEG-4 audio, CAF, ADTS, and WAV and AIFF-C coded in ways of their own, through Apple's AudioToolbox: ExtAudioFile
+// decodes AAC, ALAC, ADPCM and the rest, leaving out AAC's priming samples where the file says how many there are, and
+// gives each channel in WAV's order.
 namespace symbolengine::detail
 {
 
@@ -33,9 +34,15 @@ public:
     SystemReader(std::unique_ptr<RandomAccessFile> f, const std::filesystem::path& p, SystemFormat kind) : file(std::move(f))
     {
         path = p;
-        information.format = kind == SystemFormat::caf ? "CAF" : kind == SystemFormat::adts ? "AAC" : "M4A";
         stream.file = file.get();
-        hint = kind == SystemFormat::caf ? kAudioFileCAFType : kind == SystemFormat::adts ? kAudioFileAAC_ADTSType : kAudioFileM4AType;
+        switch (kind)
+        {
+            case SystemFormat::mpeg4: information.format = "M4A"; hint = kAudioFileM4AType; break;
+            case SystemFormat::caf: information.format = "CAF"; hint = kAudioFileCAFType; break;
+            case SystemFormat::adts: information.format = "AAC"; hint = kAudioFileAAC_ADTSType; break;
+            case SystemFormat::wav: information.format = "WAV"; hint = kAudioFileWAVEType; break;
+            case SystemFormat::aiff: information.format = "AIFF"; hint = kAudioFileAIFCType; break;
+        }
     }
 
     ~SystemReader() override

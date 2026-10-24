@@ -126,7 +126,6 @@ Mp4Audio readMovie(const unsigned char* moov, std::size_t size, double rate)
 {
     Mp4Audio audio;
     const auto movieScale = scaleOf(find(moov, size, "mvhd"));
-    auto edited = false;
     auto found = false;
 
     eachBox(moov, size, [&](const Box& track) {
@@ -156,7 +155,7 @@ Mp4Audio readMovie(const unsigned char* moov, std::size_t size, double rate)
                     audio.priming = framesFor(static_cast<double>(start), mediaScale, rate);
                 if (movieScale > 0)
                     audio.frames = framesFor(static_cast<double>(duration), movieScale, rate);
-                edited = true;
+                audio.edited = true;
                 break;
             }
         }
@@ -171,7 +170,7 @@ Mp4Audio readMovie(const unsigned char* moov, std::size_t size, double rate)
                 audio.losslessBits = config->body[9];
     });
 
-    if (!edited)
+    if (!audio.edited)
         readGapless(moov, size, audio);
     return audio;
 }

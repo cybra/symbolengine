@@ -5,6 +5,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <string_view>
+
 using namespace symbolengine;
 using pattern::reference;
 
@@ -132,6 +134,7 @@ TEST_CASE("An MPEG-4 file's priming and length come from its edit list or iTunSM
         const auto audio = detail::readMp4Audio(*file, expected.rate, error);
         CHECK(!error);
         CHECK(audio.priming == expected.priming);
+        CHECK(audio.edited == (std::string_view(expected.name).find("ffmpeg") != std::string_view::npos));
         REQUIRE(audio.frames.has_value());
         CHECK(*audio.frames == expected.frames);
         CHECK(audio.losslessBits == expected.bits);

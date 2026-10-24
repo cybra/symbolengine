@@ -125,11 +125,27 @@ std::unique_ptr<AudioFileReader> openAudio(const std::filesystem::path& file, st
     const auto is = [&](std::size_t at, std::string_view id)
     { return at + id.size() <= got && std::memcmp(start + at, id.data(), id.size()) == 0; };
 
+    // A WAV or AIFF-C whose samples are coded in a way of their own, such as ADPCM or µ-law, is read by the system's
+    // decoder where it has one, and is otherwise unsupported.
+    const auto orSystem = [&](std::unique_ptr<AudioFileReader> reader, detail::SystemFormat kind) -> std::unique_ptr<AudioFileReader>
+    {
+        if (reader != nullptr || error != AudioFileError::unsupported)
+            return reader;
+        std::error_code ignored;
+        auto again = detail::RandomAccessFile::open(file, ignored);
+        if (again == nullptr)
+            return nullptr;
+        auto system = detail::openSystemAudio(std::move(again), file, kind, ignored);
+        if (system != nullptr)
+            error.clear();
+        return system;
+    };
+
     if ((is(0, "RIFF") || is(0, "RF64") || is(0, "BW64")) && is(8, "WAVE"))
-        return detail::openWav(std::move(opened), file, error);
+        return orSystem(detail::openWav(std::move(opened), file, error), detail::SystemFormat::wav);
 
     if (is(0, "FORM") && (is(8, "AIFF") || is(8, "AIFC")))
-        return detail::openAiff(std::move(opened), file, error);
+        return orSystem(detail::openAiff(std::move(opened), file, error), detail::SystemFormat::aiff);
 
     if (is(4, "ftyp"))
         return detail::openSystemAudio(std::move(opened), file, detail::SystemFormat::mpeg4, error);

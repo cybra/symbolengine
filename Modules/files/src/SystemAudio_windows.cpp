@@ -18,9 +18,10 @@
 #include <cmath>
 
 // MPEG-4 audio and ADTS through Media Foundation's source reader, which decodes to floats with the channels in WAV's
-// order; Windows has no reader for CAF. Media Foundation plays an MPEG-4 file's samples from the first, its encoder's
-// priming and all, so where the audio lies is read from the file, as its edit list or iTunSMPB says, and the decoder's
-// samples are counted from there. The first stretch decoded after a jump carries the time it starts at, which
+// order; Windows has no reader for CAF, nor for WAV and AIFF-C coded in ways of their own. Media Foundation acts on an
+// MPEG-4 file's edit list, but plays a file that gives its encoder's priming in iTunSMPB instead, as Apple's encoder
+// writes it, from its first sample, priming and all; for that file the decoder's samples are counted from where
+// iTunSMPB says the audio starts. The first stretch decoded after a jump carries the time it starts at, which
 // places it and those after it, so a read starts at exactly the sample asked for; a jump starts half a second before
 // that sample, so the decoder settles first.
 //
@@ -167,7 +168,8 @@ public:
             const auto told = readMp4Audio(*file, rate, error);
             if (error)
                 return;
-            priming = told.priming;
+            if (!told.edited)
+                priming = told.priming;
             information.frames = told.frames ? *told.frames : information.frames - std::min(information.frames, priming);
             if (information.bits == 0)
                 information.bits = told.losslessBits;
@@ -318,7 +320,7 @@ private:
 std::unique_ptr<AudioFileReader> openSystemAudio(std::unique_ptr<RandomAccessFile> file, const std::filesystem::path& path,
                                                  SystemFormat format, std::error_code& error)
 {
-    if (format == SystemFormat::caf)
+    if (format != SystemFormat::mpeg4 && format != SystemFormat::adts)
     {
         error = AudioFileError::unsupported;
         return nullptr;

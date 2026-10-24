@@ -173,7 +173,9 @@ const std::error_category& audioFileCategory() noexcept;
     WAV, AIFF, FLAC, Ogg Vorbis, Opus and MP3 read the same everywhere. An MP3 with LAME's or Xing's information in
     its first frame reads without the samples its encoder and decoder add at each end, as gapless players read it. M4A
     and other MPEG-4 audio, AAC in ADTS and CAF are read by the system's own decoders: on a Mac all three, on Windows
-    the first two, through Media Foundation, and on Linux none, which is AudioFileError::unsupported. */
+    the first two, through Media Foundation, and on Linux none, which is AudioFileError::unsupported. A WAV or AIFF-C
+    whose samples are coded in a way of their own, such as ADPCM or µ-law, is read by the Mac's decoder, and is
+    unsupported elsewhere. */
 std::unique_ptr<AudioFileReader> openAudio(const std::filesystem::path& file);
 std::unique_ptr<AudioFileReader> openAudio(const std::filesystem::path& file, std::error_code& error);
 

@@ -16,6 +16,7 @@ struct Mp4Audio
 {
     std::uint64_t priming = 0;
     std::optional<std::uint64_t> frames;
+    bool edited = false;    // the priming and length are the edit list's, rather than iTunSMPB's
     int losslessBits = 0;
 };
 
