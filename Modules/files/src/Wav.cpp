@@ -1,4 +1,5 @@
 #include "Bytes.h"
+#include "ChannelOrder.h"
 #include "Formats.h"
 #include "Samples.h"
 
@@ -27,23 +28,6 @@ constexpr std::array<unsigned char, 14> ambisonicSubtype{0, 0, 0x21, 0x07, 0xD3,
 constexpr std::uint16_t pcmTag = 1;
 constexpr std::uint16_t floatTag = 3;
 constexpr std::uint16_t extensibleTag = 0xFFFE;
-
-// The speakers usually meant by each number of channels, up to 7.1.
-std::uint32_t usualMask(int channels)
-{
-    switch (channels)
-    {
-        case 1: return 0x4;
-        case 2: return 0x3;
-        case 3: return 0x7;
-        case 4: return 0x33;
-        case 5: return 0x37;
-        case 6: return 0x3F;
-        case 7: return 0x13F;
-        case 8: return 0x63F;
-        default: return 0;
-    }
-}
 
 class WavReader final : public AudioFileReader
 {

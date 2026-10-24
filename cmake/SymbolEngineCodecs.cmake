@@ -2,10 +2,11 @@ include_guard(GLOBAL)
 
 include(FetchContent)
 
-# Xiph.Org's codecs for the files module, each pinned by checksum and under the BSD license whose notices a product
-# includes with its others: libogg, libvorbis, libFLAC, libopus, opusfile and libopusenc. Their own builds aren't run;
-# their library sources are compiled here, with their settings given as definitions and their processor-specific code
-# left out, so they build alike everywhere, and their objects go inside the files module's library.
+# The codecs for the files module, each pinned by checksum: Xiph.Org's libogg, libvorbis, libFLAC, libopus, opusfile and
+# libopusenc, under the BSD license whose notices a product includes with its others, and minimp3, in the public
+# domain. Their own builds aren't run; their library sources are compiled here, with their settings given as
+# definitions and their processor-specific code left out, so they build alike everywhere, and their objects go inside
+# the files module's library.
 
 FetchContent_Declare(symbolengine_ogg
     URL https://github.com/xiph/ogg/archive/refs/tags/v1.3.6.tar.gz
@@ -31,8 +32,12 @@ FetchContent_Declare(symbolengine_opusenc
     URL https://github.com/xiph/libopusenc/archive/refs/tags/v0.3.tar.gz
     URL_HASH SHA256=5637474cdf4ff693977fe74039049349fef7b65e3a94ad8bde51ecfcd1e94a8e
     SOURCE_SUBDIR fetched-only)
+FetchContent_Declare(symbolengine_minimp3
+    URL https://github.com/lieff/minimp3/archive/ea99364f61c14656440e8d77e9c233ccf3124633.tar.gz
+    URL_HASH SHA256=5628166eb82a9bb581317918a334c317a2c0a30278bb14a20381307976768f34
+    SOURCE_SUBDIR fetched-only)
 FetchContent_MakeAvailable(symbolengine_ogg symbolengine_vorbis symbolengine_flac symbolengine_opus symbolengine_opusfile
-                           symbolengine_opusenc)
+                           symbolengine_opusenc symbolengine_minimp3)
 
 set(ogg ${symbolengine_ogg_SOURCE_DIR})
 set(vorbis ${symbolengine_vorbis_SOURCE_DIR})
@@ -40,6 +45,7 @@ set(flac ${symbolengine_flac_SOURCE_DIR})
 set(opus ${symbolengine_opus_SOURCE_DIR})
 set(opusfile ${symbolengine_opusfile_SOURCE_DIR})
 set(opusenc ${symbolengine_opusenc_SOURCE_DIR})
+set(minimp3 ${symbolengine_minimp3_SOURCE_DIR})
 
 # libogg's sizes, which its own build works out into config_types.h.
 set(codec_generated ${CMAKE_CURRENT_BINARY_DIR}/codecs)
@@ -59,7 +65,13 @@ file(COPY_FILE ${codec_generated}/ogg/config_types.h.new ${codec_generated}/ogg/
 
 # The libraries' public headers, which the files module's own sources include too.
 set(codec_includes
-    ${codec_generated} ${ogg}/include ${vorbis}/include ${flac}/include ${opus}/include ${opusfile}/include ${opusenc}/include)
+    ${codec_generated} ${ogg}/include ${vorbis}/include ${flac}/include ${opus}/include ${opusfile}/include ${opusenc}/include
+    ${minimp3})
+
+# minimp3 is a header, whose code one source file compiles, decoding to floats.
+file(WRITE ${codec_generated}/minimp3.c.new "#define MINIMP3_IMPLEMENTATION\n#define MINIMP3_FLOAT_OUTPUT\n#include \"minimp3_ex.h\"\n")
+file(COPY_FILE ${codec_generated}/minimp3.c.new ${codec_generated}/minimp3.c ONLY_IF_DIFFERENT)
+set(minimp3_sources ${codec_generated}/minimp3.c)
 
 set(ogg_sources ${ogg}/src/bitwise.c ${ogg}/src/framing.c)
 
@@ -118,7 +130,7 @@ foreach(file ogg_packer opus_header opusenc picture resample unicode_support)
 endforeach()
 
 add_library(symbolengine_codecs OBJECT
-    ${ogg_sources} ${vorbis_sources} ${flac_sources} ${opus_sources} ${opusfile_sources} ${opusenc_sources})
+    ${ogg_sources} ${vorbis_sources} ${flac_sources} ${opus_sources} ${opusfile_sources} ${opusenc_sources} ${minimp3_sources})
 set_target_properties(symbolengine_codecs PROPERTIES
     POSITION_INDEPENDENT_CODE ON C_VISIBILITY_PRESET hidden C_STANDARD 99)
 target_include_directories(symbolengine_codecs SYSTEM PRIVATE ${codec_includes})

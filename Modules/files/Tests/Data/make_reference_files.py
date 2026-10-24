@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Makes the reference files the files module's tests read, with encoders other than SymbolEngine's own: ffmpeg for
-most, the Mac's afconvert for Apple's own AIFF and its 64-bit float AIFF-C, and the flac tool for a tagged FLAC. The
-lossless ones hold the pattern of samples the tests work out for themselves (pattern::whole in the tests), so every
-sample read can be checked exactly; the Ogg Vorbis and Opus ones hold a tone of its own in each channel (pattern::tone),
-so a channel out of place or a sample out of time shows. Run on a Mac with ffmpeg and flac installed, from anywhere:
-python3 make_reference_files.py"""
+most, the Mac's afconvert for Apple's own AIFF, its 64-bit float AIFF-C, CAF and Apple's AAC and ALAC, the flac tool for
+a tagged FLAC and the lame tool for MP3s. The lossless ones hold the pattern of samples the tests work out for
+themselves (pattern::whole in the tests), so every sample read can be checked exactly; the lossy ones hold a tone of its
+own in each channel (pattern::tone), so a channel out of place or a sample out of time shows. Run on a Mac with ffmpeg,
+flac and lame installed, from anywhere: python3 make_reference_files.py"""
 
 import math
 
@@ -78,9 +78,33 @@ def ffmpeg(name, kind, channels, rate, codec, extra=(), layout=None, frames=FRAM
         os.unlink(source.name)
 
 
-def afconvert(name, source, file_format, data_format):
-    subprocess.run(["afconvert", "-f", file_format, "-d", data_format, os.path.join(HERE, source), os.path.join(HERE, name)],
-                   check=True)
+def afconvert(name, source, file_format, data_format, extra=()):
+    subprocess.run(["afconvert", "-f", file_format, "-d", data_format, *extra, os.path.join(HERE, source),
+                    os.path.join(HERE, name)], check=True)
+
+
+def tone_wav(kind, channels, rate, frames, layout=None):
+    """A WAV of tones in the temporary folder, for the encoders that read WAVs, which the caller deletes."""
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as made:
+        pass
+    ffmpeg(made.name, kind, channels, rate, "pcm_s16le", layout=layout, frames=frames)
+    return made.name
+
+
+def encoded_from_tones(encode, name, kind, channels, rate, frames, layout=None):
+    source = tone_wav(kind, channels, rate, frames, layout)
+    try:
+        encode(name, source)
+    finally:
+        os.unlink(source)
+
+
+def lame(extra):
+    return lambda name, source: subprocess.run(["lame", "--quiet", *extra, source, os.path.join(HERE, name)], check=True)
+
+
+def apple(file_format, data_format, extra=()):
+    return lambda name, source: afconvert(name, source, file_format, data_format, extra)
 
 
 def flac_tool(name, source, tags):
@@ -121,6 +145,21 @@ def main():
     # ffmpeg's own Vorbis encoder, the only one it has, writes stereo alone, and codes a second channel badly unless it
     # carries what the first does, so both carry the first channel's tone.
     ffmpeg("tone-stereo-44100.ogg", "same tone", 2, 44100, "vorbis", ["-strict", "-2", "-q:a", "6", *tags], frames=22050)
+    # LAME's information in the first frame says where the audio lies; without it the file reads as it decodes.
+    encoded_from_tones(lame(["-b", "192", "--tt", "A take for the tests", "--ta", "SymbolEngine", "--id3v2-only"]),
+                       "tones-stereo-44100.mp3", "tone", 2, 44100, 22050)
+    ffmpeg("tone-mono-48000-without-information.mp3", "tone", 1, 48000, "libmp3lame", ["-b:a", "128k", "-write_xing", "0"],
+           frames=24000)
+    # AAC from Apple's encoder and from ffmpeg's, which say how many priming samples to leave out in different ways,
+    # ALAC holding the 24-bit pattern, and CAF holding the 16-bit one. Apple's encoder takes 5.1 in AAC's own order,
+    # from which a decoder puts it back in WAV's. ffmpeg's noise substitution, which a decoder fills with noise of its
+    # own making, is left off, so a stretch decodes the same wherever reading starts.
+    encoded_from_tones(apple("m4af", "aac", ["-b", "160000"]), "tones-stereo-48000.m4a", "tone", 2, 48000, 24000)
+    encoded_from_tones(apple("m4af", "aac", ["-b", "384000", "-l", "MPEG_5_1_D"]), "tones-5.1-48000.m4a", "tone", 6, 48000, 24000, "5.1")
+    ffmpeg("tones-stereo-44100-ffmpeg.m4a", "tone", 2, 44100, "aac", ["-b:a", "160k", "-aac_pns", "0"], frames=22050)
+    afconvert("alac24-stereo-48000.m4a", "bwf-pcm24-stereo-48000.wav", "m4af", "alac")
+    afconvert("pcm16-stereo-44100.caf", "pcm16-stereo-44100.wav", "caff", "LEI16")
+    ffmpeg("tones-stereo-48000.aac", "tone", 2, 48000, "aac", ["-b:a", "256k", "-aac_pns", "0", "-f", "adts"], frames=24000)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,15 @@
 include(SymbolEngineCodecs)
 
+# M4A, AAC and CAF are read by the system's own decoders, where it has them.
 set(libraries)
-if(UNIX AND NOT APPLE)
+if(APPLE)
+    set(system_audio src/SystemAudio_mac.cpp)
+    list(APPEND libraries "-framework AudioToolbox" "-framework CoreFoundation")
+elseif(WIN32)
+    set(system_audio src/SystemAudio_windows.cpp)
+    list(APPEND libraries ole32 mfuuid)
+else()
+    set(system_audio src/SystemAudio_other.cpp)
     list(APPEND libraries m)
 endif()
 
@@ -11,11 +19,13 @@ symbolengine_add_module(files
         src/Aiff.cpp
         src/BroadcastWave.cpp
         src/Flac.cpp
+        src/Mp3.cpp
         src/OggVorbis.cpp
         src/Opus.cpp
         src/RandomAccessFile.cpp
         src/Samples.cpp
         src/Wav.cpp
+        ${system_audio}
         $<TARGET_OBJECTS:symbolengine_codecs>
     DEPENDS core
     LIBRARIES ${libraries})
@@ -30,6 +40,8 @@ if(SYMBOLENGINE_TESTS)
         Tests/AudioFileTests.cpp
         Tests/BroadcastWaveTests.cpp
         Tests/CodecTests.cpp
+        Tests/Mp3Tests.cpp
+        Tests/SystemAudioTests.cpp
         Tests/WavTests.cpp)
 
     # The reference files, made by other encoders (Tests/Data/make_reference_files.py), are read where they are.

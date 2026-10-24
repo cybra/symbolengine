@@ -31,11 +31,13 @@ struct AudioChunk
 /** What an audio file holds. */
 struct AudioInfo
 {
-    std::string format{};          // "WAV", "AIFF", "FLAC", "Ogg Vorbis" or "Opus", as people name them
+    std::string format{};          // "WAV", "AIFF", "FLAC", "Ogg Vorbis", "Opus", "MP3", "M4A", "AAC" or "CAF", as
+                                   // people name them
     double sampleRate = 0.0;       // an Opus file's is 48 kHz, which it always plays at
     int channels = 0;
     std::uint64_t frames = 0;      // the length, in samples of each channel
-    int bits = 0;                  // as stored: 8, 16, 24, 32 or 64, or 0 for Ogg Vorbis and Opus, which keep none
+    int bits = 0;                  // as stored: 8, 16, 24, 32 or 64, or 0 for the formats that keep none, such as
+                                   // Ogg Vorbis, Opus, MP3 and AAC
     bool floatingPoint = false;    // samples stored as floats rather than whole numbers
 
     /** The speakers a WAV's channels are for, as WAVE_FORMAT_EXTENSIBLE gives them (1 front left, 2 front right,
@@ -166,7 +168,12 @@ const std::error_category& audioFileCategory() noexcept;
 
 /** Opens an audio file for reading, by what it holds rather than its name. Throws
     std::filesystem::filesystem_error when it can't be opened, or, given a std::error_code, sets it instead and
-    returns nullptr; for a file that isn't audio it reads, the error is an AudioFileError. */
+    returns nullptr; for a file that isn't audio it reads, the error is an AudioFileError.
+
+    WAV, AIFF, FLAC, Ogg Vorbis, Opus and MP3 read the same everywhere. An MP3 with LAME's or Xing's information in
+    its first frame reads without the samples its encoder and decoder add at each end, as gapless players read it. M4A
+    and other MPEG-4 audio, AAC in ADTS and CAF are read by the system's own decoders: on a Mac all three, on Windows
+    the first two, through Media Foundation, and on Linux none, which is AudioFileError::unsupported. */
 std::unique_ptr<AudioFileReader> openAudio(const std::filesystem::path& file);
 std::unique_ptr<AudioFileReader> openAudio(const std::filesystem::path& file, std::error_code& error);
 

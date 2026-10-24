@@ -45,19 +45,6 @@ std::vector<std::vector<float>> wholePattern(int channels, int bits, std::uint64
             samples[static_cast<std::size_t>(c)].push_back(pattern::read(frame, c, bits));
     return samples;
 }
-
-// A stretch read on its own from the middle of a file.
-std::vector<std::vector<float>> stretch(AudioFileReader& reader, std::uint64_t from, std::size_t frames)
-{
-    std::vector<std::vector<float>> samples(static_cast<std::size_t>(reader.info().channels), std::vector<float>(frames));
-    std::vector<float*> pointers;
-    for (auto& channel : samples)
-        pointers.push_back(channel.data());
-    samples.front().resize(reader.read(from, pointers.data(), frames));
-    for (auto& channel : samples)
-        channel.resize(samples.front().size());
-    return samples;
-}
 }
 
 TEST_CASE("FLAC files written by other programs read sample for sample, with their tags")
@@ -112,7 +99,7 @@ TEST_CASE("FLAC written reads back sample for sample, with its tags, from anywhe
                 // Stretches out of order, each the same as where it sits in the whole.
                 for (const std::uint64_t from : {29000u, 5u, 17000u, 4096u, 0u, 29999u})
                 {
-                    const auto part = stretch(*reader, from, 900);
+                    const auto part = pattern::stretch(*reader, from, 900);
                     for (int c = 0; c < channels; ++c)
                         CHECK(std::equal(part[static_cast<std::size_t>(c)].begin(), part[static_cast<std::size_t>(c)].end(),
                                          samples[static_cast<std::size_t>(c)].begin() + static_cast<std::ptrdiff_t>(from)));
@@ -198,7 +185,7 @@ TEST_CASE("Opus and Ogg Vorbis written read back their length, each channel's to
             }
 
             // A stretch read on its own matches the same stretch read from the start.
-            const auto part = stretch(*reader, 30000, 4800);
+            const auto part = pattern::stretch(*reader, 30000, 4800);
             for (int c = 0; c < channels; ++c)
             {
                 float most = 0.0f;

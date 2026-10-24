@@ -63,6 +63,30 @@ inline std::filesystem::path reference(const char* name)
     return std::filesystem::path(SYMBOLENGINE_FILES_TEST_DATA) / name;
 }
 
+/** A stretch read on its own from anywhere in a file, cut short where the file ends. */
+inline std::vector<std::vector<float>> stretch(symbolengine::AudioFileReader& reader, std::uint64_t from, std::size_t frames)
+{
+    std::vector<std::vector<float>> samples(static_cast<std::size_t>(reader.info().channels), std::vector<float>(frames));
+    std::vector<float*> pointers;
+    for (auto& channel : samples)
+        pointers.push_back(channel.data());
+    samples.front().resize(reader.read(from, pointers.data(), frames));
+    for (auto& channel : samples)
+        channel.resize(samples.front().size());
+    return samples;
+}
+
+/** The largest difference between a stretch and the samples it should match, which start where it does. */
+inline float largestDifference(const std::vector<std::vector<float>>& part, const std::vector<std::vector<float>>& whole,
+                               std::uint64_t from)
+{
+    float largest = 0.0f;
+    for (std::size_t c = 0; c < part.size(); ++c)
+        for (std::size_t i = 0; i < part[c].size(); ++i)
+            largest = std::max(largest, std::abs(part[c][i] - whole[c][static_cast<std::size_t>(from) + i]));
+    return largest;
+}
+
 /** Every sample of a file, a channel each, read in stretches of the size given. */
 inline std::vector<std::vector<float>> readAll(symbolengine::AudioFileReader& reader, std::size_t stretch = 333)
 {

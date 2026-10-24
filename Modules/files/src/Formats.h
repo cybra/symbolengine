@@ -22,6 +22,21 @@ std::unique_ptr<AudioFileReader> openVorbis(std::unique_ptr<RandomAccessFile> fi
                                             std::error_code& error);
 std::unique_ptr<AudioFileReader> openOpus(std::unique_ptr<RandomAccessFile> file, const std::filesystem::path& path,
                                           std::error_code& error);
+std::unique_ptr<AudioFileReader> openMp3(std::unique_ptr<RandomAccessFile> file, const std::filesystem::path& path,
+                                         std::error_code& error);
+
+/** The formats the system's own decoders read: MPEG-4 audio such as M4A, Core Audio's CAF, and AAC in ADTS. */
+enum class SystemFormat
+{
+    mpeg4,
+    caf,
+    adts
+};
+
+/** A file the system's own decoder reads: Apple's AudioToolbox on a Mac, Media Foundation on Windows; elsewhere none,
+    which is AudioFileError::unsupported. */
+std::unique_ptr<AudioFileReader> openSystemAudio(std::unique_ptr<RandomAccessFile> file, const std::filesystem::path& path,
+                                                 SystemFormat format, std::error_code& error);
 
 std::unique_ptr<AudioFileWriter> createWav(std::unique_ptr<RandomAccessFile> file, const std::filesystem::path& path,
                                            const AudioFileSettings& settings, std::error_code& error);

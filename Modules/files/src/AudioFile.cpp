@@ -131,18 +131,37 @@ std::unique_ptr<AudioFileReader> openAudio(const std::filesystem::path& file, st
     if (is(0, "FORM") && (is(8, "AIFF") || is(8, "AIFC")))
         return detail::openAiff(std::move(opened), file, error);
 
-    // FLAC, after an ID3 tag some programs put first.
-    auto flacAt = std::size_t{0};
+    if (is(4, "ftyp"))
+        return detail::openSystemAudio(std::move(opened), file, detail::SystemFormat::mpeg4, error);
+    if (is(0, "caff"))
+        return detail::openSystemAudio(std::move(opened), file, detail::SystemFormat::caf, error);
+
+    // An MPEG audio frame's header starts with eleven bits set; ADTS, which carries AAC, has its layer as 0, and an
+    // MP3's is 3 (layers 1 and 2 are read too).
+    const auto adts = [](const unsigned char* at) { return at[0] == 0xFF && (at[1] & 0xF6) == 0xF0; };
+    const auto mpeg = [](const unsigned char* at) { return at[0] == 0xFF && (at[1] & 0xE0) == 0xE0 && (at[1] & 0x06) != 0; };
+
+    // An ID3 tag, as MP3s start with and some programs put before FLAC and AAC too, is followed by the audio.
     if (is(0, "ID3") && got >= 10)
     {
-        flacAt = 10 + (static_cast<std::size_t>(start[6] & 0x7F) << 21 | static_cast<std::size_t>(start[7] & 0x7F) << 14 |
-                       static_cast<std::size_t>(start[8] & 0x7F) << 7 | static_cast<std::size_t>(start[9] & 0x7F));
+        const auto after = 10 + (static_cast<std::size_t>(start[6] & 0x7F) << 21 | static_cast<std::size_t>(start[7] & 0x7F) << 14 |
+                                 static_cast<std::size_t>(start[8] & 0x7F) << 7 | static_cast<std::size_t>(start[9] & 0x7F));
         unsigned char marker[4]{};
-        if (opened->readAt(flacAt, marker, 4, error) == 4 && std::memcmp(marker, "fLaC", 4) == 0)
+        const auto read = opened->readAt(after, marker, 4, error);
+        if (error)
+            return nullptr;
+        if (read == 4 && std::memcmp(marker, "fLaC", 4) == 0)
             return detail::openFlac(std::move(opened), file, error);
+        if (read == 4 && adts(marker))
+            return detail::openSystemAudio(std::move(opened), file, detail::SystemFormat::adts, error);
+        return detail::openMp3(std::move(opened), file, error);
     }
     if (is(0, "fLaC"))
         return detail::openFlac(std::move(opened), file, error);
+    if (got >= 4 && adts(start))
+        return detail::openSystemAudio(std::move(opened), file, detail::SystemFormat::adts, error);
+    if (got >= 4 && mpeg(start))
+        return detail::openMp3(std::move(opened), file, error);
 
     // Ogg, by what its first packet starts with, which begins after the page's header and its table of lengths.
     if (is(0, "OggS") && got > 27)

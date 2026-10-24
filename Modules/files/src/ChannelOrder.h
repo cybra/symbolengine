@@ -1,9 +1,28 @@
 #pragma once
 
+#include <cstdint>
+
 // The order Ogg Vorbis keeps channels in, which Opus keeps too, set against WAV's, which every reader and writer gives
 // channels in: three channels are left, center and right, and from five on the center comes second and the LFE last.
 namespace symbolengine::detail
 {
+
+/** The speakers usually meant by each number of channels up to 7.1, as WAVE_FORMAT_EXTENSIBLE's mask, or 0 past it. */
+inline std::uint32_t usualMask(int channels) noexcept
+{
+    switch (channels)
+    {
+        case 1: return 0x4;
+        case 2: return 0x3;
+        case 3: return 0x7;
+        case 4: return 0x33;
+        case 5: return 0x37;
+        case 6: return 0x3F;
+        case 7: return 0x13F;
+        case 8: return 0x63F;
+        default: return 0;
+    }
+}
 
 /** The Vorbis channel holding a file's channel of WAV's order, for a file of so many channels. */
 inline int vorbisChannelFor(int channels, int channel) noexcept
