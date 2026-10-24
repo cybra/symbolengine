@@ -20,6 +20,7 @@ symbolengine_add_module(files
         src/BroadcastWave.cpp
         src/Flac.cpp
         src/Mp3.cpp
+        src/Mp4.cpp
         src/OggVorbis.cpp
         src/Opus.cpp
         src/RandomAccessFile.cpp
@@ -47,5 +48,5 @@ if(SYMBOLENGINE_TESTS)
     # The reference files, made by other encoders (Tests/Data/make_reference_files.py), are read where they are.
     target_compile_definitions(symbolengine_files_tests PRIVATE
         SYMBOLENGINE_FILES_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/Tests/Data")
-    target_include_directories(symbolengine_files_tests PRIVATE ${PROJECT_SOURCE_DIR}/Modules/core/Tests)
+    target_include_directories(symbolengine_files_tests PRIVATE ${PROJECT_SOURCE_DIR}/Modules/core/Tests ${CMAKE_CURRENT_SOURCE_DIR}/src)
 endif()

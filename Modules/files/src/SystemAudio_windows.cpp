@@ -1,4 +1,5 @@
 #include "Formats.h"
+#include "Mp4.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
     #define WIN32_LEAN_AND_MEAN
@@ -17,7 +18,9 @@
 #include <cmath>
 
 // MPEG-4 audio and ADTS through Media Foundation's source reader, which decodes to floats with the channels in WAV's
-// order; Windows has no reader for CAF. The first stretch decoded after a jump carries the time it starts at, which
+// order; Windows has no reader for CAF. Media Foundation plays an MPEG-4 file's samples from the first, its encoder's
+// priming and all, so where the audio lies is read from the file, as its edit list or iTunSMPB says, and the decoder's
+// samples are counted from there. The first stretch decoded after a jump carries the time it starts at, which
 // places it and those after it, so a read starts at exactly the sample asked for; a jump starts half a second before
 // that sample, so the decoder settles first.
 //
@@ -103,7 +106,8 @@ constexpr GUID pcm = audioSubtype(0x0001);
 class SystemReader final : public AudioFileReader
 {
 public:
-    SystemReader(const std::filesystem::path& p, SystemFormat kind) : adts(kind == SystemFormat::adts)
+    SystemReader(std::unique_ptr<RandomAccessFile> f, const std::filesystem::path& p, SystemFormat kind)
+        : file(std::move(f)), adts(kind == SystemFormat::adts)
     {
         path = p;
         information.format = adts ? "AAC" : "M4A";
@@ -157,6 +161,17 @@ public:
         if (SUCCEEDED(reader->GetPresentationAttribute(static_cast<DWORD>(MF_SOURCE_READER_MEDIASOURCE), MF_PD_DURATION, &duration)))
             information.frames = static_cast<std::uint64_t>(std::llround(static_cast<double>(duration.uhVal.QuadPart) * rate / 1.0e7));
         PropVariantClear(&duration);
+
+        if (!adts)
+        {
+            const auto told = readMp4Audio(*file, rate, error);
+            if (error)
+                return;
+            priming = told.priming;
+            information.frames = told.frames ? *told.frames : information.frames - std::min(information.frames, priming);
+            if (information.bits == 0)
+                information.bits = told.losslessBits;
+        }
     }
 
 private:
@@ -166,7 +181,8 @@ private:
     bool seek(std::uint64_t frame)
     {
         const auto settle = static_cast<std::uint64_t>(information.sampleRate / 2);
-        const auto start = frame > settle ? frame - settle : 0;
+        const auto decoded = frame + priming;
+        const auto start = decoded > settle ? decoded - settle : 0;
 
         PROPVARIANT position;
         PropVariantInit(&position);
@@ -211,19 +227,23 @@ private:
 
             const auto* samples = reinterpret_cast<const float*>(bytes);
             const auto count = static_cast<std::size_t>(length) / sizeof(float);
+            const auto channelCount = static_cast<std::size_t>(information.channels);
 
-            // The first stretch is placed by its time, and samples before the start, as an encoder's priming can be,
-            // are let go; each after it follows on.
+            // The first stretch to reach the audio is placed by its time, and samples before the audio, the encoder's
+            // priming, are let go, a stretch or more of them; each stretch after it follows on.
             std::size_t skip = 0;
             if (!placed)
             {
-                auto first = std::llround(static_cast<double>(time) * information.sampleRate / 1.0e7);
-                if (first < 0)
+                const auto first = std::llround(static_cast<double>(time) * information.sampleRate / 1.0e7) -
+                                   static_cast<long long>(priming);
+                const auto before = first < 0 ? static_cast<std::size_t>(-first) : std::size_t{0};
+                if (before * channelCount >= count)
                 {
-                    skip = std::min(count, static_cast<std::size_t>(-first) * static_cast<std::size_t>(information.channels));
-                    first = 0;
+                    buffer->Unlock();
+                    continue;
                 }
-                heldStart = static_cast<std::uint64_t>(first);
+                skip = before * channelCount;
+                heldStart = static_cast<std::uint64_t>(first + static_cast<long long>(before));
                 placed = true;
             }
             held.insert(held.end(), samples + skip, samples + count);
@@ -284,7 +304,9 @@ private:
         return done;
     }
 
+    std::unique_ptr<RandomAccessFile> file;
     bool adts = false;
+    std::uint64_t priming = 0;
     Com<IMFSourceReader> reader;
     std::vector<float> held;
     std::uint64_t heldStart = 0;
@@ -293,7 +315,7 @@ private:
 };
 }
 
-std::unique_ptr<AudioFileReader> openSystemAudio(std::unique_ptr<RandomAccessFile>, const std::filesystem::path& path,
+std::unique_ptr<AudioFileReader> openSystemAudio(std::unique_ptr<RandomAccessFile> file, const std::filesystem::path& path,
                                                  SystemFormat format, std::error_code& error)
 {
     if (format == SystemFormat::caf)
@@ -302,7 +324,7 @@ std::unique_ptr<AudioFileReader> openSystemAudio(std::unique_ptr<RandomAccessFil
         return nullptr;
     }
 
-    auto reader = std::make_unique<SystemReader>(path, format);
+    auto reader = std::make_unique<SystemReader>(std::move(file), path, format);
     reader->start(error);
     if (error)
         return nullptr;

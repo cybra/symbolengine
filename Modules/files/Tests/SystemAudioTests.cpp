@@ -1,3 +1,4 @@
+#include "Mp4.h"
 #include "Pattern.h"
 
 #include <symbolengine/files/AudioFile.h>
@@ -115,6 +116,35 @@ TEST_CASE("AAC in ADTS, which says nothing of its priming, reads as the system d
 }
 
 #endif
+
+TEST_CASE("An MPEG-4 file's priming and length come from its edit list or iTunSMPB, and Apple Lossless' bits from its own box")
+{
+    // Apple's encoder writes iTunSMPB alone, and ffmpeg an edit list alone, its length in milliseconds.
+    struct Expected { const char* name; double rate; std::uint64_t priming; std::uint64_t frames; int bits; };
+    for (const Expected& expected : {Expected{"tones-stereo-48000.m4a", 48000, 2112, 24000, 0}, Expected{"tones-5.1-48000.m4a", 48000, 2112, 24000, 0},
+                                     Expected{"tones-stereo-44100-ffmpeg.m4a", 44100, 1024, 22050, 0},
+                                     Expected{"alac24-stereo-48000.m4a", 48000, 0, 1000, 24}})
+    {
+        CAPTURE(expected.name);
+        std::error_code error;
+        const auto file = detail::RandomAccessFile::open(reference(expected.name), error);
+        REQUIRE(file != nullptr);
+        const auto audio = detail::readMp4Audio(*file, expected.rate, error);
+        CHECK(!error);
+        CHECK(audio.priming == expected.priming);
+        REQUIRE(audio.frames.has_value());
+        CHECK(*audio.frames == expected.frames);
+        CHECK(audio.losslessBits == expected.bits);
+    }
+
+    std::error_code error;
+    const auto other = detail::RandomAccessFile::open(reference("pcm16-stereo-44100.wav"), error);
+    REQUIRE(other != nullptr);
+    const auto nothing = detail::readMp4Audio(*other, 44100, error);
+    CHECK(!error);
+    CHECK(nothing.priming == 0);
+    CHECK(!nothing.frames.has_value());
+}
 
 TEST_CASE("CAF reads through the Mac's decoder, and where there's none it, M4A and AAC are said to be unsupported")
 {

@@ -35,6 +35,11 @@ inline std::uint32_t readBig32(const unsigned char* p) noexcept
            static_cast<std::uint32_t>(p[2]) << 8 | static_cast<std::uint32_t>(p[3]);
 }
 
+inline std::uint64_t readBig64(const unsigned char* p) noexcept
+{
+    return static_cast<std::uint64_t>(readBig32(p)) << 32 | readBig32(p + 4);
+}
+
 inline void addLittle16(std::string& bytes, std::uint32_t value)
 {
     bytes += static_cast<char>(value & 0xFF);
