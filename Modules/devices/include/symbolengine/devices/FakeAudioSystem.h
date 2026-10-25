@@ -81,8 +81,8 @@ public:
     /** stop() waits while this is set, as a system whose stop never returns. */
     std::atomic<bool> hangStop{false};
 
-    /** 20 ms after stop() returns, one more cycle comes from another thread, as some systems give, while the
-        stream it was for is still alive. */
+    /** 20 ms after stop() returns, one more cycle comes from another thread, as some systems give, before the
+        system's stream object is destroyed. */
     std::atomic<bool> callAfterStop{false};
 
     /** start() gives a cycle before it returns, holding the lock the device's other calls take. */

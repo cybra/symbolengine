@@ -144,6 +144,7 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
     std::uint64_t generation = 0;
     std::int64_t startedAt = 0;
     bool stalled = false;
+    bool priorityRead = false;
     std::int64_t stalledAt = 0;
     std::int64_t windowAt = 0, windowFrames = 0;
     bool runawaySaid = false;
@@ -413,6 +414,7 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
         windowFrames = 0;
         stalled = false;
         runawaySaid = false;
+        priorityRead = false;
 
         accepting.store(true);
         if (!opened->start(*this, error))
@@ -641,6 +643,15 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
                                 "start"}});
             }
             return;
+        }
+
+        // What the system gave the audio thread is known once it has run.
+        if (!priorityRead)
+        {
+            priorityRead = true;
+            const auto given = stream->info().priority;
+            const std::lock_guard hold(lock);
+            info.priority = given;
         }
 
         const auto last = lastCycleEnds.load();

@@ -4,12 +4,12 @@
 #include "CoreAudioDetail.h"
 #include "Helpers.h"
 
+#include <symbolengine/core/System.h>
 #include <symbolengine/devices/AudioDevices.h>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
-#include <cstdlib>
 
 using namespace symbolengine;
 namespace detail = symbolengine::coreAudio::detail;
@@ -18,8 +18,7 @@ namespace
 {
 bool realDevices()
 {
-    const char* setting = std::getenv("SYMBOLENGINE_REAL_DEVICES");
-    return setting != nullptr && std::string(setting) == "1";
+    return system::environmentVariable("SYMBOLENGINE_REAL_DEVICES").value_or("") == "1";
 }
 
 const AudioDeviceInfo* builtInSpeakers(const std::vector<AudioDeviceInfo>& devices)

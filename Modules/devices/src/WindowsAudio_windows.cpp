@@ -10,11 +10,13 @@
 // The property keys and interface identifiers below defined here, once.
 #include <initguid.h>
 
+// mmdeviceapi.h declares the property keys' macro, which functiondiscoverykeys_devpkey.h uses, so it comes first.
+#include <mmdeviceapi.h>
+
 #include <audioclient.h>
 #include <audiopolicy.h>
 #include <avrt.h>
 #include <functiondiscoverykeys_devpkey.h>
-#include <mmdeviceapi.h>
 #include <powrprof.h>
 
 // MinGW's headers lack the suspend and resume notification Windows 8 added; Microsoft's have it.

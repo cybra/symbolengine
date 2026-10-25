@@ -72,11 +72,11 @@ TEST_CASE("A cycle the system gives after its stop has returned reaches no callb
     REQUIRE(rig.device.cycle());
 
     rig.device.callAfterStop = true;
+    const auto blocksBeforeStop = recording.kept().size();
     REQUIRE(!stream->stop());
-    const auto blocksAtStop = recording.kept().size();
     std::this_thread::sleep_for(60ms);
 
-    CHECK(recording.kept().size() == blocksAtStop);
+    CHECK(recording.kept().size() == blocksBeforeStop);
     CHECK(recording.stops == 1);
     const auto order = recording.order();
     CHECK(order.back() == Recording::stoppedCall);

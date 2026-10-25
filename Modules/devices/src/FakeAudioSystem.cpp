@@ -78,7 +78,6 @@ struct FakeAudioSystem::Impl
     std::atomic<int> describes{0}, opens{0}, sets{0};
 
     std::mutex lock;
-    std::vector<std::thread> late;
     std::vector<std::unique_ptr<FakeAudioDevice>> devices;
     std::vector<std::shared_ptr<FakeAudioDevice::State>> states;
     std::string defaultInput, defaultOutput;
@@ -139,6 +138,7 @@ struct FakeStreamState
 
     std::thread runner;
     std::atomic<bool> running{false};
+    std::thread late;
 
     // Gives a cycle to the client, or to the client given; deviceLocked when the caller holds the device's lock.
     bool deliver(const FakeCycle& cycle, AudioSystemClient* to = nullptr, bool deviceLocked = false)
@@ -283,7 +283,14 @@ struct FakeStreamState
             runner.join();
     }
 
-    ~FakeStreamState() { stopRunning(); }
+    ~FakeStreamState()
+    {
+        stopRunning();
+        if (late.joinable() && late.get_id() != std::this_thread::get_id())
+            late.join();
+        else if (late.joinable())
+            late.detach();
+    }
 };
 
 namespace
@@ -298,6 +305,9 @@ public:
     {
         state->stopRunning();
         state->client = nullptr;
+        // A late cycle comes before the stream is gone, as a system's does before it lets go of the stream.
+        if (state->late.joinable())
+            state->late.join();
         const std::lock_guard hold(state->device->streamLock);
         if (state->device->stream == state)
             state->device->stream = nullptr;
@@ -355,13 +365,11 @@ public:
         state->stopRunning();
         if (client != nullptr && device.owner->callAfterStop.load())
         {
-            // From a thread of the system's, 20 ms on, when the stream on it has gone; the test keeps the devices
-            // module's stream alive past it.
-            auto keep = state;
-            const std::lock_guard hold(state->system->lock);
-            state->system->late.emplace_back([keep, client] {
+            if (state->late.joinable())
+                state->late.join();
+            state->late = std::thread([raw = state.get(), client] {
                 std::this_thread::sleep_for(20ms);
-                keep->deliver({}, client);
+                raw->deliver({}, client);
             });
         }
     }
@@ -464,16 +472,10 @@ FakeAudioSystem::FakeAudioSystem(std::string name) : impl(std::make_shared<Impl>
 FakeAudioSystem::~FakeAudioSystem()
 {
     // Streams still open keep their own state; their devices stop calling back.
-    std::vector<std::thread> late;
-    {
-        const std::lock_guard hold(impl->lock);
-        for (auto& state : impl->states)
-            if (const auto stream = state->current())
-                stream->stopRunning();
-        late.swap(impl->late);
-    }
-    for (auto& thread : late)
-        thread.join();
+    const std::lock_guard hold(impl->lock);
+    for (auto& state : impl->states)
+        if (const auto stream = state->current())
+            stream->stopRunning();
 }
 
 FakeAudioDevice& FakeAudioSystem::add(AudioDeviceInfo info)
