@@ -238,13 +238,18 @@ TEST_CASE("A reader held up longer than it reads ahead gives silence for what it
     deck.player.play(source, 0);
     deck.waitReady(2048);
 
-    // A second and a half at the device's pace, 10 ms a block.
+    // A second and a half at the device's pace by the clock, however long the test's sleeps take.
     std::vector<float> heard;
-    for (int block = 0; block < 150; ++block)
+    const auto began = std::chrono::steady_clock::now();
+    while (heard.size() < 72000)
     {
-        const auto out = deck.play(480, 480, false);
-        heard.insert(heard.end(), out[0].begin(), out[0].end());
-        std::this_thread::sleep_for(10ms);
+        const auto due = std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count() * 48000.0;
+        while (static_cast<double>(heard.size()) + 480 <= due && heard.size() < 72000)
+        {
+            const auto out = deck.play(480, 480, false);
+            heard.insert(heard.end(), out[0].begin(), out[0].end());
+        }
+        std::this_thread::sleep_for(2ms);
     }
 
     REQUIRE(soon([&] { return underruns >= 1; }));
@@ -322,7 +327,8 @@ TEST_CASE("Playing, jumping and stopping thousands of times while blocks are pla
             default: deck.player.play(std::make_shared<Tone>(440.0, 44100.0, 100000), 0, -1, 0); break;
         }
     }
-    deck.player.play(std::make_shared<Counting>(1'000'000), 0);
+    // An hour, which blocks played as fast as they can won't finish before it is looked at.
+    deck.player.play(std::make_shared<Counting>(48000 * 3600), 0);
     const bool moved = soon([&] { return deck.player.position() > 1000; });
     INFO("ready " << deck.player.ready() << ", position " << deck.player.position() << ", playing "
                   << deck.player.playing());
