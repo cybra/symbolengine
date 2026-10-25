@@ -393,6 +393,11 @@ void Window::focusContent()
         [w.window makeFirstResponder:content];
 }
 
+void Window::setEdited(bool edited)
+{
+    impl->window.documentEdited = edited;
+}
+
 void* Window::nativeHandle() const
 {
     return (__bridge void*) impl->window;

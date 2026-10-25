@@ -125,6 +125,10 @@ public:
     /** Gives the view it holds the keyboard, as after a dialog has had it. */
     void focusContent();
 
+    /** On a Mac, shows a dot in its close button, as a window holding changes not yet saved does; elsewhere it does
+        nothing. */
+    void setEdited(bool edited);
+
     /** The NSWindow on a Mac, and the HWND on Windows. */
     void* nativeHandle() const;
 

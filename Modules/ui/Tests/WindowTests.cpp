@@ -232,6 +232,18 @@ TEST_CASE("A maximized window fills the screen it is on, and goes back to where 
     window.setMaximized(false);
     CHECK(runUntil([&] { return !window.isMaximized(); }));
     CHECK(window.bounds() == before);
+
+    // Placed while hidden and maximized before it shows, as a program opening where it was left does.
+    ui::Window reopened({.size = {400, 300}, .maximizable = true});
+    const ui::Bounds left{before.x + 30, before.y + 20, 420, 310};
+    reopened.setBounds(left);
+    reopened.setMaximized(true);
+    reopened.setVisible(true);
+    CHECK(runUntil([&] { return reopened.isMaximized(); }));
+    CHECK(reopened.restoredBounds() == left);
+    reopened.setMaximized(false);
+    CHECK(runUntil([&] { return !reopened.isMaximized(); }));
+    CHECK(reopened.bounds() == left);
 }
 
 #if defined(__APPLE__)
@@ -250,5 +262,18 @@ TEST_CASE("A window's view has the keyboard whenever the window does")
     CHECK(choc::objc::call<id>(handle, "firstResponder") != static_cast<id>(view.nativeView()));
     window.focusContent();
     CHECK(choc::objc::call<id>(handle, "firstResponder") == static_cast<id>(view.nativeView()));
+}
+
+TEST_CASE("A Mac window shows when it holds changes not yet saved")
+{
+    choc::messageloop::initialise();
+
+    ui::Window window({.size = {300, 200}});
+    const auto handle = static_cast<id>(window.nativeHandle());
+    CHECK(!choc::objc::call<BOOL>(handle, "isDocumentEdited"));
+    window.setEdited(true);
+    CHECK(choc::objc::call<BOOL>(handle, "isDocumentEdited"));
+    window.setEdited(false);
+    CHECK(!choc::objc::call<BOOL>(handle, "isDocumentEdited"));
 }
 #endif

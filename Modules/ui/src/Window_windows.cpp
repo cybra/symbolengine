@@ -456,6 +456,8 @@ void Window::focusContent()
         SetFocus(impl->content);
 }
 
+void Window::setEdited(bool) {}
+
 void* Window::nativeHandle() const
 {
     return impl->window;
