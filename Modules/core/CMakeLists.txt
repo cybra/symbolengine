@@ -30,6 +30,8 @@ if(SYMBOLENGINE_TESTS)
         Tests/ChannelLayoutTests.cpp
         Tests/FilesTests.cpp
         Tests/JsonTests.cpp
+        Tests/LockFreeFifoTests.cpp
+        Tests/NoDenormalsTests.cpp
         Tests/NumberTests.cpp
         Tests/PathsTests.cpp
         Tests/SettingsFileTests.cpp
@@ -43,6 +45,10 @@ if(SYMBOLENGINE_TESTS)
     # The number tests check the module's own way of printing a double against std::to_chars, which Apple provides
     # for doubles from macOS 13.3, so the file holding the reference is built for that.
     target_include_directories(symbolengine_core_tests PRIVATE src)
+
+    # The lock-free fifo is tested between two threads.
+    find_package(Threads REQUIRED)
+    target_link_libraries(symbolengine_core_tests PRIVATE Threads::Threads)
     if(APPLE)
         set_source_files_properties(Tests/ToCharsReference.cpp PROPERTIES COMPILE_OPTIONS -mmacosx-version-min=13.3)
     endif()

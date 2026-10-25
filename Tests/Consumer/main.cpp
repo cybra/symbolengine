@@ -1,4 +1,5 @@
 #include <symbolengine/core.h>
+#include <symbolengine/devices.h>
 #include <symbolengine/files.h>
 
 #include <iostream>
@@ -19,7 +20,25 @@ int main()
     const auto frames = files::openAudio(file)->info().frames;
     std::filesystem::remove(file);
 
-    const bool works = written == R"({"name":"consumer","rate":48000})" && frames == 48000;
-    std::cout << written << ", " << frames << " frames" << (works ? " works" : " is wrong") << '\n';
+    // A block from a fake device, through a stream.
+    struct Counting final : AudioCallback
+    {
+        int received = 0;
+        void process(const AudioBlock& block) noexcept override { received += block.frames; }
+    } counting;
+    auto system = std::make_shared<FakeAudioSystem>();
+    AudioDeviceInfo device;
+    device.id = "fake";
+    device.outputNames = {"Left", "Right"};
+    auto& fake = system->add(device);
+    AudioStreamRequest request;
+    request.outputChannels = {0, 1};
+    AudioStream stream(system, "fake", request);
+    const bool streamed = !stream.add(counting) && !stream.start() && fake.cycle() && !stream.stop();
+
+    const bool works = written == R"({"name":"consumer","rate":48000})" && frames == 48000 && streamed &&
+                       counting.received == 512;
+    std::cout << written << ", " << frames << " frames, " << counting.received << " streamed"
+              << (works ? " works" : " is wrong") << '\n';
     return works ? 0 : 1;
 }

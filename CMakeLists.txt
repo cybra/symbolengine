@@ -37,6 +37,7 @@ endif()
 
 add_subdirectory(Modules/core)
 add_subdirectory(Modules/files)
+add_subdirectory(Modules/devices)
 if(SYMBOLENGINE_UI)
     add_subdirectory(Modules/ui)
     add_subdirectory(Modules/app)

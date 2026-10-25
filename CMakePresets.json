@@ -83,7 +83,7 @@
       "name": "base",
       "hidden": true,
       "output": { "outputOnFailure": true },
-      "execution": { "jobs": 4, "noTestsAction": "error" }
+      "execution": { "jobs": 4, "noTestsAction": "error", "timeout": 600 }
     },
     { "name": "mac", "inherits": "base", "configurePreset": "mac" },
     { "name": "windows", "inherits": "base", "configurePreset": "windows", "configuration": "Debug" },

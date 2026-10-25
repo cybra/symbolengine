@@ -1,6 +1,6 @@
 @PACKAGE_INIT@
 
-# The files module starts threads of its own.
+# The files and devices modules start threads of their own.
 include(CMakeFindDependencyMacro)
 find_dependency(Threads)
 
