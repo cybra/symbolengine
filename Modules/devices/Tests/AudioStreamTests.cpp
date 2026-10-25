@@ -745,6 +745,89 @@ TEST_CASE("The system muting the program's input is said to a stream with an inp
     CHECK(outputEvents.count(Kind::inputUnmuted) == 0);
 }
 
+TEST_CASE("An output whose callbacks are all idle stops its device after a while, and starts it again when one isn't")
+{
+    struct Player final : AudioCallback
+    {
+        std::atomic<bool> quiet{false};
+        std::atomic<int> prepares{0}, stops{0};
+        void prepare(const AudioStreamInfo&) override { ++prepares; }
+        void process(const AudioBlock& block) noexcept override
+        {
+            for (int c = 0; c < block.outputChannels; ++c)
+                std::fill(block.outputs[c], block.outputs[c] + block.frames, 0.0f);
+        }
+        void stopped() override { ++stops; }
+        bool idle() const noexcept override { return quiet.load(); }
+    };
+
+    auto system = std::make_shared<FakeAudioSystem>();
+    auto& speakers = system->add(fakeDevice("speakers", 0, 2));
+    speakers.run({.speed = 1.0});
+    Events events;
+    auto options = quick(events);
+    options.idleAfter = 100ms;
+    AudioStream stream(system, "speakers", stereo(false, true), options);
+    Player player;
+    REQUIRE(!stream.add(player));
+    REQUIRE(!stream.start());
+    REQUIRE(soon([&] { return speakers.running(); }));
+
+    // Playing, it runs on.
+    std::this_thread::sleep_for(250ms);
+    CHECK(speakers.running());
+    CHECK(events.count(Kind::idle) == 0);
+
+    // Idle a while, the device stops, though the stream is still running to the program and nothing is said lost.
+    player.quiet = true;
+    REQUIRE(events.waitFor(Kind::idle));
+    CHECK_FALSE(speakers.running());
+    CHECK(stream.state() == AudioStream::State::running);
+    CHECK(player.stops.load() == 1);
+
+    // Wanting sound again, it starts again, prepared again, with no dropout or stall said.
+    player.quiet = false;
+    REQUIRE(events.waitFor(Kind::active));
+    REQUIRE(soon([&] { return speakers.running(); }));
+    CHECK(player.prepares.load() == 2);
+    std::this_thread::sleep_for(200ms);
+    CHECK(events.count(Kind::dropout) == 0);
+    CHECK(events.count(Kind::stalled) == 0);
+    CHECK(events.count(Kind::noSound) == 0);
+
+    // Stopped by the program while resting, it is stopped.
+    player.quiet = true;
+    REQUIRE(events.waitFor(Kind::idle, 2));
+    REQUIRE(!stream.stop());
+    CHECK(stream.state() == AudioStream::State::stopped);
+    player.quiet = false;
+    std::this_thread::sleep_for(100ms);
+    CHECK_FALSE(speakers.running());
+    CHECK(player.prepares.load() == player.stops.load());
+}
+
+TEST_CASE("A stream with an input never stops its device for idle callbacks")
+{
+    struct Quiet final : AudioCallback
+    {
+        void process(const AudioBlock&) noexcept override {}
+        bool idle() const noexcept override { return true; }
+    };
+    auto system = std::make_shared<FakeAudioSystem>();
+    auto& device = system->add(fakeDevice("interface"));
+    device.run({.speed = 1.0});
+    Events events;
+    auto options = quick(events);
+    options.idleAfter = 50ms;
+    AudioStream stream(system, "interface", stereo(), options);
+    Quiet quiet;
+    REQUIRE(!stream.add(quiet));
+    REQUIRE(!stream.start());
+    std::this_thread::sleep_for(300ms);
+    CHECK(device.running());
+    CHECK(events.count(Kind::idle) == 0);
+}
+
 TEST_CASE("A device that lost its clock ends its stream, saying so")
 {
     Rig rig;

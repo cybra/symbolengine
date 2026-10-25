@@ -55,6 +55,11 @@ public:
     /** After its last block, exactly once for each prepare, on the stream's control thread. A stream the system
         rebuilt, at a new rate say, stops each callback and prepares it again. */
     virtual void stopped() {}
+
+    /** Whether the callback has nothing to play for now, as a player that is stopped; read on the control thread
+        while blocks run, so from what the callback keeps atomically. A stream with Options::idleAfter stops its
+        device once every callback has been idle that long. */
+    virtual bool idle() const noexcept { return false; }
 };
 
 /** Something that happened to a device, delivered in order on the thread the program chose. */
@@ -95,6 +100,11 @@ struct AudioEvent
             is silence until it is unmuted; said when a stream with an input starts muted too. */
         inputMuted,
         inputUnmuted,
+
+        /** Every callback was idle for Options::idleAfter, so the stream stopped its device, as an output not playing
+            should; and one wanted sound again, so it started it again, a new stretch. */
+        idle,
+        active,
 
         /** The computer went to sleep, ending the stream's stretch, and woke after nanoseconds, the stream started
             again from new system objects. */
@@ -161,6 +171,12 @@ public:
 
         /** How long an input gives exact zeros before it is said. */
         std::chrono::milliseconds silentInputAfter{10000};
+
+        /** How long every callback may be idle before the stream stops its device, until one wants sound again: an
+            output left running in silence keeps a Mac's AirPods from moving to another device after about two
+            seconds, and keeps any computer from saving power. Never for a stream with an input; 0, the default,
+            never at all. Starting again takes as long as opening the device does, which for an ASIO driver is long. */
+        std::chrono::milliseconds idleAfter{0};
 
         /** How often the control thread looks at a running device. */
         std::chrono::milliseconds watchEvery{20};

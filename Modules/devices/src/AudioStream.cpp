@@ -173,6 +173,10 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
     std::atomic<bool> mutePending{false};
     bool mutedSaid = false;
 
+    // The device stopped while every callback is idle, the stream still running to the program.
+    bool resting = false;
+    std::int64_t idleSince = -1;
+
     // The program's calls
 
     AudioError call(Command command)
@@ -248,6 +252,7 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
                 finish(command, perform(command));
             handleSystem();
             drainNotes();
+            watchIdle();
             watch();
             hold.lock();
         }
@@ -304,7 +309,8 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
 
     AudioError stop()
     {
-        const bool was = stream != nullptr;
+        const bool was = stream != nullptr || resting;
+        resting = false;
         teardown();
         wokeAt = -1;
         setState(State::stopped);
@@ -379,6 +385,8 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
     // Opens the device as asked, setting nothing it already runs at, prepares the callbacks and starts it.
     AudioError openAndBegin(bool announce)
     {
+        resting = false;
+        idleSince = -1;
         auto device = system->describe(deviceId);
         if (!device.answering)
             return {device.problem.empty() ? "The audio device isn't answering." : device.problem, "describe"};
@@ -555,6 +563,7 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
 
     void lose(AudioLoss why, AudioError error = {})
     {
+        resting = false;
         teardown();
         setState(State::lost);
         if (!error)
@@ -579,7 +588,7 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
         if (mutePending.exchange(false) && stream != nullptr && run.inputs > 0)
             sayMute();
 
-        if (devicesPending.exchange(false) && stream != nullptr)
+        if (devicesPending.exchange(false) && (stream != nullptr || resting))
         {
             const auto ids = system->deviceIds();
             if (std::find(ids.begin(), ids.end(), deviceId) == ids.end())
@@ -656,6 +665,42 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
             after = info;
         }
         tell({.kind = AudioEvent::Kind::formatChanged, .before = before, .after = after});
+    }
+
+    // An output whose callbacks have all been idle long enough stops its device, and starts it again, a new stretch,
+    // as soon as one isn't.
+    void watchIdle()
+    {
+        if (options.idleAfter.count() <= 0 || state.load() != State::running)
+            return;
+        const bool everyIdle = !callbacks.empty() &&
+                               std::all_of(callbacks.begin(), callbacks.end(), [](const AudioCallback* c) { return c->idle(); });
+        if (resting)
+        {
+            if (!everyIdle)
+            {
+                if (auto error = openAndBegin(false))
+                    lose(AudioLoss::other, error);
+                else
+                    tell({.kind = AudioEvent::Kind::active});
+            }
+            return;
+        }
+        if (stream == nullptr || run.inputs > 0 || !everyIdle)
+        {
+            idleSince = -1;
+            return;
+        }
+        const auto now = steadyNanoseconds();
+        if (idleSince < 0)
+            idleSince = now;
+        else if (now - idleSince >= nanoseconds(options.idleAfter))
+        {
+            teardown();
+            resting = true;
+            idleSince = -1;
+            tell({.kind = AudioEvent::Kind::idle});
+        }
     }
 
     void watch()
