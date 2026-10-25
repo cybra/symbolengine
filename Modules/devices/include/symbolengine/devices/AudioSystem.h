@@ -124,7 +124,8 @@ public:
 
 /** One of the computer's audio systems, behind the narrow layer the devices module is written over: Core Audio,
     Windows Audio, ASIO, or FakeAudioSystem in tests. Everything above it, the lists, choosing and restoring, each
-    device's control and the timeline, is written once over this. */
+    device's control and the timeline, is written once over this. The devices module calls a system only from threads
+    of its own, never a program's, so a system can set those threads up as it needs, as Windows' COM asks. */
 class AudioSystem
 {
 public:

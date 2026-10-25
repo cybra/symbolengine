@@ -1,6 +1,18 @@
 # The control threads and the fake's threads.
 find_package(Threads REQUIRED)
 
+# Each computer's own systems: Core Audio on a Mac, Windows Audio on Windows.
+set(libraries Threads::Threads)
+if(APPLE)
+    set(systems src/CoreAudio_mac.cpp)
+    list(APPEND libraries "-framework CoreAudio" "-framework CoreFoundation" "-framework IOKit")
+elseif(WIN32)
+    set(systems src/WindowsAudio_windows.cpp)
+    list(APPEND libraries ole32 avrt powrprof)
+else()
+    set(systems src/Systems_other.cpp)
+endif()
+
 symbolengine_add_module(devices
     SOURCES
         src/AudioDevices.cpp
@@ -8,13 +20,16 @@ symbolengine_add_module(devices
         src/AudioStream.cpp
         src/AudioThread.cpp
         src/FakeAudioSystem.cpp
+        ${systems}
     DEPENDS core
-    LIBRARIES Threads::Threads)
+    LIBRARIES ${libraries})
 
 if(SYMBOLENGINE_TESTS)
-    symbolengine_add_tests(devices SOURCES
-        Tests/AudioDevicesTests.cpp
-        Tests/AudioSetupTests.cpp
-        Tests/AudioStreamTests.cpp)
+    set(tests Tests/AudioDevicesTests.cpp Tests/AudioSetupTests.cpp Tests/AudioStreamTests.cpp)
+    if(APPLE)
+        list(APPEND tests Tests/CoreAudioTests.cpp)
+    endif()
+    symbolengine_add_tests(devices SOURCES ${tests})
     target_link_libraries(symbolengine_devices_tests PRIVATE Threads::Threads)
+    target_include_directories(symbolengine_devices_tests PRIVATE src)
 endif()

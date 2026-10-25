@@ -70,7 +70,7 @@ TEST_CASE("LockFreeFifo passes chunks of any size between two threads with every
         std::uint32_t next = 0;
         while (next < total)
         {
-            const auto size = std::min<std::uint32_t>(1 + random() % 300, total - next);
+            const auto size = std::min(static_cast<std::uint32_t>(1 + random() % 300), total - next);
             for (std::uint32_t i = 0; i < size; ++i)
                 chunk[i] = next + i;
             next += static_cast<std::uint32_t>(fifo.write(chunk.data(), size));
@@ -83,7 +83,7 @@ TEST_CASE("LockFreeFifo passes chunks of any size between two threads with every
     bool inOrder = true;
     while (expected < total)
     {
-        const auto got = fifo.read(chunk.data(), 1 + random() % 300);
+        const auto got = fifo.read(chunk.data(), static_cast<std::size_t>(1 + random() % 300));
         for (std::size_t i = 0; i < got; ++i)
             inOrder = inOrder && chunk[i] == expected++;
     }

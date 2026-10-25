@@ -233,8 +233,11 @@ TEST_CASE("Starting, stopping, changing and adding from eight threads at once, w
 
     CHECK(slow == 0);
     CHECK(stream->state() != AudioStream::State::failed);
-    CHECK(stream->statistics().cycles > 0);
     CHECK(rig.device.starts() > 10);
+
+    // And it still plays.
+    CHECK(!stream->start());
+    CHECK(soon([&] { return stream->statistics().cycles > 0; }));
     (void)stream->stop();
     for (auto& recording : recordings)
     {

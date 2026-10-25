@@ -1,6 +1,7 @@
 #include "symbolengine/devices/AudioDevices.h"
 
 #include "EventQueue.h"
+#include "Systems.h"
 
 #include <algorithm>
 #include <atomic>
@@ -214,17 +215,30 @@ AudioDevices::AudioDevices(Options options) : impl(std::make_shared<Impl>())
     }
     impl->options.streams.post = impl->options.post;
     impl->options.streams.onEvent = impl->options.onEvent;
+    if (impl->options.systems.empty())
+        impl->options.systems = devices::detail::systemsOfThisComputer();
 
     for (auto& system : impl->options.systems)
     {
         auto w = std::make_unique<Impl::Watched>();
         w->owner = impl.get();
         w->system = system;
-        impl->refresh(*w, false);
-        system->addListener(*w);
         impl->watched.push_back(std::move(w));
     }
-    impl->lister = std::thread([raw = impl.get()] { raw->listLoop(); });
+
+    // The first lists are read on the lister's own thread, as every later one is, and waited for here.
+    std::promise<void> listed;
+    auto first = listed.get_future();
+    impl->lister = std::thread([raw = impl.get(), &listed] {
+        for (auto& w : raw->watched)
+        {
+            raw->refresh(*w, false);
+            w->system->addListener(*w);
+        }
+        listed.set_value();
+        raw->listLoop();
+    });
+    first.wait();
 }
 
 AudioDevices::~AudioDevices()
