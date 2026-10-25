@@ -94,7 +94,9 @@ struct Deck
     }
 
     // Plays frames in blocks of `block`, keeping everything played, each block once the reader has it ready, as a
-    // device's pace allows, unless asked to play at once whatever is ready.
+    // device's pace allows, unless asked to play at once whatever is ready. A reader slowed by the sanitizers on a
+    // crowded runner is given up to a second a block; near a source's end, where fewer than a block remain, the wait
+    // runs out and plays what there is.
     std::vector<std::vector<float>> play(std::int64_t frames, int block = 512, bool waiting = true)
     {
         std::vector<std::vector<float>> out(2);
@@ -102,7 +104,7 @@ struct Deck
         {
             const auto n = static_cast<int>(std::min<std::int64_t>(block, frames - done));
             if (waiting)
-                soon([&] { return player.ready() >= static_cast<std::size_t>(n) || !player.playing(); }, 200ms);
+                soon([&] { return player.ready() >= static_cast<std::size_t>(n) || !player.playing(); }, 1000ms);
             float* channels[2]{left.data(), right.data()};
             player.render(channels, 2, n);
             out[0].insert(out[0].end(), left.begin(), left.begin() + n);
