@@ -767,8 +767,8 @@ TEST_CASE("An output whose callbacks are all idle stops its device after a while
     Events events;
     auto request = stereo(false, true);
     request.idleAfter = 100ms;
-    AudioStream stream(system, "speakers", request, quick(events));
     Player player;
+    AudioStream stream(system, "speakers", request, quick(events));
     REQUIRE(!stream.add(player));
     REQUIRE(!stream.start());
     REQUIRE(soon([&] { return speakers.running(); }));
@@ -819,8 +819,8 @@ TEST_CASE("A stream with an input never stops its device for idle callbacks")
     Events events;
     auto request = stereo();
     request.idleAfter = 50ms;
-    AudioStream stream(system, "interface", request, quick(events));
     Quiet quiet;
+    AudioStream stream(system, "interface", request, quick(events));
     REQUIRE(!stream.add(quiet));
     REQUIRE(!stream.start());
     std::this_thread::sleep_for(300ms);
@@ -838,8 +838,8 @@ TEST_CASE("An output following the default moves when the default changes and wh
     Events events;
     auto request = stereo(false, true);
     request.followDefault = true;
-    AudioStream stream(system, "speakers", request, quick(events));
     Recording recording;
+    AudioStream stream(system, "speakers", request, quick(events));
     REQUIRE(!stream.add(recording));
     REQUIRE(!stream.start());
     REQUIRE(speakers.running());
