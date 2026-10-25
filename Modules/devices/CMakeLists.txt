@@ -26,6 +26,7 @@ endif()
 symbolengine_add_module(devices
     SOURCES
         src/AsioDetail.cpp
+        src/AudioBridge.cpp
         src/AudioDevices.cpp
         src/AudioRecordFormat.cpp
         src/AudioPlayer.cpp
@@ -44,7 +45,7 @@ if(asio)
 endif()
 
 if(SYMBOLENGINE_TESTS)
-    set(tests Tests/AsioDetailTests.cpp Tests/AudioDevicesTests.cpp Tests/AudioPlayerTests.cpp Tests/AudioSetupTests.cpp Tests/AudioStreamTests.cpp
+    set(tests Tests/AsioDetailTests.cpp Tests/AudioBridgeTests.cpp Tests/AudioDevicesTests.cpp Tests/AudioPlayerTests.cpp Tests/AudioSetupTests.cpp Tests/AudioStreamTests.cpp
         Tests/RecordingTests.cpp)
     if(APPLE)
         list(APPEND tests Tests/CoreAudioTests.cpp)
