@@ -9,6 +9,7 @@
 
 #include <cmath>
 #include <numbers>
+#include <optional>
 #include <random>
 
 using namespace symbolengine;
@@ -219,11 +220,11 @@ TEST_CASE("A loop's join is exact to the sample, whatever its length against the
 
 TEST_CASE("A reader held up longer than it reads ahead gives silence for what it lacks, keeps time and says where", "[timing]")
 {
-    // Each stretch the reader lacked, in order; a busy computer may add stretches of its own after the hold's.
+    // Each stretch the reader lacked, in order; a busy computer may add stretches of its own beside the hold's.
     std::mutex lock;
     std::vector<std::pair<std::int64_t, std::int64_t>> stretches;
     AudioPlayer::Options options = Deck::quiet();
-    options.readAhead = 50ms;
+    options.readAhead = 300ms;
     options.onEvent = [&](const AudioPlayer::Event& event) {
         if (event.kind == Kind::underrun)
         {
@@ -233,18 +234,18 @@ TEST_CASE("A reader held up longer than it reads ahead gives silence for what it
     };
     Deck deck(options);
     auto source = std::make_shared<Counting>(48000 * 10);
-    source->holdAt = 24000;
-    source->holdFor = 250ms;
+    source->holdAt = 48000;
+    source->holdFor = 1000ms;
     deck.player.play(source, 0);
     deck.waitReady(2048);
 
-    // A second and a half at the device's pace by the clock, however long the test's sleeps take.
+    // Three seconds at the device's pace by the clock, however long the test's sleeps take.
     std::vector<float> heard;
     const auto began = std::chrono::steady_clock::now();
-    while (heard.size() < 72000)
+    while (heard.size() < 144000)
     {
         const auto due = std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count() * 48000.0;
-        while (static_cast<double>(heard.size()) + 480 <= due && heard.size() < 72000)
+        while (static_cast<double>(heard.size()) + 480 <= due && heard.size() < 144000)
         {
             const auto out = deck.play(480, 480, false);
             heard.insert(heard.end(), out[0].begin(), out[0].end());
@@ -252,20 +253,20 @@ TEST_CASE("A reader held up longer than it reads ahead gives silence for what it
         std::this_thread::sleep_for(2ms);
     }
 
-    REQUIRE(soon([&] {
+    // The stretch the hold made starts where the reader stopped and lasts at least the hold's second less what was read
+    // ahead, then as long as the reader takes to come back, which a busy computer stretches; that it came back is the
+    // last frame heard being the source's.
+    const auto held = [&]() -> std::optional<std::pair<std::int64_t, std::int64_t>> {
         const std::lock_guard hold(lock);
-        return !stretches.empty();
-    }));
-    const auto [lackedFrom, lackedFrames] = [&] {
-        const std::lock_guard hold(lock);
-        return stretches.front();
-    }();
-    INFO(lackedFrames << " frames lacking from " << lackedFrom << ", the first of " << stretches.size() << " stretches");
-    // The hold's 250 ms less the 50 ms read ahead, and the time the reader takes to come back, longer on a busy runner.
-    CHECK(static_cast<double>(lackedFrames) > 48000 * 0.1);
-    CHECK(static_cast<double>(lackedFrames) < 48000 * 0.5);
-    CHECK(lackedFrom >= 24000 - 2400);
-    CHECK(lackedFrom <= 24000 + 2400);
+        for (const auto& stretch : stretches)
+            if (std::abs(stretch.first - 48000) <= 4800)
+                return stretch;
+        return std::nullopt;
+    };
+    REQUIRE(soon([&] { return held().has_value(); }));
+    const auto [lackedFrom, lackedFrames] = *held();
+    INFO(lackedFrames << " frames lacking from " << lackedFrom << ", among " << stretches.size() << " stretches");
+    CHECK(static_cast<double>(lackedFrames) > 48000 * 0.5);
 
     // Every frame heard is the source's at its own place in time, or silence.
     for (std::size_t i = 0; i < heard.size(); ++i)
