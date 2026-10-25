@@ -57,7 +57,7 @@
 - [x] files: a recording written from an audio device's thread, its WAV or AIFF header rewritten and put on disk every second so a take survives a crash, a WAV passing 4 GB as RF64 in place, and each stretch given as the file holds it.
 - [ ] core's JSON tests on a PC's Visual Studio Build Tools, whose preprocessor takes the tests' raw strings inside Catch2's macros as escapes; GitHub's Visual Studio builds them.
 - [ ] files: M4A, AAC and CAF on Linux.
-- [ ] files: on GitHub's Windows runner, reading AAC in ADTS through Media Foundation once never returned, holding the run for an hour; each test now has ten minutes, so another hang fails by name. Find where Media Foundation waits, and give the system decoders a bound of their own.
+- [ ] files: on GitHub's Windows runner, reading AAC in ADTS through Media Foundation sometimes never returns; each test has ten minutes, so a hang fails by name, as it has twice more. It never hung in 150 runs on the owner's PC, the slowest 8.7 s, so it can't be found there: give the system decoders a bound of their own, the source reader asynchronous and each read waited on for a set time, so a decoder that stops answering is an error in a test and in a program, never a hang.
 - [ ] files: libvorbis' own `vorbisenc.c` again once Xiph.Org takes the fix for its 5.1 encoder's leak ([the report](Upstream/libvorbis-51-residue-leak.md)).
 - [x] ui: the web view on Mac and Windows, with pages served from files built into the program, and calls and events between page and native code.
 - [x] ui: a program's own windows holding a page, sized alike on every screen, their places held to a screen, see-through until the page draws; functions a page calls that answer later; WebView2 given the keyboard with its window.
