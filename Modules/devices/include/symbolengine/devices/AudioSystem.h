@@ -49,7 +49,11 @@ enum class AudioSystemChange
 
     /** The computer is going to sleep, or has woken. */
     sleeping,
-    woke
+    woke,
+
+    /** The system muted or unmuted this program's input, as a headset's own mute button does on a Mac, after which
+        every input gives silence until it is unmuted; inputMuted() says which. */
+    inputMute
 };
 
 /** One cycle of a device, as its system's audio thread gives it. */
@@ -158,6 +162,10 @@ public:
 
     /** The default device for a direction, or empty when there is none. */
     virtual std::string defaultDevice(AudioDirection direction) = 0;
+
+    /** Whether the system has muted this program's input, as Core Audio does from macOS 14, so every input gives
+        silence; false for a system that never does. */
+    virtual bool inputMuted() { return false; }
 
     /** Opens a stream on a device, without starting it, or gives nothing with the error set. */
     virtual std::unique_ptr<AudioSystemStream> open(const std::string& id, const AudioStreamRequest& request,

@@ -158,6 +158,10 @@ public:
     /** The audio service restarts: every stream on the system is lost, and listeners told. */
     void restartService();
 
+    /** The system mutes or unmutes this program's input, telling listeners. */
+    void setInputMuted(bool muted);
+    bool inputMuted() override;
+
     /** Moves the clock on. */
     void advance(std::chrono::nanoseconds by);
 

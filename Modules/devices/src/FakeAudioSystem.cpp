@@ -76,6 +76,7 @@ struct FakeAudioSystem::Impl
     std::string name;
     std::atomic<std::int64_t> clock{0};
     std::atomic<int> describes{0}, opens{0}, sets{0};
+    std::atomic<bool> muted{false};
 
     std::mutex lock;
     std::vector<std::unique_ptr<FakeAudioDevice>> devices;
@@ -562,6 +563,17 @@ void FakeAudioSystem::notify(AudioSystemChange change, int times, int threads)
         });
     for (auto& sender : senders)
         sender.join();
+}
+
+void FakeAudioSystem::setInputMuted(bool muted)
+{
+    impl->muted = muted;
+    impl->tell(AudioSystemChange::inputMute);
+}
+
+bool FakeAudioSystem::inputMuted()
+{
+    return impl->muted.load();
 }
 
 void FakeAudioSystem::restartService()

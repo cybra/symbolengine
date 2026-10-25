@@ -91,6 +91,11 @@ struct AudioEvent
         silentInput,
         inputSound,
 
+        /** The system muted this program's input, as a headset's own mute button does on a Mac, so the stream's input
+            is silence until it is unmuted; said when a stream with an input starts muted too. */
+        inputMuted,
+        inputUnmuted,
+
         /** The computer went to sleep, ending the stream's stretch, and woke after nanoseconds, the stream started
             again from new system objects. */
         sleeping,

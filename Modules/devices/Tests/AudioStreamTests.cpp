@@ -713,6 +713,38 @@ TEST_CASE("A device asking to be opened again as every open starts is opened aga
     CHECK(stream->state() == AudioStream::State::running);
 }
 
+TEST_CASE("The system muting the program's input is said to a stream with an input as it starts and as it changes, and to no other")
+{
+    auto system = std::make_shared<FakeAudioSystem>();
+    system->add(fakeDevice("interface"));
+    system->setInputMuted(true);
+    Events events;
+    AudioStream recording(system, "interface", stereo(true, false), quick(events));
+    REQUIRE(!recording.start());
+    REQUIRE(events.waitFor(Kind::inputMuted));
+
+    system->add(fakeDevice("speakers", 0, 2));
+
+    system->setInputMuted(false);
+    REQUIRE(events.waitFor(Kind::inputUnmuted));
+    system->setInputMuted(true);
+    REQUIRE(events.waitFor(Kind::inputMuted, 2));
+    system->setInputMuted(true);
+    std::this_thread::sleep_for(50ms);
+    CHECK(events.count(Kind::inputMuted) == 2);
+    CHECK(events.count(Kind::inputUnmuted) == 1);
+    REQUIRE(!recording.stop());
+
+    // An output alone hears nothing of it.
+    Events outputEvents;
+    AudioStream output(system, "speakers", stereo(false, true), quick(outputEvents));
+    REQUIRE(!output.start());
+    system->setInputMuted(false);
+    std::this_thread::sleep_for(50ms);
+    CHECK(outputEvents.count(Kind::inputMuted) == 0);
+    CHECK(outputEvents.count(Kind::inputUnmuted) == 0);
+}
+
 TEST_CASE("A device that lost its clock ends its stream, saying so")
 {
     Rig rig;

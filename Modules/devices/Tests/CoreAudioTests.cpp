@@ -1,7 +1,8 @@
 // Core Audio's lessons. The arithmetic is checked on any Mac; with SYMBOLENGINE_REAL_DEVICES=1 the tests also list
 // the Mac's own devices, play silence through its built-in speakers, which runners have none of, and record from its
 // own microphone, asking for the microphone first, or from the input SYMBOLENGINE_TEST_INPUT names part of: a
-// MacBook's own microphone is cut off while its lid is closed, and gives exact silence.
+// MacBook's own microphone is cut off while its lid is closed, and gives exact silence. The input muted for this
+// program, from macOS 14, is set by the test itself, and needs an input that is live.
 
 #include "CoreAudioDetail.h"
 #include "Helpers.h"
@@ -12,8 +13,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <CoreAudio/CoreAudio.h>
+
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <future>
 
 using namespace symbolengine;
@@ -251,4 +255,66 @@ TEST_CASE("Two seconds from the Mac's own microphone come in at its rate and liv
     const auto measured = static_cast<double>(recording.frames - recording.kept().back().frames) / seconds;
     CHECK(std::abs(measured - info.sampleRate) / info.sampleRate < 0.005);
     CHECK(info.inputLatency > 0);
+}
+
+TEST_CASE("This program's input muted through Core Audio is said and gives silence, and unmuted gives sound again")
+{
+    if (!realDevices())
+        SKIP("SYMBOLENGINE_REAL_DEVICES=1 records from the Mac's own input");
+    const AudioObjectPropertyAddress mute{kAudioHardwarePropertyProcessInputMute, kAudioObjectPropertyScopeGlobal,
+                                          kAudioObjectPropertyElementMain};
+    if (!AudioObjectHasProperty(kAudioObjectSystemObject, &mute))
+        SKIP("The program's own input mute came with macOS 14");
+    if (microphoneAccess() != MicrophoneAccess::allowed)
+        SKIP("This terminal may not use the microphone");
+
+    // Unmuted again however the test ends.
+    const auto setMute = [&](UInt32 value) {
+        return AudioObjectSetPropertyData(kAudioObjectSystemObject, &mute, 0, nullptr, sizeof(value), &value);
+    };
+    struct Unmute
+    {
+        std::function<void()> undo;
+        ~Unmute() { undo(); }
+    } unmute{[&] { setMute(0); }};
+
+    Events events;
+    AudioDevices devices({.onEvent = events.handler()});
+    const auto list = devices.devices("Core Audio");
+    const auto* input = testInput(list);
+    REQUIRE(input != nullptr);
+
+    Recording recording;
+    std::atomic<float> peak{0.0f};
+    recording.onProcess = [&](const AudioBlock& block) {
+        auto loudest = peak.load();
+        for (int i = 0; i < block.frames; ++i)
+            loudest = std::max(loudest, std::abs(block.inputs[0][i]));
+        peak = loudest;
+    };
+    AudioError error;
+    AudioStreamRequest request;
+    request.inputChannels = {0};
+    auto stream = devices.open("Core Audio", input->id, request, error);
+    REQUIRE(stream != nullptr);
+    REQUIRE(!stream->add(recording));
+    REQUIRE(!stream->start());
+    std::this_thread::sleep_for(500ms);
+    INFO(input->name);
+    REQUIRE(peak.load() > 0.0f);
+
+    REQUIRE(setMute(1) == noErr);
+    REQUIRE(events.waitFor(AudioEvent::Kind::inputMuted));
+    std::this_thread::sleep_for(200ms);
+    peak = 0.0f;
+    std::this_thread::sleep_for(500ms);
+    CHECK(peak.load() == 0.0f);
+
+    REQUIRE(setMute(0) == noErr);
+    REQUIRE(events.waitFor(AudioEvent::Kind::inputUnmuted));
+    std::this_thread::sleep_for(200ms);
+    peak = 0.0f;
+    std::this_thread::sleep_for(500ms);
+    CHECK(peak.load() > 0.0f);
+    REQUIRE(!stream->stop());
 }

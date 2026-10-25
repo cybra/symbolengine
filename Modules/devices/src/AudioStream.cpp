@@ -170,6 +170,8 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
     std::atomic<int> lossPending{-1};
     std::atomic<std::int64_t> lossCode{0};
     std::atomic<bool> devicesPending{false}, restartPending{false}, sleepPending{false}, wakePending{false};
+    std::atomic<bool> mutePending{false};
+    bool mutedSaid = false;
 
     // The program's calls
 
@@ -223,7 +225,7 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
     bool urgent() const
     {
         return lossPending.load() >= 0 || devicesPending.load() || restartPending.load() || sleepPending.load() ||
-               wakePending.load();
+               wakePending.load() || mutePending.load();
     }
 
     void controlLoop()
@@ -435,7 +437,20 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
         setState(State::running);
         if (announce)
             tell({.kind = AudioEvent::Kind::started, .after = now});
+
+        // An input that starts muted is said once; one unmuted is said only as it changes.
+        mutedSaid = false;
+        if (run.inputs > 0)
+            sayMute();
         return {};
+    }
+
+    void sayMute()
+    {
+        const auto muted = system->inputMuted();
+        if (muted != mutedSaid)
+            tell({.kind = muted ? AudioEvent::Kind::inputMuted : AudioEvent::Kind::inputUnmuted});
+        mutedSaid = muted;
     }
 
     void prepareRun(const AudioStreamInfo& now)
@@ -560,6 +575,9 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
 
         if (restartPending.exchange(false) && stream != nullptr)
             lose(AudioLoss::serviceRestarted);
+
+        if (mutePending.exchange(false) && stream != nullptr && run.inputs > 0)
+            sayMute();
 
         if (devicesPending.exchange(false) && stream != nullptr)
         {
@@ -758,6 +776,7 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
             case AudioSystemChange::serviceRestarted: restartPending = true; break;
             case AudioSystemChange::sleeping: sleepPending = true; break;
             case AudioSystemChange::woke: wakePending = true; break;
+            case AudioSystemChange::inputMute: mutePending = true; break;
         }
         nudge();
     }

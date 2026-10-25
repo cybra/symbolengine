@@ -654,6 +654,14 @@ public:
         return info;
     }
 
+    bool inputMuted() override
+    {
+        const auto mute = address(kAudioHardwarePropertyProcessInputMute);
+        UInt32 muted = 0;
+        return AudioObjectHasProperty(kAudioObjectSystemObject, &mute) && read(kAudioObjectSystemObject, mute, muted) &&
+               muted != 0;
+    }
+
     std::string defaultDevice(AudioDirection direction) override
     {
         AudioObjectID device = kAudioObjectUnknown;
@@ -734,14 +742,19 @@ private:
         defaultsBlock = Block_copy(^(UInt32, const AudioObjectPropertyAddress*) { to->tell(AudioSystemChange::defaults); });
         restartBlock =
             Block_copy(^(UInt32, const AudioObjectPropertyAddress*) { to->tell(AudioSystemChange::serviceRestarted); });
+        muteBlock = Block_copy(^(UInt32, const AudioObjectPropertyAddress*) { to->tell(AudioSystemChange::inputMute); });
         const auto devices = address(kAudioHardwarePropertyDevices);
         const auto input = address(kAudioHardwarePropertyDefaultInputDevice);
         const auto output = address(kAudioHardwarePropertyDefaultOutputDevice);
         const auto restarted = address(kAudioHardwarePropertyServiceRestarted);
+        const auto mute = address(kAudioHardwarePropertyProcessInputMute);
         AudioObjectAddPropertyListenerBlock(kAudioObjectSystemObject, &devices, queue, devicesBlock);
         AudioObjectAddPropertyListenerBlock(kAudioObjectSystemObject, &input, queue, defaultsBlock);
         AudioObjectAddPropertyListenerBlock(kAudioObjectSystemObject, &output, queue, defaultsBlock);
         AudioObjectAddPropertyListenerBlock(kAudioObjectSystemObject, &restarted, queue, restartBlock);
+        // The process's input mute, from macOS 14.
+        listeningToMute = AudioObjectHasProperty(kAudioObjectSystemObject, &mute) &&
+                          AudioObjectAddPropertyListenerBlock(kAudioObjectSystemObject, &mute, queue, muteBlock) == noErr;
 
         // The computer's sleep and waking, from the power manager.
         power = std::make_unique<Power>();
@@ -759,13 +772,17 @@ private:
         const auto input = address(kAudioHardwarePropertyDefaultInputDevice);
         const auto output = address(kAudioHardwarePropertyDefaultOutputDevice);
         const auto restarted = address(kAudioHardwarePropertyServiceRestarted);
+        const auto mute = address(kAudioHardwarePropertyProcessInputMute);
         AudioObjectRemovePropertyListenerBlock(kAudioObjectSystemObject, &devices, queue, devicesBlock);
         AudioObjectRemovePropertyListenerBlock(kAudioObjectSystemObject, &input, queue, defaultsBlock);
         AudioObjectRemovePropertyListenerBlock(kAudioObjectSystemObject, &output, queue, defaultsBlock);
         AudioObjectRemovePropertyListenerBlock(kAudioObjectSystemObject, &restarted, queue, restartBlock);
+        if (listeningToMute)
+            AudioObjectRemovePropertyListenerBlock(kAudioObjectSystemObject, &mute, queue, muteBlock);
         Block_release(devicesBlock);
         Block_release(defaultsBlock);
         Block_release(restartBlock);
+        Block_release(muteBlock);
         if (power != nullptr && power->root != MACH_PORT_NULL)
         {
             IODeregisterForSystemPower(&power->notifier);
@@ -811,6 +828,8 @@ private:
     std::shared_ptr<SystemListeners> listeners = std::make_shared<SystemListeners>();
     bool listening = false;
     AudioObjectPropertyListenerBlock devicesBlock = nullptr, defaultsBlock = nullptr, restartBlock = nullptr;
+    AudioObjectPropertyListenerBlock muteBlock = nullptr;
+    bool listeningToMute = false;
     std::unique_ptr<Power> power;
 };
 }
