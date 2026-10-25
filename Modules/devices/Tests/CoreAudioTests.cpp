@@ -1,15 +1,20 @@
 // Core Audio's lessons. The arithmetic is checked on any Mac; with SYMBOLENGINE_REAL_DEVICES=1 the tests also list
-// the Mac's own devices and play silence through its built-in speakers, which runners have none of.
+// the Mac's own devices, play silence through its built-in speakers, which runners have none of, and record from its
+// own microphone, asking for the microphone first, or from the input SYMBOLENGINE_TEST_INPUT names part of: a
+// MacBook's own microphone is cut off while its lid is closed, and gives exact silence.
 
 #include "CoreAudioDetail.h"
 #include "Helpers.h"
 
 #include <symbolengine/core/System.h>
 #include <symbolengine/devices/AudioDevices.h>
+#include <symbolengine/devices/Microphone.h>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <cmath>
+#include <future>
 
 using namespace symbolengine;
 namespace detail = symbolengine::coreAudio::detail;
@@ -25,6 +30,16 @@ const AudioDeviceInfo* builtInSpeakers(const std::vector<AudioDeviceInfo>& devic
 {
     for (const auto& device : devices)
         if (device.transport == AudioTransport::builtIn && device.outputs() > 0 && device.inputs() == 0)
+            return &device;
+    return nullptr;
+}
+
+const AudioDeviceInfo* testInput(const std::vector<AudioDeviceInfo>& devices)
+{
+    const auto part = system::environmentVariable("SYMBOLENGINE_TEST_INPUT").value_or("");
+    for (const auto& device : devices)
+        if (device.inputs() > 0 && (part.empty() ? device.transport == AudioTransport::builtIn && device.outputs() == 0
+                                                 : device.name.find(part) != std::string::npos))
             return &device;
     return nullptr;
 }
@@ -153,4 +168,87 @@ TEST_CASE("Silence played through the built-in speakers for two seconds comes in
     const auto measured = static_cast<double>(recording.frames - recording.kept().back().frames) / seconds;
     CHECK(std::abs(measured - info.sampleRate) / info.sampleRate < 0.005);
     CHECK(info.outputLatency > info.maxBlock);
+}
+
+TEST_CASE("Two seconds from the Mac's own microphone come in at its rate and live, once the program may use it")
+{
+    if (!realDevices())
+        SKIP("SYMBOLENGINE_REAL_DEVICES=1 records from the Mac's own microphone");
+
+    // Asked first, as a program asks when recording is chosen; the user answers the system's question.
+    if (microphoneAccess() == MicrophoneAccess::notAsked)
+    {
+        std::promise<bool> answer;
+        askForMicrophone([&answer](bool allowed) { answer.set_value(allowed); });
+        REQUIRE(answer.get_future().wait_for(60s) == std::future_status::ready);
+    }
+
+    Events events;
+    AudioDevices devices({.onEvent = events.handler()});
+    const auto list = devices.devices("Core Audio");
+    const auto* input = testInput(list);
+    REQUIRE(input != nullptr);
+
+    AudioError error;
+    AudioStreamRequest request;
+    request.inputChannels = {0};
+    auto stream = devices.open("Core Audio", input->id, request, error);
+    REQUIRE(stream != nullptr);
+
+    // Not allowed, the input says so when it starts, where Core Audio would give silence.
+    if (microphoneAccess() == MicrophoneAccess::denied)
+    {
+        const auto refused = stream->start();
+        CHECK(refused.step == "microphone permission");
+        SKIP("This terminal may not use the microphone: " << refused.message);
+    }
+
+    Recording recording;
+    std::atomic<std::int64_t> firstTime{-1}, lastTime{-1}, expected{0}, zeros{0}, samples{0};
+    std::atomic<bool> continuous{true};
+    std::atomic<float> peak{0.0f};
+    recording.onProcess = [&](const AudioBlock& block) {
+        if (firstTime.load() < 0)
+            firstTime = block.inputTime;
+        lastTime = block.inputTime;
+        if (block.inputPosition != expected.load())
+            continuous = false;
+        expected = block.inputPosition + block.frames;
+        auto loudest = peak.load();
+        for (int i = 0; i < block.frames; ++i)
+        {
+            const auto value = block.inputs[0][i];
+            loudest = std::max(loudest, std::abs(value));
+            if (value == 0.0f)
+                ++zeros;
+        }
+        peak = loudest;
+        samples += block.frames;
+    };
+
+    REQUIRE(!stream->add(recording));
+    REQUIRE(!stream->start());
+    std::this_thread::sleep_for(2s);
+    const auto info = stream->info();
+    REQUIRE(!stream->stop());
+
+    INFO(input->name << ": rate " << info.sampleRate << ", block " << info.maxBlock << ", " << recording.frames
+                     << " frames, peak " << 20.0 * std::log10(std::max(peak.load(), 1e-12f)) << " dBFS, " << zeros
+                     << " samples exactly 0");
+    CHECK(info.sampleRate == input->currentRate);
+    CHECK(recording.emptyBlocks == 0);
+    CHECK(continuous);
+    CHECK(stream->statistics().dropouts == 0);
+    CHECK(events.count(AudioEvent::Kind::stalled) == 0);
+
+    // A live microphone's noise, never exact silence throughout.
+    CHECK(peak.load() > 0.0f);
+    CHECK(zeros.load() < samples.load() / 2);
+
+    // Its frames over its host times run at its rate, within half a percent.
+    const auto seconds = static_cast<double>(lastTime - firstTime) / 1e9;
+    REQUIRE(seconds > 1.5);
+    const auto measured = static_cast<double>(recording.frames - recording.kept().back().frames) / seconds;
+    CHECK(std::abs(measured - info.sampleRate) / info.sampleRate < 0.005);
+    CHECK(info.inputLatency > 0);
 }

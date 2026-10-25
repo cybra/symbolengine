@@ -2,6 +2,7 @@
 #include "Systems.h"
 
 #include <symbolengine/devices/AudioSystem.h>
+#include <symbolengine/devices/Microphone.h>
 
 #include <Block.h>
 #include <CoreAudio/CoreAudio.h>
@@ -15,6 +16,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <vector>
 
@@ -229,7 +231,10 @@ struct StreamListeners
 class CoreAudioStream final : public AudioSystemStream
 {
 public:
-    CoreAudioStream(AudioObjectID d, AudioStreamRequest r) : device(d), request(std::move(r)) {}
+    CoreAudioStream(AudioObjectID d, AudioStreamRequest r, bool askFirst)
+        : device(d), request(std::move(r)), ask(askFirst)
+    {
+    }
 
     ~CoreAudioStream() override
     {
@@ -325,6 +330,17 @@ public:
             return false;
         }
         running = true;
+
+        // The user's answer comes later; a no ends the stream, as the system refusing it.
+        if (ask)
+        {
+            ask = false;
+            askForMicrophone([weak = std::weak_ptr<StreamListeners>(listeners)](bool allowed) {
+                if (const auto held = weak.lock(); held != nullptr && !allowed)
+                    if (auto* to = held->client.load())
+                        to->lost(AudioLoss::refused, 0);
+            });
+        }
         return true;
     }
 
@@ -516,6 +532,7 @@ private:
                                      overloadBlock = nullptr;
     std::atomic<AudioSystemClient*> client{nullptr};
     bool running = false;
+    bool ask = false;
 
     std::vector<int> inputStreams, outputStreams;
     std::vector<detail::Place> inputPlaces, outputPlaces;
@@ -671,7 +688,18 @@ public:
             return nullptr;
         }
 
-        auto stream = std::make_unique<CoreAudioStream>(device, request);
+        // Core Audio gives a program the user hasn't allowed silence, so a denial is said here; one not yet asked is
+        // asked as its input starts.
+        const auto access = request.inputChannels.empty() ? MicrophoneAccess::allowed : microphoneAccess();
+        if (access == MicrophoneAccess::denied)
+        {
+            error = {"This program isn't allowed to use the microphone. It can be allowed in System Settings, under "
+                     "Privacy & Security, Microphone.",
+                     "microphone permission"};
+            return nullptr;
+        }
+
+        auto stream = std::make_unique<CoreAudioStream>(device, request, access == MicrophoneAccess::notAsked);
         if (!stream->prepare(error))
             return nullptr;
         return stream;

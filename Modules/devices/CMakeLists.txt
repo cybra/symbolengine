@@ -4,13 +4,13 @@ find_package(Threads REQUIRED)
 # Each computer's own systems: Core Audio on a Mac, Windows Audio on Windows.
 set(libraries Threads::Threads)
 if(APPLE)
-    set(systems src/CoreAudio_mac.cpp)
-    list(APPEND libraries "-framework CoreAudio" "-framework CoreFoundation" "-framework IOKit")
+    set(systems src/CoreAudio_mac.cpp src/Microphone_mac.mm)
+    list(APPEND libraries "-framework AVFoundation" "-framework CoreAudio" "-framework CoreFoundation" "-framework IOKit")
 elseif(WIN32)
-    set(systems src/WindowsAudio_windows.cpp)
+    set(systems src/WindowsAudio_windows.cpp src/Microphone_other.cpp)
     list(APPEND libraries ole32 avrt powrprof)
 else()
-    set(systems src/Systems_other.cpp)
+    set(systems src/Systems_other.cpp src/Microphone_other.cpp)
 endif()
 
 symbolengine_add_module(devices
