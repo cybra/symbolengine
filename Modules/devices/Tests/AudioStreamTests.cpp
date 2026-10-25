@@ -828,6 +828,75 @@ TEST_CASE("A stream with an input never stops its device for idle callbacks")
     CHECK(events.count(Kind::idle) == 0);
 }
 
+TEST_CASE("An output following the default moves when the default changes and when its device goes, and is lost with none")
+{
+    auto system = std::make_shared<FakeAudioSystem>();
+    auto& speakers = system->add(fakeDevice("speakers", 0, 2));
+    auto& headphones = system->add(fakeDevice("headphones", 0, 2));
+    auto& airpods = system->add(fakeDevice("airpods", 0, 2));
+    system->setDefault(AudioDirection::output, "speakers");
+    Events events;
+    auto request = stereo(false, true);
+    request.followDefault = true;
+    AudioStream stream(system, "speakers", request, quick(events));
+    Recording recording;
+    REQUIRE(!stream.add(recording));
+    REQUIRE(!stream.start());
+    REQUIRE(speakers.running());
+
+    // The default changes: it moves, prepared again there.
+    system->setDefault(AudioDirection::output, "headphones");
+    REQUIRE(events.waitFor(Kind::moved));
+    CHECK(stream.deviceId() == "headphones");
+    CHECK(headphones.running());
+    CHECK_FALSE(speakers.running());
+    CHECK(events.of(Kind::moved).front().deviceId == "headphones");
+    CHECK(recording.prepares == 2);
+
+    // Its device goes, and the default with it: it moves to the new default, never said lost.
+    system->setDefault(AudioDirection::output, "airpods", false);
+    system->remove("headphones");
+    system->setDefault(AudioDirection::output, "airpods");
+    REQUIRE(events.waitFor(Kind::moved, 2));
+    CHECK(stream.deviceId() == "airpods");
+    CHECK(airpods.running());
+    CHECK(events.count(Kind::lost) == 0);
+    CHECK(stream.state() == AudioStream::State::running);
+
+    // Its device goes with no default to move to: lost.
+    system->setDefault(AudioDirection::output, "", false);
+    system->remove("airpods");
+    REQUIRE(events.waitFor(Kind::lost));
+    CHECK(events.of(Kind::lost).front().loss == AudioLoss::unplugged);
+}
+
+TEST_CASE("A stream with an input never follows the default, nor one that wasn't asked to")
+{
+    auto system = std::make_shared<FakeAudioSystem>();
+    auto& first = system->add(fakeDevice("first"));
+    system->add(fakeDevice("second"));
+    system->setDefault(AudioDirection::output, "first");
+    Events withInput, notAsked;
+    auto duplex = stereo();
+    duplex.followDefault = true;
+    AudioStream recording(system, "first", duplex, quick(withInput));
+    REQUIRE(!recording.start());
+    system->setDefault(AudioDirection::output, "second");
+    std::this_thread::sleep_for(150ms);
+    CHECK(recording.deviceId() == "first");
+    CHECK(first.running());
+    CHECK(withInput.count(Kind::moved) == 0);
+    REQUIRE(!recording.stop());
+
+    AudioStream output(system, "first", stereo(false, true), quick(notAsked));
+    REQUIRE(!output.start());
+    system->setDefault(AudioDirection::output, "first");
+    system->setDefault(AudioDirection::output, "second");
+    std::this_thread::sleep_for(150ms);
+    CHECK(output.deviceId() == "first");
+    CHECK(notAsked.count(Kind::moved) == 0);
+}
+
 TEST_CASE("A device that lost its clock ends its stream, saying so")
 {
     Rig rig;

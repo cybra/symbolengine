@@ -125,6 +125,7 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
     Options options;
     std::shared_ptr<devices::detail::EventQueue> queue;
     std::function<void()> closed;
+    std::function<bool(const std::string&)> moving;
 
     // Between the program's threads and the control thread.
     std::mutex lock;
@@ -176,6 +177,12 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
     // The device stopped while every callback is idle, the stream still running to the program.
     bool resting = false;
     std::int64_t idleSince = -1;
+
+    // A stream following the default output: a change of default to look at once it settles, and whether its device
+    // has gone, in which case no default to move to loses it.
+    std::atomic<bool> defaultsPending{false};
+    std::atomic<std::int64_t> defaultsAt{0};
+    bool orphaned = false;
 
     // The program's calls
 
@@ -580,7 +587,12 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
     void handleSystem()
     {
         if (const auto why = lossPending.exchange(-1); why >= 0 && stream != nullptr)
-            lose(static_cast<AudioLoss>(why));
+        {
+            if (follows() && static_cast<AudioLoss>(why) == AudioLoss::unplugged)
+                orphan();
+            else
+                lose(static_cast<AudioLoss>(why));
+        }
 
         if (restartPending.exchange(false) && stream != nullptr)
             lose(AudioLoss::serviceRestarted);
@@ -591,8 +603,19 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
         if (devicesPending.exchange(false) && (stream != nullptr || resting))
         {
             const auto ids = system->deviceIds();
-            if (std::find(ids.begin(), ids.end(), deviceId) == ids.end())
-                lose(AudioLoss::unplugged);
+            if (std::find(ids.begin(), ids.end(), currentDevice()) == ids.end())
+            {
+                if (follows())
+                    orphan();
+                else
+                    lose(AudioLoss::unplugged);
+            }
+        }
+
+        if (defaultsPending.load() && steadyNanoseconds() - defaultsAt.load() >= nanoseconds(options.settle))
+        {
+            defaultsPending = false;
+            followDefault();
         }
 
         if (sleepPending.exchange(false) && stream != nullptr)
@@ -665,6 +688,68 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
             after = info;
         }
         tell({.kind = AudioEvent::Kind::formatChanged, .before = before, .after = after});
+    }
+
+    // Following the default output, as a stream with no input asks.
+    bool follows()
+    {
+        const std::lock_guard hold(lock);
+        return request.followDefault && request.inputChannels.empty();
+    }
+
+    std::string currentDevice()
+    {
+        const std::lock_guard hold(lock);
+        return deviceId;
+    }
+
+    // Its device gone: closed, and moved to the default once the system has said which, or lost when there is none.
+    void orphan()
+    {
+        teardown();
+        resting = false;
+        orphaned = true;
+        defaultsAt = steadyNanoseconds();
+        defaultsPending = true;
+    }
+
+    void followDefault()
+    {
+        const auto now = state.load();
+        if (now != State::running && !orphaned)
+            return;
+        const auto next = system->defaultDevice(AudioDirection::output);
+        const auto here = currentDevice();
+        if (next.empty() || (next == here && !orphaned))
+        {
+            if (orphaned)
+            {
+                orphaned = false;
+                lose(AudioLoss::unplugged);
+            }
+            return;
+        }
+        if (next != here && moving && !moving(next))
+        {
+            if (orphaned)
+            {
+                orphaned = false;
+                lose(AudioLoss::unplugged, {"The new default output is open already.", "move"});
+            }
+            return;
+        }
+        teardown();
+        orphaned = false;
+        {
+            const std::lock_guard hold(lock);
+            deviceId = next;
+        }
+        if (auto error = openAndBegin(false))
+        {
+            lose(AudioLoss::other, error);
+            return;
+        }
+        tell({.kind = AudioEvent::Kind::moved});
     }
 
     // An output whose callbacks have all been idle long enough stops its device, and starts it again, a new stretch,
@@ -817,7 +902,12 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
         switch (change)
         {
             case AudioSystemChange::devices: devicesPending = true; break;
-            case AudioSystemChange::defaults: return;
+            case AudioSystemChange::defaults:
+                if (!follows())
+                    return;
+                defaultsAt = steadyNanoseconds();
+                defaultsPending = true;
+                break;
             case AudioSystemChange::serviceRestarted: restartPending = true; break;
             case AudioSystemChange::sleeping: sleepPending = true; break;
             case AudioSystemChange::woke: wakePending = true; break;
@@ -1178,8 +1268,9 @@ AudioStream::Statistics AudioStream::statistics() const noexcept
     return now;
 }
 
-const std::string& AudioStream::deviceId() const noexcept
+std::string AudioStream::deviceId() const
 {
+    const std::lock_guard hold(impl->lock);
     return impl->deviceId;
 }
 
@@ -1191,6 +1282,11 @@ AudioSystem& AudioStream::system() const noexcept
 void AudioStream::whenClosed(std::function<void()> closed)
 {
     impl->closed = std::move(closed);
+}
+
+void AudioStream::whenMoving(std::function<bool(const std::string& to)> moving)
+{
+    impl->moving = std::move(moving);
 }
 
 }

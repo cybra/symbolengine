@@ -101,6 +101,10 @@ struct AudioEvent
         inputMuted,
         inputUnmuted,
 
+        /** A stream following the default output moved to the system's new default, deviceId; it is prepared again
+            there, a new stretch. */
+        moved,
+
         /** Every callback was idle for Options::idleAfter, so the stream stopped its device, as an output not playing
             should; and one wanted sound again, so it started it again, a new stretch. */
         idle,
@@ -253,7 +257,8 @@ public:
 
     AudioStreamRequest request() const;
     Statistics statistics() const noexcept;
-    const std::string& deviceId() const noexcept;
+    /** The device it is on, which changes for a stream following the default output. */
+    std::string deviceId() const;
     AudioSystem& system() const noexcept;
 
     struct Impl;
@@ -262,6 +267,9 @@ private:
     // AudioDevices hears when a stream it opened closes, to let its device be opened again.
     friend class AudioDevices;
     void whenClosed(std::function<void()> closed);
+
+    // And asks before it moves to another device, which may be refused when that one is open already.
+    void whenMoving(std::function<bool(const std::string& to)> moving);
 
     std::shared_ptr<Impl> impl;
 };

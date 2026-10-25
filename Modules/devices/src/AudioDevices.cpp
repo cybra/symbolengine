@@ -315,12 +315,26 @@ std::unique_ptr<AudioStream> AudioDevices::open(const std::string& system, const
         }
     }
 
+    // The device the stream is on now, which a stream following the default output changes, under the list's lock.
+    auto current = std::make_shared<std::pair<std::string, std::string>>(key);
     auto stream = std::make_unique<AudioStream>(w->system, deviceId, std::move(request), impl->options.streams);
-    stream->whenClosed([open = std::weak_ptr<Impl::Open>(impl->open), key] {
+    stream->whenMoving([open = std::weak_ptr<Impl::Open>(impl->open), current](const std::string& to) {
+        const auto still = open.lock();
+        if (still == nullptr)
+            return true;
+        const std::lock_guard hold(still->lock);
+        const auto next = std::make_pair(current->first, to);
+        if (!still->devices.insert(next).second)
+            return false;
+        still->devices.erase(*current);
+        *current = next;
+        return true;
+    });
+    stream->whenClosed([open = std::weak_ptr<Impl::Open>(impl->open), current] {
         if (const auto still = open.lock())
         {
             const std::lock_guard hold(still->lock);
-            still->devices.erase(key);
+            still->devices.erase(*current);
         }
     });
     return stream;

@@ -200,3 +200,28 @@ TEST_CASE("Resolving a setup uses the devices as listed")
     CHECK(resolved.output.exact);
     CHECK(resolved.input.id.empty());
 }
+
+TEST_CASE("A stream following the default takes its new device with it, which another can't open and its old one can")
+{
+    auto system = std::make_shared<FakeAudioSystem>();
+    system->add(fakeDevice("speakers", 0, 2));
+    system->add(fakeDevice("headphones", 0, 2));
+    system->setDefault(AudioDirection::output, "speakers");
+    Events events;
+    AudioDevices devices(optionsFor(system, events));
+
+    AudioError error;
+    auto request = stereo(false, true);
+    request.followDefault = true;
+    auto following = devices.open("Fake", "speakers", request, error);
+    REQUIRE(following != nullptr);
+    REQUIRE(!following->start());
+    system->setDefault(AudioDirection::output, "headphones");
+    REQUIRE(events.waitFor(Kind::moved));
+
+    CHECK(devices.open("Fake", "headphones", stereo(false, true), error) == nullptr);
+    CHECK(error.message == "The audio device is already open.");
+    CHECK(devices.open("Fake", "speakers", stereo(false, true), error) != nullptr);
+    following.reset();
+    CHECK(devices.open("Fake", "headphones", stereo(false, true), error) != nullptr);
+}

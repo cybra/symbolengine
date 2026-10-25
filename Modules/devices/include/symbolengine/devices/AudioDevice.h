@@ -97,6 +97,11 @@ struct AudioStreamRequest
     /** Windows Audio's shared mode: how long the input's thread may be held up without losing anything, the length
         of the input's own buffer apart from the block it delivers. */
     double inputBufferSeconds = 0.2;
+
+    /** An output alone, opened on the system's default: the stream moves to the default whenever it changes or its
+        device goes, as AirPods connecting move a Mac's sound. Never a stream with an input, which stays where a take
+        began. */
+    bool followDefault = false;
 };
 
 /** What a device runs at once its stream is open, as the device gives it back. */
