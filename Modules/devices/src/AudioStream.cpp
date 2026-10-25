@@ -174,6 +174,8 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
     std::atomic<bool> mutePending{false};
     bool mutedSaid = false;
 
+    AudioWorkgroup workgroupNow;
+
     // The device stopped while every callback is idle, the stream still running to the program.
     bool resting = false;
     std::int64_t idleSince = -1;
@@ -448,6 +450,11 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
         }
 
         stream = std::move(opened);
+        {
+            auto group = stream->workgroup();
+            const std::lock_guard hold(lock);
+            workgroupNow = std::move(group);
+        }
         ++stretches;
         setState(State::running);
         if (announce)
@@ -1271,6 +1278,12 @@ AudioStream::Statistics AudioStream::statistics() const noexcept
     now.overruns = impl->overruns.load();
     now.load = impl->load.load();
     return now;
+}
+
+AudioWorkgroup AudioStream::workgroup() const
+{
+    const std::lock_guard hold(impl->lock);
+    return impl->workgroupNow;
 }
 
 std::string AudioStream::deviceId() const

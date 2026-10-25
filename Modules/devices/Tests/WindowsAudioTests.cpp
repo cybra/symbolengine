@@ -408,3 +408,28 @@ TEST_CASE("Another program taking the input for its own ends a shared stream on 
     CHECK(event.loss == AudioLoss::takenExclusively);
     CHECK(stream->state() == AudioStream::State::lost);
 }
+
+TEST_CASE("A thread of the program's joins the multimedia scheduler's Pro Audio class for a stream, and leaves it")
+{
+    if (setting("SYMBOLENGINE_REAL_DEVICES") != "1")
+        SKIP("SYMBOLENGINE_REAL_DEVICES=1 lists the PC's own endpoints");
+    Events events;
+    AudioDevices devices(options(events));
+    const auto output = devices.defaultDevice("Windows Audio", AudioDirection::output);
+    REQUIRE_FALSE(output.empty());
+    AudioError error;
+    AudioStreamRequest request;
+    request.outputChannels = {0, 1};
+    auto stream = devices.open("Windows Audio", output, request, error);
+    REQUIRE(stream != nullptr);
+    Recording recording;
+    REQUIRE(!stream->add(recording));
+    REQUIRE(!stream->start());
+    const auto group = stream->workgroup();
+    REQUIRE_FALSE(group.empty());
+    bool joined = false;
+    std::thread worker([&] { joined = group.join(48000.0, 480).joined(); });
+    worker.join();
+    CHECK(joined);
+    REQUIRE(!stream->stop());
+}

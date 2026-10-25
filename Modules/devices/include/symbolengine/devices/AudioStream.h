@@ -249,6 +249,10 @@ public:
     /** What the device ran at when it last started. */
     AudioStreamInfo info() const;
 
+    /** What the program's threads join while the audio thread waits for their work, read when the device last started,
+        so taken again after the stream is opened again. */
+    AudioWorkgroup workgroup() const;
+
     AudioStreamRequest request() const;
     Statistics statistics() const noexcept;
     /** The device it is on, which changes for a stream following the default output. */

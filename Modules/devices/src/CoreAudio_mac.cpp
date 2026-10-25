@@ -1,3 +1,4 @@
+#include "AudioWorkgroupDetail.h"
 #include "CoreAudioDetail.h"
 #include "Systems.h"
 
@@ -315,6 +316,17 @@ public:
         now.priority = "Core Audio's IO thread";
         now.unprocessed = !request.inputChannels.empty();
         return now;
+    }
+
+    // The device's audio workgroup, given retained, from macOS 11.
+    AudioWorkgroup workgroup() const override
+    {
+        void* group = nullptr;
+        UInt32 size = sizeof(group);
+        const auto where = address(kAudioDevicePropertyIOThreadOSWorkgroup);
+        if (AudioObjectGetPropertyData(device, &where, 0, nullptr, &size, &group) != noErr)
+            return {};
+        return devices::detail::appleWorkgroup(group);
     }
 
     bool start(AudioSystemClient& to, AudioError& error) override

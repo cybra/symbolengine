@@ -897,6 +897,17 @@ TEST_CASE("A stream with an input never follows the default, nor one that wasn't
     CHECK(notAsked.count(Kind::moved) == 0);
 }
 
+TEST_CASE("A system that gives no workgroup gives an empty one, which a thread joins to no effect")
+{
+    Rig rig;
+    auto stream = rig.stream();
+    REQUIRE(!stream->start());
+    const auto group = stream->workgroup();
+    CHECK(group.empty());
+    CHECK(group.maxThreads() == 1);
+    CHECK_FALSE(group.join(48000.0, 512).joined());
+}
+
 TEST_CASE("A device that lost its clock ends its stream, saying so")
 {
     Rig rig;

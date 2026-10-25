@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AudioDevice.h"
+#include "AudioWorkgroup.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -127,6 +128,9 @@ public:
         never waiting while it is open; what is changed there reaches the client as the device says it. A device
         with none gives an error. */
     virtual AudioError showSettings() { return {"The audio device has no settings window of its own.", "settings"}; }
+
+    /** What the program's own threads join to work to the device's deadline, read again each time it starts. */
+    virtual AudioWorkgroup workgroup() const { return {}; }
 };
 
 /** What a system tells of its changes to. */

@@ -1,5 +1,6 @@
 #include "AsioDetail.h"
 #include "AsioSystem.h"
+#include "AudioWorkgroupDetail.h"
 
 #ifndef NOMINMAX
     #define NOMINMAX
@@ -1064,6 +1065,8 @@ public:
     void stop() noexcept override { loaded->stop(); }
 
     AudioError showSettings() override { return loaded->showSettings(); }
+
+    AudioWorkgroup workgroup() const override { return devices::detail::proAudioWorkgroup(); }
 
 private:
     std::shared_ptr<Loaded> loaded;

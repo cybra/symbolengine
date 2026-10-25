@@ -1,3 +1,4 @@
+#include "AudioWorkgroupDetail.h"
 #include "Systems.h"
 
 #if defined(SYMBOLENGINE_ASIO)
@@ -470,6 +471,8 @@ public:
         }
         return true;
     }
+
+    AudioWorkgroup workgroup() const override { return devices::detail::proAudioWorkgroup(); }
 
     AudioStreamInfo info() const override
     {

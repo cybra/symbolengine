@@ -318,3 +318,32 @@ TEST_CASE("This program's input muted through Core Audio is said and gives silen
     CHECK(peak.load() > 0.0f);
     REQUIRE(!stream->stop());
 }
+
+TEST_CASE("A thread of the program's joins the built-in speakers' audio workgroup while they play, and leaves it")
+{
+    if (!realDevices())
+        SKIP("SYMBOLENGINE_REAL_DEVICES=1 plays silence through the Mac's built-in speakers");
+    AudioDevices devices;
+    const auto list = devices.devices("Core Audio");
+    const auto* speakers = builtInSpeakers(list);
+    REQUIRE(speakers != nullptr);
+    AudioError error;
+    auto stream = devices.open("Core Audio", speakers->id, stereo(false, true), error);
+    REQUIRE(stream != nullptr);
+    Recording recording;
+    REQUIRE(!stream->add(recording));
+    REQUIRE(!stream->start());
+
+    const auto group = stream->workgroup();
+    REQUIRE_FALSE(group.empty());
+    CHECK(group.maxThreads() >= 1);
+    const auto info = stream->info();
+    bool joined = false;
+    std::thread worker([&] {
+        const auto membership = group.join(info.sampleRate, info.maxBlock);
+        joined = membership.joined();
+    });
+    worker.join();
+    CHECK(joined);
+    REQUIRE(!stream->stop());
+}
