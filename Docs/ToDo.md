@@ -7,6 +7,7 @@
 - **Web pages.** The ui module shows pages in the system's own web view on Mac and Windows, served from files built into the program, with calls and events between page and native code, in a program's own windows or a plugin host's. Plugin editors are web pages built on it, and the Filter example has one.
 - **Programs.** The ui module runs the message loop, with calls to its thread from any other and timers, and the app module makes a desktop program of an executable on Mac and Windows: the system's requests to quit, to open files and to come back, one instance at a time with a second handing its arguments to the first, and the application bundle or the Windows program built by `symbolengine_add_app`. The Hello example is one.
 - **Plugins.** The plugin module builds CLAP, VST3 and Audio Unit plugins from a class written once, and keeps a VST3 class ID and Audio Unit codes a plugin was released with. Buses take any standard layout from mono to 7.1.4 in every format, Dolby's 9.1.4 and 9.1.6 in VST3 and Audio Units, and the ITU 9.1.6 in CLAP and VST3, through SymbolEngine's fork of clap-wrapper. The Gain and Filter examples pass CLAP's validator, Steinberg's, pluginval at its strictest level and auval. A plugin released before keeps the state hosts saved of it and its parameter numbers, as Symbol Studio's four plugins do, checked against a Live set saved with their earlier builds.
+- **Devices.** The devices module's lessons are written into the architecture, every problem audio software has met with Core Audio, Windows Audio and ASIO and in the layer above them, each with its test; the code follows, built against them.
 - **The first release** comes when Symbol Studio runs on SymbolEngine alone, and the phases below follow what it needs, plugins first and hosting other makers' plugins last.
 - **Home.** The name is SymbolEngine, symbolengine.dev is registered, the license is MIT, and the code is public at github.com/cybra/symbolengine. Contributions are signed off under the Developer Certificate of Origin.
 
@@ -65,9 +66,14 @@
 
 ## Phase 3: Devices
 
-- [ ] First the lessons, then the code: the problems audio software has met with devices, read from other frameworks' and products' fix histories and from Symbol Studio's own takes, each written into the architecture's [devices](02_architecture.md#devices) section and each a test, so the module is built against them from its first line.
-- [ ] Core Audio, Windows Audio shared and exclusive, and ASIO with the developer's SDK; ALSA, PipeWire and JACK after the first release.
-- [ ] The recording lessons in the architecture's [devices](02_architecture.md#devices) section built in, and long-take tests on real devices.
+- [x] First the lessons, then the code: the problems audio software has met with devices, read from other frameworks' and products' histories of fixes, the system makers' documentation and Symbol Studio's own long takes, each written into the architecture's [devices](02_architecture.md#devices) section with the test that fails when the module doesn't do it.
+- [ ] The system layer, one each for Core Audio, Windows Audio and ASIO, and the scripted fake that takes its place in the tests, with a recorder that captures real hardware's sequences for it to replay; the devices section's tests written against the fake first, failing.
+- [ ] Above the layer, written once: device lists and identity, choosing and restoring, each device's control thread and events, the callback's contract, the timeline with its dropouts and watchdog, and an input and output on two clocks with the drift corrected on the playback side.
+- [ ] Core Audio, Windows Audio shared and exclusive, and ASIO with the developer's SDK, each passing its section's tests; ALSA, PipeWire and JACK after the first release.
+- [ ] Files played through a device with a read-ahead, as the devices section's [playing files](02_architecture.md#playing-files) says.
+- [ ] A loopback device of SymbolEngine's own for the Mac runner, a Core Audio server plug-in installed for the run.
+- [ ] What no source settles, measured on real devices before the module depends on it ([measured before it is relied on](02_architecture.md#measured-before-it-is-relied-on)).
+- [ ] Long-take tests on real devices: overnight takes on a Mac and on Windows through a USB interface with the output on another device, each checked sample by sample against the interface's clock, with sleep, unplugging and another program changing the rate on the way.
 
 ## Phase 4: Hosting
 
