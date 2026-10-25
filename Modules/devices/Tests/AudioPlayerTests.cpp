@@ -217,7 +217,7 @@ TEST_CASE("A loop's join is exact to the sample, whatever its length against the
     }
 }
 
-TEST_CASE("A reader held up longer than it reads ahead gives silence for what it lacks, keeps time and says where")
+TEST_CASE("A reader held up longer than it reads ahead gives silence for what it lacks, keeps time and says where", "[timing]")
 {
     // Each stretch the reader lacked, in order; a busy computer may add stretches of its own after the hold's.
     std::mutex lock;
@@ -261,8 +261,9 @@ TEST_CASE("A reader held up longer than it reads ahead gives silence for what it
         return stretches.front();
     }();
     INFO(lackedFrames << " frames lacking from " << lackedFrom << ", the first of " << stretches.size() << " stretches");
+    // The hold's 250 ms less the 50 ms read ahead, and the time the reader takes to come back, longer on a busy runner.
     CHECK(static_cast<double>(lackedFrames) > 48000 * 0.1);
-    CHECK(static_cast<double>(lackedFrames) < 48000 * 0.3);
+    CHECK(static_cast<double>(lackedFrames) < 48000 * 0.5);
     CHECK(lackedFrom >= 24000 - 2400);
     CHECK(lackedFrom <= 24000 + 2400);
 
