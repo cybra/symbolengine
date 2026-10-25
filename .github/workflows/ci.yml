@@ -98,6 +98,14 @@ jobs:
           if [ "$RUNNER_OS" != "Linux" ]; then options="$options -DSYMBOLENGINE_PLUGINVAL_EDITORS=ON"; fi
           echo "VALIDATORS=$options" >> "$GITHUB_ENV"
 
+      # BlackHole's loopback devices on the Mac, a test tool alone (GPL-3.0, never shipped), so Core Audio's own paths
+      # are tested with no hardware: what is played to a device comes back as its input and reaches no speaker.
+      - name: Loopback devices
+        if: runner.os == 'macOS'
+        run: |
+          brew install --cask blackhole-2ch blackhole-16ch
+          echo "SYMBOLENGINE_TEST_LOOPBACK=BlackHole" >> "$GITHUB_ENV"
+
       # Steinberg's ASIO SDK on Windows, for the ASIO layer and its tests against fake drivers, pinned by checksum
       # and fetched for the run alone: the SDK is the developer's own, under Steinberg's terms, never in this repository.
       - name: ASIO SDK
