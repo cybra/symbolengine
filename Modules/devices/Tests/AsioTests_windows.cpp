@@ -345,6 +345,10 @@ public:
     std::atomic<int> violations{0}, readies{0}, rateSets{0};
     std::atomic<bool> released{false}, notInApartment{false};
     std::atomic<std::int64_t> switches{0}, switchesAfterStop{0};
+
+    // Switches whose first output didn't hold that switch's own stamp after the program's call, and those checked,
+    // for a program that echoes its input.
+    std::atomic<int> echoesMissed{0}, echoesChecked{0};
     std::atomic<std::int64_t> switchingNow{0};
     std::vector<long> sizesMade;
     struct
@@ -511,7 +515,18 @@ private:
         const std::lock_guard hold(lock);
         for (auto& buffer : buffers)
             if (!buffer.input)
-                outputSeen[buffer.channel] = buffer.halves[static_cast<std::size_t>(half)];
+            {
+                const auto& written = buffer.halves[static_cast<std::size_t>(half)];
+                outputSeen[buffer.channel] = written;
+                if (buffer.channel == 0 && written.size() >= 4)
+                {
+                    std::int32_t value = 0;
+                    std::memcpy(&value, written.data(), 4);
+                    if (value != static_cast<std::int32_t>(count << 8))
+                        ++echoesMissed;
+                    ++echoesChecked;
+                }
+            }
     }
 
     mutable std::mutex lock;
@@ -888,6 +903,33 @@ TEST_CASE("The input of each buffer switch reaches the program in that same swit
     CHECK(late.load() == 0);
 }
 
+TEST_CASE("The output a program writes in a buffer switch goes out in that switch's own half")
+{
+    TestDrivers installed;
+    installed.add("{A}", "Interface ASIO");
+    Events events;
+    AudioDevices devices(optionsFor(installed, events));
+
+    Recording recording(1 << 16);
+    std::atomic<bool> echoing{false};
+    recording.onProcess = [&](const AudioBlock& block) {
+        echoing = true;
+        std::copy(block.inputs[0], block.inputs[0] + block.frames, block.outputs[0]);
+    };
+    AudioError error;
+    auto stream = devices.open("ASIO", "{A}", stereo(), error);
+    REQUIRE(stream != nullptr);
+    REQUIRE(!stream->add(recording));
+    REQUIRE(!stream->start());
+    const auto fake = installed.last("{A}");
+    REQUIRE(soon([&] { return echoing.load(); }));
+    const auto missedBefore = fake->echoesMissed.load(), checkedBefore = fake->echoesChecked.load();
+    REQUIRE(soon([&] { return fake->echoesChecked.load() > checkedBefore + 50; }));
+    const auto missed = fake->echoesMissed.load() - missedBefore;
+    REQUIRE(!stream->stop());
+    CHECK(missed == 0);
+}
+
 TEST_CASE("A jump in the sample position is a dropout of its length; an overload is one only where there is no position")
 {
     SECTION("with the time information")
@@ -1083,21 +1125,18 @@ TEST_CASE("Each channel's sample type is converted on its own, exactly, both way
     fake->feed(1, {0x40, 0x00});
     const auto stepDown = static_cast<float>(-1.0 / 8388608.0);
     CHECK(soon([&] { return first.load() == stepDown && second.load() == 0.5f; }));
-    const std::vector<unsigned char> quarter{0x00, 0x00, 0x80, 0x3E};
-    CHECK(soon([&] {
-        const auto out = fake->lastOutput(0);
-        return out.size() >= 4 && std::vector<unsigned char>(out.begin(), out.begin() + 4) == quarter;
-    }));
+    // A quarter written as a little-endian float, and as 24 bits low in 32, read while the stream runs, as the
+    // driver's switches after the stop write silence.
+    const auto startsWith = [&](long channel, const std::vector<unsigned char>& bytes) {
+        const auto out = fake->lastOutput(channel);
+        return out.size() >= bytes.size() && std::equal(bytes.begin(), bytes.end(), out.begin());
+    };
+    float quarter = 0.25f;
+    std::vector<unsigned char> quarterBytes(4);
+    std::memcpy(quarterBytes.data(), &quarter, 4);
+    CHECK(soon([&] { return startsWith(0, quarterBytes); }));
+    CHECK(soon([&] { return startsWith(1, {0x00, 0x00, 0x20, 0x00}); }));
     REQUIRE(!stream->stop());
-
-    const auto out = fake->lastOutput(0);
-    REQUIRE(out.size() >= 4);
-    float value = 0.0f;
-    std::memcpy(&value, out.data(), 4);
-    CHECK(value == 0.25f);
-    const auto low = fake->lastOutput(1);
-    REQUIRE(low.size() >= 4);
-    CHECK(std::vector<unsigned char>(low.begin(), low.begin() + 4) == std::vector<unsigned char>{0x00, 0x00, 0x20, 0x00});
 }
 
 TEST_CASE("Ten opens of a driver all take its preferred size, never one of the module's own")
