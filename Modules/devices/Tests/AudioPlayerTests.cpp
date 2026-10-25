@@ -219,16 +219,16 @@ TEST_CASE("A loop's join is exact to the sample, whatever its length against the
 
 TEST_CASE("A reader held up longer than it reads ahead gives silence for what it lacks, keeps time and says where")
 {
-    std::atomic<int> underruns{0};
-    std::atomic<std::int64_t> lackedFrom{-1}, lackedFrames{0};
+    // Each stretch the reader lacked, in order; a busy computer may add stretches of its own after the hold's.
+    std::mutex lock;
+    std::vector<std::pair<std::int64_t, std::int64_t>> stretches;
     AudioPlayer::Options options = Deck::quiet();
     options.readAhead = 50ms;
     options.onEvent = [&](const AudioPlayer::Event& event) {
         if (event.kind == Kind::underrun)
         {
-            ++underruns;
-            lackedFrom = event.position;
-            lackedFrames += event.frames;
+            const std::lock_guard hold(lock);
+            stretches.emplace_back(event.position, event.frames);
         }
     };
     Deck deck(options);
@@ -252,10 +252,17 @@ TEST_CASE("A reader held up longer than it reads ahead gives silence for what it
         std::this_thread::sleep_for(2ms);
     }
 
-    REQUIRE(soon([&] { return underruns >= 1; }));
-    INFO(lackedFrames << " frames lacking from " << lackedFrom);
-    CHECK(static_cast<double>(lackedFrames.load()) > 48000 * 0.1);
-    CHECK(static_cast<double>(lackedFrames.load()) < 48000 * 0.3);
+    REQUIRE(soon([&] {
+        const std::lock_guard hold(lock);
+        return !stretches.empty();
+    }));
+    const auto [lackedFrom, lackedFrames] = [&] {
+        const std::lock_guard hold(lock);
+        return stretches.front();
+    }();
+    INFO(lackedFrames << " frames lacking from " << lackedFrom << ", the first of " << stretches.size() << " stretches");
+    CHECK(static_cast<double>(lackedFrames) > 48000 * 0.1);
+    CHECK(static_cast<double>(lackedFrames) < 48000 * 0.3);
     CHECK(lackedFrom >= 24000 - 2400);
     CHECK(lackedFrom <= 24000 + 2400);
 
