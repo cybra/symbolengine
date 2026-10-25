@@ -46,6 +46,23 @@ symbolengine_add_plugin(Gain
 
 [Examples/Gain](Examples/Gain/Gain.cpp) is a whole plugin in about 40 lines, and [Examples/Filter](Examples/Filter) is a filter with an editor: knobs, mode buttons and a level meter in a web page.
 
+A desktop program is built the same way, with `symbolengine_add_app`, which makes it an application bundle on a Mac and a program without a console on Windows, with its name, version, identifier and the kinds of file it opens. [Examples/Hello](Examples/Hello/Hello.cpp) is a whole program: one window holding a page, the Mac's menu bar, one instance at a time, and the files the system asks it to open.
+
+```cpp
+int main(int argc, char** argv)
+{
+    Application app({.name = "Editor", .identifier = "com.example.editor"}, argc, argv);
+    if (app.sendToRunningInstance())   // a second instance hands over its arguments and ends
+        return 0;
+
+    ui::Window window({.title = "Editor"});
+    app.onQuitRequested = [&] { app.quit(); };
+    app.onOpenFiles = [&](std::vector<std::filesystem::path> files) { /* open them */ };
+    window.setVisible(true);
+    return app.run();
+}
+```
+
 It needs CMake 3.25 or later and a C++20 compiler, and runs on macOS 11 or later, Windows 10 or later, and Linux.
 
 ## Modules
@@ -54,10 +71,11 @@ It needs CMake 3.25 or later and a C++20 compiler, and runs on macOS 11 or later
 |---|---|
 | core | Values with JSON, XML documents, UTF-8 text, paths and the system's folders, files written safely, settings files, SHA-256, speaker layouts |
 | files | Audio files read and written a stretch at a time, at any length: WAV, with RF64 past 4 GB, its broadcast extension and every other chunk kept, AIFF and AIFF-C, and FLAC, Ogg Vorbis and Opus with their tags, written from an audio device's thread too, flushed every second so a crash costs at most the last second; MP3 read gaplessly, and M4A, AAC and CAF read through the system's own decoders |
-| ui | Pages in the system's own web view, WKWebView on a Mac and WebView2 on Windows, served from files built into the program, calling native functions and receiving events through a script every page is given; a program's own windows to hold them, the system's own dialogs, and the Mac's menu bar |
+| ui | The message loop, with calls from any thread and timers; pages in the system's own web view, WKWebView on a Mac and WebView2 on Windows, served from files built into the program, calling native functions and receiving events through a script every page is given; a program's own windows to hold them, the system's own dialogs, and the Mac's menu bar |
+| app | A desktop program on a Mac or Windows: its arguments as UTF-8, the system asking it to quit, to open files or to come back, one instance at a time with a second handing over its arguments, the Dock icon, the recent documents, and `symbolengine_add_app`, which builds the application bundle and the Windows program with their version information |
 | plugin | Plugins written once as a class, with parameters, state, buses from mono to 9.1.6, latency and tail, and an editor as a web page on Mac and Windows; built as CLAP, VST3 and Audio Units, keeping the class ID and codes of a plugin released before, and checked by CLAP's validator, Steinberg's, auval and pluginval |
 
-The [architecture](Docs/02_architecture.md) describes the modules to come: devices, app and host, the rest of files, and the rest of ui.
+The [architecture](Docs/02_architecture.md) describes the modules to come: devices and host, the rest of files, ui and app.
 
 ## What a product includes
 

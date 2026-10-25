@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Hello</title>
+<script src="symbolengine.js"></script>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; font: 16px/1.5 system-ui, sans-serif;
+         background: #1c2230; color: #e8ecf4; }
+  main { display: grid; gap: 12px; justify-items: center; padding: 24px; text-align: center; }
+  input, button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid #4a5670; background: #2a3344;
+                  color: inherit; }
+  button { cursor: pointer; }
+  #opened { color: #9fb0cc; min-height: 1.5em; }
+</style>
+</head>
+<body>
+<main>
+  <div><input id="name" placeholder="Your name" autofocus> <button id="greet">Greet</button></div>
+  <div id="greeting">&nbsp;</div>
+  <div id="opened">Drop a file on the program's icon, or start it again with a name.</div>
+</main>
+<script>
+  const greet = async () => {
+    const name = document.getElementById("name").value.trim();
+    document.getElementById("greeting").textContent = await symbolengine.call("greet", name || "you");
+  };
+  document.getElementById("greet").addEventListener("click", greet);
+  document.getElementById("name").addEventListener("keydown", e => { if (e.key === "Enter") greet(); });
+  symbolengine.on("opened", names => {
+    document.getElementById("opened").textContent = "Asked to open: " + names.join(", ");
+  });
+  symbolengine.on("about", () => {
+    document.getElementById("greeting").textContent = "A SymbolEngine example.";
+  });
+</script>
+</body>
+</html>

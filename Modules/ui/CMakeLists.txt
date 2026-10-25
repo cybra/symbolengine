@@ -29,7 +29,7 @@ else()
 endif()
 
 symbolengine_add_module(ui
-    SOURCES src/WebView.cpp src/Timer.cpp ${sources}
+    SOURCES src/MessageLoop.cpp src/WebView.cpp src/Timer.cpp ${sources}
     DEPENDS core
     LIBRARIES ${libraries})
 
@@ -37,7 +37,7 @@ target_include_directories(symbolengine_ui SYSTEM PRIVATE ${symbolengine_choc_SO
 symbolengine_add_files(symbolengine_ui FOLDER web FUNCTION symbolengine_ui_bridge_files)
 
 if(SYMBOLENGINE_TESTS)
-    symbolengine_add_tests(ui SOURCES Tests/DialogsTests.cpp Tests/WebViewTests.cpp Tests/WindowTests.cpp)
+    symbolengine_add_tests(ui SOURCES Tests/DialogsTests.cpp Tests/MessageLoopTests.cpp Tests/WebViewTests.cpp Tests/WindowTests.cpp)
     target_include_directories(symbolengine_ui_tests SYSTEM PRIVATE ${symbolengine_choc_SOURCE_DIR})
     if(APPLE)
         target_sources(symbolengine_ui_tests PRIVATE Tests/MenuBarTests.mm)

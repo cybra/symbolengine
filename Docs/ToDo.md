@@ -5,6 +5,7 @@
 - **Foundations.** The repository, the CMake build and continuous integration on Mac, Windows and Linux are in place, with a contributing guide and issue and pull request templates. The core module has its first parts: values with JSON, XML documents, UTF-8 text, paths and the system's folders, files written safely, settings files, SHA-256, and speaker layouts.
 - **Audio files.** The files module reads and writes WAV, including RF64 past 4 GB with its broadcast extension and other chunks kept, AIFF and AIFF-C, and FLAC, Ogg Vorbis and Opus with their tags, a stretch at a time, and writes a recording from an audio device's thread, flushed every second. It reads MP3 gaplessly, and M4A, AAC and CAF through the systems' own decoders on Mac and Windows.
 - **Web pages.** The ui module shows pages in the system's own web view on Mac and Windows, served from files built into the program, with calls and events between page and native code, in a program's own windows or a plugin host's. Plugin editors are web pages built on it, and the Filter example has one.
+- **Programs.** The ui module runs the message loop, with calls to its thread from any other and timers, and the app module makes a desktop program of an executable on Mac and Windows: the system's requests to quit, to open files and to come back, one instance at a time with a second handing its arguments to the first, and the application bundle or the Windows program built by `symbolengine_add_app`. The Hello example is one.
 - **Plugins.** The plugin module builds CLAP, VST3 and Audio Unit plugins from a class written once, and keeps a VST3 class ID and Audio Unit codes a plugin was released with. Buses take any standard layout from mono to 7.1.4 in every format, Dolby's 9.1.4 and 9.1.6 in VST3 and Audio Units, and the ITU 9.1.6 in CLAP and VST3, through SymbolEngine's fork of clap-wrapper. The Gain and Filter examples pass CLAP's validator, Steinberg's, pluginval at its strictest level and auval. A plugin released before keeps the state hosts saved of it and its parameter numbers, as Symbol Studio's four plugins do, checked against a Live set saved with their earlier builds.
 - **The first release** comes when Symbol Studio runs on SymbolEngine alone, and the phases below follow what it needs, plugins first and hosting other makers' plugins last.
 - **Home.** The name is SymbolEngine, symbolengine.dev is registered, the license is MIT, and the code is public at github.com/cybra/symbolengine. Contributions are signed off under the Developer Certificate of Origin.
@@ -47,7 +48,8 @@
 ## Phase 2: Core, files and the app
 
 - [x] core: values and JSON, XML documents, UTF-8 text, paths and the system's folders, files written safely, settings files, SHA-256, speaker layouts.
-- [ ] core: the message loop, timers, threads and FIFOs, logging, child processes.
+- [x] ui: the message loop, calls to the message thread from any other, and timers.
+- [ ] core: threads and FIFOs, logging, child processes.
 - [x] files: WAV, with RF64 and BW64 past 4 GB and WAVE_FORMAT_EXTENSIBLE, its broadcast extension, iXML and other chunks kept, and AIFF and AIFF-C, read and written a stretch at a time, checked against ffmpeg's and Apple's files.
 - [x] files: FLAC, Ogg Vorbis and Opus, with their tags, through Xiph.Org's libraries built into the module, checked against ffmpeg's and the flac tool's files and read back by them.
 - [x] files: MP3, read gaplessly where LAME's or Xing's information says where the audio lies, and M4A, AAC and CAF through the systems' decoders on Mac and Windows, checked against LAME's, Apple's and ffmpeg's files.
@@ -58,7 +60,8 @@
 - [x] ui: a program's own windows holding a page, sized alike on every screen, their places held to a screen, see-through until the page draws; functions a page calls that answer later; WebView2 given the keyboard with its window.
 - [x] ui: the system's own dialogs, questions with buttons of the program's naming and choosers for files and folders.
 - [x] ui: the Mac's menu bar, with shortcuts, ticks and submenus; windows maximized and back, keeping where they were, with Windows 11 title bar colors.
-- [ ] ui and app: drag and drop, clipboard, keyboard, one instance, worker processes; Linux's web view.
+- [x] app: a desktop program on Mac and Windows, with its arguments as UTF-8, the system's requests to quit, to open files and to come back, one instance at a time with a second handing over its arguments, the Dock icon, the recent documents, and `symbolengine_add_app` building the bundle and the Windows program with its version information; the Hello example.
+- [ ] ui and app: drag and drop, clipboard, keyboard, worker processes; Linux's web view and message loop.
 
 ## Phase 3: Devices
 
