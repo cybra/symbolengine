@@ -38,7 +38,8 @@ TEST_CASE("The message loop runs what any thread posts, in order, and what is ti
     ui::messageLoop::run();
 
     CHECK(order == std::vector<int>{1, 2, 3, 4});
-    CHECK(firedAt - began >= std::chrono::milliseconds(150));
+    // Windows' timers tick about every 16 ms, so one can come that much before its time.
+    CHECK(firedAt - began >= std::chrono::milliseconds(130));
 }
 
 TEST_CASE("A call timed from inside the loop waits its time, and what is posted meanwhile runs before it")
