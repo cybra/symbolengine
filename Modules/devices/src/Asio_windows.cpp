@@ -1051,6 +1051,7 @@ public:
         now.inputLatency = loaded->runtime.inputLatency;
         now.outputLatency = loaded->runtime.outputLatency;
         now.priority = "the ASIO driver's own thread";
+        now.unprocessed = now.inputChannels > 0;
         return now;
     }
 

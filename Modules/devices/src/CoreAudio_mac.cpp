@@ -313,6 +313,7 @@ public:
         now.outputLatency =
             request.outputChannels.empty() ? -1 : latencyOf(device, kAudioObjectPropertyScopeOutput, block);
         now.priority = "Core Audio's IO thread";
+        now.unprocessed = !request.inputChannels.empty();
         return now;
     }
 

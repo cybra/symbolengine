@@ -117,6 +117,11 @@ struct AudioStreamInfo
     /** What the system gave the audio thread, such as real-time priority, as it read it back. */
     std::string priority{};
 
+    /** The input reaches the stream without the system's own effects on it: Windows Audio's raw stream, given when
+        the device offers it, where a shared-mode input otherwise passes through what Windows and the driver add, such
+        as voice clarity; Core Audio's and ASIO's inputs always. False for a stream with no input. */
+    bool unprocessed = false;
+
     bool operator==(const AudioStreamInfo&) const = default;
 };
 

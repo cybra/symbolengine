@@ -484,6 +484,7 @@ public:
         (capture ? now.inputLatency : now.outputLatency) = latency > 0 ? frames : -1;
         const auto given = scheduled.load();
         now.priority = given == 1 ? "Pro Audio, from the multimedia scheduler" : given == 0 ? "normal; Pro Audio refused" : "";
+        now.unprocessed = capture && raw;
         return now;
     }
 
