@@ -4,6 +4,7 @@ set(sources
     src/Json.cpp
     src/Numbers.cpp
     src/Paths.cpp
+    src/Resampler.cpp
     src/SettingsFile.cpp
     src/Sha256.cpp
     src/System.cpp
@@ -34,6 +35,7 @@ if(SYMBOLENGINE_TESTS)
         Tests/NoDenormalsTests.cpp
         Tests/NumberTests.cpp
         Tests/PathsTests.cpp
+        Tests/ResamplerTests.cpp
         Tests/SettingsFileTests.cpp
         Tests/Sha256Tests.cpp
         Tests/SystemTests.cpp

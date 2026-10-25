@@ -2,6 +2,7 @@
 
 #include "devices/AudioDevice.h"
 #include "devices/AudioDevices.h"
+#include "devices/AudioPlayer.h"
 #include "devices/AudioSetup.h"
 #include "devices/AudioStream.h"
 #include "devices/AudioSystem.h"

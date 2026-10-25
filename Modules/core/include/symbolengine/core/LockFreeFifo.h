@@ -64,6 +64,16 @@ public:
 
     bool pop(T& item) noexcept { return read(&item, 1) == 1; }
 
+    /** Passes over up to count items without reading them, on the reading side, and returns how many it passed. */
+    std::size_t skip(std::size_t count) noexcept
+    {
+        const Using one(reading);
+        const auto at = readAt.load(std::memory_order_relaxed);
+        count = std::min(count, distance(at, writeAt.load(std::memory_order_acquire)));
+        readAt.store((at + count) % items.size(), std::memory_order_release);
+        return count;
+    }
+
     /** Empties it, while neither thread uses it. */
     void reset() noexcept
     {

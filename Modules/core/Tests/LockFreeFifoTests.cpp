@@ -93,3 +93,16 @@ TEST_CASE("LockFreeFifo passes chunks of any size between two threads with every
     CHECK(expected == total);
     CHECK(fifo.readable() == 0);
 }
+
+TEST_CASE("LockFreeFifo passes over items without reading them")
+{
+    LockFreeFifo<int> fifo(8);
+    const int items[] = {1, 2, 3, 4, 5, 6};
+    fifo.write(items, 6);
+    CHECK(fifo.skip(4) == 4);
+    int next = 0;
+    CHECK(fifo.pop(next));
+    CHECK(next == 5);
+    CHECK(fifo.skip(10) == 1);
+    CHECK(fifo.readable() == 0);
+}

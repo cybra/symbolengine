@@ -6,6 +6,7 @@
 #include "core/LockFreeFifo.h"
 #include "core/NoDenormals.h"
 #include "core/Paths.h"
+#include "core/Resampler.h"
 #include "core/SettingsFile.h"
 #include "core/Sha256.h"
 #include "core/System.h"

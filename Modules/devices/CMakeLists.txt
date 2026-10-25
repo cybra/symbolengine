@@ -16,6 +16,7 @@ endif()
 symbolengine_add_module(devices
     SOURCES
         src/AudioDevices.cpp
+        src/AudioPlayer.cpp
         src/AudioSetup.cpp
         src/AudioStream.cpp
         src/AudioThread.cpp
@@ -25,7 +26,7 @@ symbolengine_add_module(devices
     LIBRARIES ${libraries})
 
 if(SYMBOLENGINE_TESTS)
-    set(tests Tests/AudioDevicesTests.cpp Tests/AudioSetupTests.cpp Tests/AudioStreamTests.cpp)
+    set(tests Tests/AudioDevicesTests.cpp Tests/AudioPlayerTests.cpp Tests/AudioSetupTests.cpp Tests/AudioStreamTests.cpp)
     if(APPLE)
         list(APPEND tests Tests/CoreAudioTests.cpp)
     elseif(WIN32)
