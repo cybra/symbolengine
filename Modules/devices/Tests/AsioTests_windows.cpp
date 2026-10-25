@@ -33,6 +33,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <condition_variable>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -64,6 +65,10 @@ struct FakeSettings
     bool timeInfo = true;
     bool callBackWhileMaking = false;
     int callsAfterStop = 0;
+    bool panelModal = false;
+    bool resetWhileMaking = false, resetWhileStopping = false;
+    int callsAfterDispose = 0;
+    bool writeFar = false;
     double speed = 1.0;
 };
 
@@ -76,7 +81,10 @@ public:
 
     ~FakeDriver()
     {
+        closePanel();
         stopHardware();
+        if (late.joinable())
+            late.join();
         freeBuffers();
     }
 
@@ -135,6 +143,8 @@ public:
         enter("stop");
         if (state != State::running)
             ++violations;
+        if (settings.resetWhileStopping)
+            host->asioMessage(kAsioResetRequest, 0, nullptr, nullptr);
         stopHardware();
         state = State::prepared;
         return ASE_OK;
@@ -240,6 +250,8 @@ public:
         info->isActive = ASIOFalse;
         info->channelGroup = 0;
         const auto label = std::string(info->isInput ? "In " : "Out ") + std::to_string(info->channel + 1);
+        if (settings.writeFar)
+            std::memset(reinterpret_cast<char*>(info) + sizeof(ASIOChannelInfo), 0x5A, 8192);
         if (settings.writePast)
         {
             std::memset(info->name, 'N', sizeof(info->name));
@@ -277,6 +289,8 @@ public:
         }
         if (settings.writePast)
             std::memset(infos + count, 0x5A, 1024);
+        if (settings.resetWhileMaking)
+            callbacks->asioMessage(kAsioResetRequest, 0, nullptr, nullptr);
         state = State::prepared;
         if (settings.callBackWhileMaking)
             switchBuffers(0);
@@ -290,13 +304,51 @@ public:
             ++violations;
         freeBuffers();
         state = State::initialized;
+        // Drivers that call back after their buffers are let go of, from a thread of their own.
+        if (settings.callsAfterDispose > 0)
+        {
+            if (late.joinable())
+                late.join();
+            late = std::thread([this] {
+                std::this_thread::sleep_for(10ms);
+                for (int i = 0; i < settings.callsAfterDispose; ++i)
+                {
+                    host->bufferSwitch(i % 2, ASIOTrue);
+                    ++switchesAfterDispose;
+                    std::this_thread::sleep_for(5ms);
+                }
+            });
+        }
         return ASE_OK;
     }
 
+    // Modal, it returns only when the test closes it, as some drivers' panels return only when the user does.
     ASIOError controlPanel() override
     {
         enter("controlPanel");
+        ++panelsShown;
+        if (settings.panelModal)
+        {
+            std::unique_lock hold(panelLock);
+            panelIsOpen = true;
+            panelChanged.wait(hold, [this] { return !panelIsOpen; });
+        }
         return ASE_OK;
+    }
+
+    void closePanel()
+    {
+        {
+            const std::lock_guard hold(panelLock);
+            panelIsOpen = false;
+        }
+        panelChanged.notify_all();
+    }
+
+    bool panelOpenNow() const
+    {
+        const std::lock_guard hold(panelLock);
+        return panelIsOpen;
     }
 
     ASIOError future(long, void*) override { return ASE_NotPresent; }
@@ -344,7 +396,8 @@ public:
     FakeSettings settings;
     std::atomic<int> violations{0}, readies{0}, rateSets{0};
     std::atomic<bool> released{false}, notInApartment{false};
-    std::atomic<std::int64_t> switches{0}, switchesAfterStop{0};
+    std::atomic<std::int64_t> switches{0}, switchesAfterStop{0}, switchesAfterDispose{0};
+    std::atomic<int> panelsShown{0};
 
     // Switches whose first output didn't hold that switch's own stamp after the program's call, and those checked,
     // for a program that echoes its input.
@@ -541,7 +594,10 @@ private:
     ASIOCallbacks* host = nullptr;
     bool timeInfoMode = false;
     std::vector<Made> buffers;
-    std::thread hardware;
+    std::thread hardware, late;
+    mutable std::mutex panelLock;
+    std::condition_variable panelChanged;
+    bool panelIsOpen = false;
     std::atomic<bool> ending{false};
 };
 
@@ -1182,6 +1238,148 @@ TEST_CASE("A size the driver won't take is tried once more at its preferred size
     CHECK(stream->info().maxBlock == 512);
     CHECK(installed.last("{A}")->sizesMade == std::vector<long>{128, 512});
     checkCalledProperly(*installed.last("{A}"));
+}
+
+TEST_CASE("A driver's control panel opens from its thread without the program waiting, and a reset there waits for it to close")
+{
+    TestDrivers installed;
+    FakeSettings modal;
+    modal.panelModal = true;
+    installed.add("{A}", "Interface ASIO", modal);
+    Events events;
+    AudioDevices devices(optionsFor(installed, events));
+
+    Recording recording(1 << 16);
+    AudioError error;
+    auto stream = devices.open("ASIO", "{A}", stereo(), error);
+    REQUIRE(stream != nullptr);
+    REQUIRE(!stream->add(recording));
+    REQUIRE(!stream->start());
+    REQUIRE(soon([&] { return recording.frames > 4800; }));
+    const auto first = installed.last("{A}");
+
+    const auto began = std::chrono::steady_clock::now();
+    REQUIRE(!stream->showDeviceSettings());
+    CHECK(std::chrono::steady_clock::now() - began < 500ms);
+    REQUIRE(soon([&] { return first->panelOpenNow(); }));
+
+    // The user picks 128 in the panel, and the driver asks to reset twice while it is still open; the blocks go on.
+    first->preferredSize = 128;
+    first->message = kAsioResetRequest;
+    REQUIRE(soon([&] { return first->message.load() == 0; }));
+    first->message = kAsioResetRequest;
+    REQUIRE(soon([&] { return first->message.load() == 0; }));
+    // Longer than a call to the driver may take, so a stream that tried to open it again now would have.
+    const auto framesWhileOpen = recording.frames.load();
+    std::this_thread::sleep_for(1500ms);
+    CHECK(recording.frames.load() > framesWhileOpen);
+    CHECK(installed.made("{A}") == 1);
+    CHECK(events.count(Kind::formatChanged) == 0);
+
+    // Closed, the stream opens the driver again once, at what was chosen.
+    first->closePanel();
+    REQUIRE(events.waitFor(Kind::formatChanged));
+    std::this_thread::sleep_for(200ms);
+    CHECK(events.count(Kind::formatChanged) == 1);
+    CHECK(installed.made("{A}") == 2);
+    CHECK(events.of(Kind::formatChanged).front().after.maxBlock == 128);
+    CHECK(stream->state() == AudioStream::State::running);
+    REQUIRE(!stream->stop());
+    stream.reset();
+    CHECK(first->panelsShown.load() == 1);
+    CHECK(first->released.load());
+    checkCalledProperly(*first);
+}
+
+TEST_CASE("A driver asking to reset as every open makes its buffers is opened again once, and asking as it stops reopens nothing")
+{
+    SECTION("while its buffers are made")
+    {
+        TestDrivers installed;
+        FakeSettings resetting;
+        resetting.resetWhileMaking = true;
+        installed.add("{A}", "Resetting ASIO", resetting);
+        Events events;
+        AudioDevices devices(optionsFor(installed, events));
+        AudioError error;
+        auto stream = devices.open("ASIO", "{A}", stereo(), error);
+        REQUIRE(stream != nullptr);
+        REQUIRE(!stream->start());
+        REQUIRE(events.waitFor(Kind::formatChanged));
+        std::this_thread::sleep_for(300ms);
+        CHECK(installed.made("{A}") == 2);
+        CHECK(events.count(Kind::formatChanged) == 1);
+        CHECK(stream->state() == AudioStream::State::running);
+    }
+
+    SECTION("as it stops")
+    {
+        TestDrivers installed;
+        FakeSettings resetting;
+        resetting.resetWhileStopping = true;
+        installed.add("{A}", "Resetting ASIO", resetting);
+        Events events;
+        AudioDevices devices(optionsFor(installed, events));
+        AudioError error;
+        auto stream = devices.open("ASIO", "{A}", stereo(), error);
+        REQUIRE(stream != nullptr);
+        REQUIRE(!stream->start());
+        REQUIRE(!stream->stop());
+        std::this_thread::sleep_for(200ms);
+        CHECK(installed.made("{A}") == 1);
+        CHECK(stream->state() == AudioStream::State::stopped);
+        CHECK(events.count(Kind::formatChanged) == 0);
+    }
+}
+
+TEST_CASE("A driver calling back after its buffers are let go of reaches nothing")
+{
+    TestDrivers installed;
+    FakeSettings tardy;
+    tardy.callsAfterDispose = 5;
+    installed.add("{A}", "Late ASIO", tardy);
+    Events events;
+    AudioDevices devices(optionsFor(installed, events));
+
+    Recording recording(1 << 16);
+    AudioError error;
+    auto stream = devices.open("ASIO", "{A}", stereo(), error);
+    REQUIRE(stream != nullptr);
+    REQUIRE(!stream->add(recording));
+    REQUIRE(!stream->start());
+    REQUIRE(soon([&] { return recording.frames > 4800; }));
+    REQUIRE(!stream->stop());
+    const auto frames = recording.frames.load();
+    const auto driver = installed.last("{A}");
+    stream.reset();
+    REQUIRE(soon([&] { return driver->switchesAfterDispose.load() == 5; }));
+    CHECK(recording.frames.load() == frames);
+    checkCalledProperly(*driver);
+}
+
+TEST_CASE("A driver writing far past what it's given faults on a guard page, is let go of, and the next one opens")
+{
+    TestDrivers installed;
+    FakeSettings reckless;
+    reckless.writeFar = true;
+    installed.add("{A}", "Reckless ASIO", reckless);
+    installed.add("{B}", "Healthy ASIO");
+    Events events;
+    AudioDevices devices(optionsFor(installed, events));
+
+    AudioError error;
+    auto stream = devices.open("ASIO", "{A}", stereo(), error);
+    REQUIRE(stream != nullptr);
+    CHECK(stream->start().message == "The ASIO driver crashed.");
+    stream.reset();
+
+    Recording recording(1 << 16);
+    auto next = devices.open("ASIO", "{B}", stereo(), error);
+    REQUIRE(next != nullptr);
+    REQUIRE(!next->add(recording));
+    REQUIRE(!next->start());
+    REQUIRE(soon([&] { return recording.frames > 4800; }));
+    REQUIRE(!next->stop());
 }
 
 TEST_CASE("This PC's ASIO drivers are listed unread, and two seconds from the one named come in at its rate and live")

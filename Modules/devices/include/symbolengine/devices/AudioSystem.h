@@ -118,6 +118,11 @@ public:
     /** Stops its cycles, waiting a bounded time; the devices module stops listening to it first, so a cycle the
         system gives after this returns does nothing. */
     virtual void stop() noexcept = 0;
+
+    /** Opens the device's own settings window, as an ASIO driver's control panel, returning once it is asked for,
+        never waiting while it is open; what is changed there reaches the client as the device says it. A device
+        with none gives an error. */
+    virtual AudioError showSettings() { return {"The audio device has no settings window of its own.", "settings"}; }
 };
 
 /** What a system tells of its changes to. */

@@ -688,6 +688,31 @@ TEST_CASE("A device asking to be opened again, though nothing about it changed, 
     CHECK(rig.device.opens() == opens + 1);
 }
 
+TEST_CASE("A device's own settings window opens through its running stream, and one without says so")
+{
+    Rig rig;
+    auto stream = rig.stream();
+    CHECK(stream->showDeviceSettings().message == "The audio device's settings open while its stream runs.");
+    REQUIRE(!stream->start());
+    CHECK(stream->showDeviceSettings().message == "The audio device has no settings window of its own.");
+    rig.device.hasSettings = true;
+    CHECK(!stream->showDeviceSettings());
+    CHECK(rig.device.settingsShown.load() == 1);
+}
+
+TEST_CASE("A device asking to be opened again as every open starts is opened again once, never for ever")
+{
+    Rig rig;
+    rig.device.reopenInsideStart = true;
+    auto stream = rig.stream();
+    REQUIRE(!stream->start());
+    REQUIRE(rig.events.waitFor(Kind::formatChanged));
+    std::this_thread::sleep_for(300ms);
+    CHECK(rig.device.opens() == 2);
+    CHECK(rig.events.count(Kind::formatChanged) == 1);
+    CHECK(stream->state() == AudioStream::State::running);
+}
+
 TEST_CASE("A device that lost its clock ends its stream, saying so")
 {
     Rig rig;

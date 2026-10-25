@@ -31,7 +31,9 @@
 #include <deque>
 #include <map>
 #include <mutex>
+#include <new>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -160,6 +162,62 @@ bool guarded(const Call& call) noexcept
 #endif
 }
 
+// An array a driver writes into, laid at the end of its pages with a page after it that nothing may touch, so a
+// driver writing further past it than the room it has faults, which is caught, instead of writing over what lies
+// beyond.
+template <typename T>
+class Guarded
+{
+    static_assert(std::is_trivially_destructible_v<T>);
+
+public:
+    Guarded() = default;
+    ~Guarded() { release(); }
+    Guarded(const Guarded&) = delete;
+    Guarded& operator=(const Guarded&) = delete;
+
+    // Room for count values, each cleared; false when there is no memory for it.
+    bool assign(std::size_t count)
+    {
+        release();
+        SYSTEM_INFO system{};
+        GetSystemInfo(&system);
+        const std::size_t page = system.dwPageSize, align = alignof(std::max_align_t);
+        const auto bytes = (std::max<std::size_t>(count, 1) * sizeof(T) + align - 1) / align * align;
+        const auto pages = (bytes + page - 1) / page + 1;
+        base = VirtualAlloc(nullptr, pages * page, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        if (base == nullptr)
+            return false;
+        DWORD before = 0;
+        auto* guard = static_cast<char*>(base) + (pages - 1) * page;
+        VirtualProtect(guard, page, PAGE_NOACCESS, &before);
+        values = reinterpret_cast<T*>(guard - bytes);
+        for (std::size_t i = 0; i < count; ++i)
+            new (values + i) T{};
+        size = count;
+        return true;
+    }
+
+    T* data() const noexcept { return values; }
+    T& operator[](std::size_t i) const noexcept { return values[i]; }
+    T* begin() const noexcept { return values; }
+    T* end() const noexcept { return values + size; }
+
+private:
+    void release() noexcept
+    {
+        if (base != nullptr)
+            VirtualFree(base, 0, MEM_RELEASE);
+        base = nullptr;
+        values = nullptr;
+        size = 0;
+    }
+
+    void* base = nullptr;
+    T* values = nullptr;
+    std::size_t size = 0;
+};
+
 HINSTANCE thisModule() noexcept
 {
     HMODULE module = nullptr;
@@ -211,6 +269,22 @@ public:
 
     HWND window() const noexcept { return state->window; }
     bool stuck() const noexcept { return state->stuck.load(); }
+
+    // Runs work on the thread without waiting for it, as a driver's control panel, which may return only when the user
+    // closes it; false when the thread has no window or is stuck.
+    bool post(std::function<void()> work)
+    {
+        if (state->window == nullptr || state->stuck.load())
+            return false;
+        auto job = std::make_shared<Job>();
+        job->work = std::move(work);
+        {
+            const std::lock_guard hold(state->lock);
+            state->jobs.push_back(job);
+        }
+        PostMessageW(state->window, runJobs, 0, 0);
+        return true;
+    }
 
     // Runs work on the thread, waiting at most bound; false when the thread has no window or didn't finish in time,
     // after which it is taken as stuck and nothing more is run on it.
@@ -314,6 +388,10 @@ struct Runtime
 {
     std::atomic<AudioSystemClient*> client{nullptr};
     std::atomic<bool> running{false}, inSwitch{false}, gap{false}, reopenAsked{false}, resetAsked{false};
+
+    // While the driver's control panel is open, a reset it asks for waits for the panel to close, and a change of rate
+    // is read once it has.
+    std::atomic<bool> panelOpen{false}, reopenAfterPanel{false};
     IASIO* driver = nullptr;
     bool tellOutputReady = false;
     int frames = 0;
@@ -406,13 +484,18 @@ struct Runtime
             return;
         if (given <= 0.0)
             to->lost(AudioLoss::clockLost, ASE_NoClock);
-        else if (std::abs(given - rate) >= 0.5)
+        else if (std::abs(given - rate) >= 0.5 && !panelOpen.load())
             to->changed();
     }
 
     void askToReopen() noexcept
     {
         resetAsked = true;
+        if (panelOpen.load())
+        {
+            reopenAfterPanel = true;
+            return;
+        }
         if (auto* to = client.load())
             to->reopen();
         else
@@ -506,6 +589,7 @@ public:
     Loaded(Host given, std::string driverId, std::string driverName)
         : host(std::move(given)), id(std::move(driverId)), name(std::move(driverName))
     {
+        scratch.text.assign(4096);
     }
 
     Runtime runtime;
@@ -538,8 +622,8 @@ public:
             return lost("init");
         if (scratch.result <= 0)
         {
-            call([](IASIO& d, Scratch& s) { d.getErrorMessage(s.text); });
-            const auto message = textOf(scratch.text, 124);
+            call([](IASIO& d, Scratch& s) { d.getErrorMessage(s.text.data()); });
+            const auto message = scratch.text.data() != nullptr ? textOf(scratch.text.data(), 124) : std::string();
             return {message.empty() ? "The ASIO driver didn't start." : "The ASIO driver didn't start: " + message + ".",
                     "init", scratch.result};
         }
@@ -561,7 +645,8 @@ public:
             inputCount + outputCount == 0)
             return {"The ASIO driver gave channel counts that can't be right.", "getChannels"};
 
-        scratch.channels.assign(static_cast<std::size_t>(inputCount + outputCount), PaddedChannel{});
+        if (!scratch.channels.assign(static_cast<std::size_t>(inputCount + outputCount)))
+            return {"There isn't the memory to read the ASIO driver's channels.", "getChannelInfo"};
         for (long i = 0; i < inputCount + outputCount; ++i)
         {
             auto& channel = scratch.channels[static_cast<std::size_t>(i)].info;
@@ -717,6 +802,8 @@ public:
 
     void readLatencies()
     {
+        if (runtime.panelOpen.load())
+            return;
         if (call([](IASIO& d, Scratch& s) { s.result = d.getLatencies(&s.values[0], &s.values[8]); }) &&
             scratch.result == ASE_OK && scratch.values[0] >= 0 && scratch.values[8] >= 0)
         {
@@ -756,8 +843,9 @@ public:
             return;
         started = false;
         runtime.running = false;
-        call([](IASIO& d, Scratch&) { d.stop(); });
+        // A reset the driver asks for as it stops is for a stream that is going.
         runtime.client.store(nullptr);
+        call([](IASIO& d, Scratch&) { d.stop(); });
         runtime.silence(0);
         runtime.silence(1);
     }
@@ -787,9 +875,43 @@ public:
         }
     }
 
+    // The driver's control panel, opened from its thread without waiting, as some return only when the user closes
+    // them. Once it has closed, a reset asked for while it was open opens the stream again, at what was chosen there;
+    // otherwise the stream reads the driver again, in case anything changed.
+    AudioError showSettings()
+    {
+        if (faulted.load() || driver == nullptr || thread.stuck())
+            return lost("controlPanel");
+        if (runtime.panelOpen.exchange(true))
+            return {};
+        auto self = shared_from_this();
+        const bool posted = thread.post([self] {
+            IASIO* d = self->driver;
+            if (!guarded([d] { d->controlPanel(); }))
+                self->faulted = true;
+            self->runtime.panelOpen = false;
+            const bool reopen = self->runtime.reopenAfterPanel.exchange(false);
+            if (auto* to = self->runtime.client.load())
+            {
+                if (reopen)
+                    to->reopen();
+                else
+                    to->changed();
+            }
+        });
+        if (!posted)
+        {
+            runtime.panelOpen = false;
+            return lost("controlPanel");
+        }
+        return {};
+    }
+
     // The rate the driver runs at now, and the size it would take now, for a stream asked to open it again.
     double rateNow()
     {
+        if (runtime.panelOpen.load())
+            return rate;
         if (call([](IASIO& d, Scratch& s) { s.result = d.getSampleRate(&s.rates[0]); }) && scratch.result == ASE_OK)
             return scratch.rates[0];
         return rate;
@@ -797,7 +919,7 @@ public:
 
     int sizeNow()
     {
-        if (!runtime.resetAsked.load())
+        if (!runtime.resetAsked.load() || runtime.panelOpen.load())
             return runtime.frames;
         if (call([](IASIO& d, Scratch& s) {
                 s.result = d.getBufferSize(&s.values[0], &s.values[1], &s.values[2], &s.values[3]);
@@ -825,9 +947,9 @@ private:
         long values[16]{};
         double rates[4]{};
         std::array<bool, standardRates.size()> offered{};
-        char text[4096]{};
-        std::vector<PaddedChannel> channels;
-        std::vector<ASIOBufferInfo> buffers;
+        Guarded<char> text;
+        Guarded<PaddedChannel> channels;
+        Guarded<ASIOBufferInfo> buffers;
     };
 
     // Runs a call to the driver on its thread, a fault in it caught and its time bounded; false when it faulted or
@@ -865,7 +987,8 @@ private:
             prepared = false;
         }
         const auto count = request.inputChannels.size() + request.outputChannels.size();
-        scratch.buffers.assign(count + 64, ASIOBufferInfo{});
+        if (!scratch.buffers.assign(count + 64))
+            return ASE_NoMemory;
         std::size_t i = 0;
         for (const auto channel : request.inputChannels)
             scratch.buffers[i++] = {ASIOTrue, channel, {nullptr, nullptr}};
@@ -938,6 +1061,8 @@ public:
     }
 
     void stop() noexcept override { loaded->stop(); }
+
+    AudioError showSettings() override { return loaded->showSettings(); }
 
 private:
     std::shared_ptr<Loaded> loaded;

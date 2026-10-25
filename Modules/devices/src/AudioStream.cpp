@@ -101,7 +101,8 @@ struct Command
         stop,
         change,
         add,
-        remove
+        remove,
+        settings
     };
 
     Kind kind = Kind::start;
@@ -164,7 +165,7 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
     std::atomic<double> load{0.0};
 
     // Set by the system's notifications, from any thread.
-    std::atomic<bool> changePending{false}, reopenPending{false};
+    std::atomic<bool> changePending{false}, reopenPending{false}, rebuilding{false};
     std::atomic<std::int64_t> changeAt{0};
     std::atomic<int> lossPending{-1};
     std::atomic<std::int64_t> lossCode{0};
@@ -283,6 +284,9 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
             case Command::Kind::change: return change(command.request);
             case Command::Kind::add: return add(*command.callback);
             case Command::Kind::remove: return remove(*command.callback);
+            case Command::Kind::settings:
+                return stream != nullptr ? stream->showSettings()
+                                         : AudioError{"The audio device's settings open while its stream runs.", "settings"};
         }
         return {};
     }
@@ -609,8 +613,15 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
     {
         teardown();
 
-        // What the device let go of asked before it went is answered by this; what the one opened now asks, after.
+        // What the device let go of asked before it went is answered by this, and what the one opened now asks while
+        // it opens, which a driver resetting at every open would ask for ever.
         reopenPending = false;
+        rebuilding = true;
+        struct Done
+        {
+            std::atomic<bool>& flag;
+            ~Done() { flag = false; }
+        } done{rebuilding};
         {
             const std::lock_guard hold(lock);
             request.sampleRate = now.sampleRate;
@@ -761,6 +772,8 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
 
     void reopen() noexcept override
     {
+        if (rebuilding.load())
+            return;
         reopenPending = true;
         changed();
     }
@@ -1053,6 +1066,11 @@ AudioError AudioStream::stop()
 AudioError AudioStream::change(AudioStreamRequest request)
 {
     return impl->call({.kind = Command::Kind::change, .request = std::move(request)});
+}
+
+AudioError AudioStream::showDeviceSettings()
+{
+    return impl->call({.kind = Command::Kind::settings});
 }
 
 AudioError AudioStream::add(AudioCallback& callback)

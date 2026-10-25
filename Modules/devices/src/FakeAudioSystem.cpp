@@ -313,6 +313,15 @@ public:
             state->device->stream = nullptr;
     }
 
+    AudioError showSettings() override
+    {
+        auto& owner = *state->device->owner;
+        if (!owner.hasSettings.load())
+            return AudioSystemStream::showSettings();
+        ++owner.settingsShown;
+        return {};
+    }
+
     AudioStreamInfo info() const override
     {
         const std::lock_guard hold(state->device->lock);
@@ -349,6 +358,8 @@ public:
             const std::lock_guard hold(device.lock);
             state->deliver({}, nullptr, true);
         }
+        if (device.owner->reopenInsideStart.load())
+            client.reopen();
         if (runs)
             state->run(settings);
         return true;

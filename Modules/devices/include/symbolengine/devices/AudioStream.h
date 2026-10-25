@@ -212,6 +212,12 @@ public:
     /** Asks for other channels, rate or block size, opening the device again if it runs. */
     AudioError change(AudioStreamRequest request);
 
+    /** Opens the device's own settings window while the stream runs, as an ASIO driver's control panel, returning
+        without waiting while it is open. A device asking to be opened again while it is open, as a driver asks when
+        its block size is changed there, is opened again once it closes, at what was chosen. Devices without one,
+        as Core Audio's and Windows Audio's are, give an error. */
+    AudioError showDeviceSettings();
+
     /** Adds a callback, prepared before its first block when the stream runs. A callback is in one stream at a
         time and lives until it is removed. */
     AudioError add(AudioCallback& callback);

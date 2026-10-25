@@ -88,6 +88,13 @@ public:
     /** start() gives a cycle before it returns, holding the lock the device's other calls take. */
     std::atomic<bool> cycleInsideStart{false};
 
+    /** start() asks to be opened again before it returns, as an ASIO driver resetting while its buffers are made. */
+    std::atomic<bool> reopenInsideStart{false};
+
+    /** It has a settings window of its own, as an ASIO driver's control panel, which counts each time it opens. */
+    std::atomic<bool> hasSettings{false};
+    std::atomic<int> settingsShown{0};
+
     /** Gives one cycle on the calling thread, as the system's audio thread would, and moves the system's clock on.
         False when no stream on it runs. */
     bool cycle(const FakeCycle& cycle = {});
