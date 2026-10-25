@@ -250,6 +250,9 @@ private:
     bool decodeMore(std::error_code& error)
     {
         const auto before = held.size();
+
+        // Reads that give nothing, without the end, have a bound: a decoder that answers so for ever is damaged.
+        int empty = 0;
         while (held.size() == before)
         {
             if (ended)
@@ -269,7 +272,9 @@ private:
             DWORD flags = 0;
             LONGLONG time = 0;
             Com<IMFSample> sample;
-            if (FAILED(reader->ReadSample(audioStream, 0, nullptr, &flags, &time, sample.put())))
+            // Media Foundation's error flag comes with success, and asks for no further calls.
+            if (FAILED(reader->ReadSample(audioStream, 0, nullptr, &flags, &time, sample.put())) ||
+                (flags & MF_SOURCE_READERF_ERROR) != 0)
             {
                 error = AudioFileError::damaged;
                 return false;
@@ -277,7 +282,15 @@ private:
 
             ended = (flags & MF_SOURCE_READERF_ENDOFSTREAM) != 0;
             if (sample.object == nullptr)
+            {
+                if (!ended && ++empty > 10000)
+                {
+                    error = AudioFileError::damaged;
+                    return false;
+                }
                 continue;
+            }
+            empty = 0;
 
             Com<IMFMediaBuffer> buffer;
             BYTE* bytes = nullptr;
