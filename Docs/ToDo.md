@@ -65,11 +65,13 @@
 
 ## Phase 3: Devices
 
+- [ ] First the lessons, then the code: the problems audio software has met with devices, read from other frameworks' and products' fix histories and from Symbol Studio's own takes, each written into the architecture's [devices](02_architecture.md#devices) section and each a test, so the module is built against them from its first line.
 - [ ] Core Audio, Windows Audio shared and exclusive, and ASIO with the developer's SDK; ALSA, PipeWire and JACK after the first release.
 - [ ] The recording lessons in the architecture's [devices](02_architecture.md#devices) section built in, and long-take tests on real devices.
 
 ## Phase 4: Hosting
 
+- [ ] First the lessons, then the code: the problems hosts have met with other makers' plugins, read from other hosts' fix histories and from Symbol Studio's own scans of a large plugin library, each written into the architecture's [hosting](02_architecture.md#hosting) section and each a test.
 - [ ] VST3, AU v2 and v3, and CLAP hosting, with scanning in worker processes and everything in the architecture's [hosting](02_architecture.md#hosting) section.
 - [ ] A test library of free plugins scanned, made, played, saved and restored in continuous integration, and the owner's full plugin library checked locally.
 
