@@ -27,11 +27,13 @@ symbolengine_add_module(devices
     SOURCES
         src/AsioDetail.cpp
         src/AudioDevices.cpp
+        src/AudioRecordFormat.cpp
         src/AudioPlayer.cpp
         src/AudioSetup.cpp
         src/AudioStream.cpp
         src/AudioThread.cpp
         src/FakeAudioSystem.cpp
+        src/RecordingAudioSystem.cpp
         ${systems}
     DEPENDS core
     LIBRARIES ${libraries})
@@ -42,7 +44,8 @@ if(asio)
 endif()
 
 if(SYMBOLENGINE_TESTS)
-    set(tests Tests/AsioDetailTests.cpp Tests/AudioDevicesTests.cpp Tests/AudioPlayerTests.cpp Tests/AudioSetupTests.cpp Tests/AudioStreamTests.cpp)
+    set(tests Tests/AsioDetailTests.cpp Tests/AudioDevicesTests.cpp Tests/AudioPlayerTests.cpp Tests/AudioSetupTests.cpp Tests/AudioStreamTests.cpp
+        Tests/RecordingTests.cpp)
     if(APPLE)
         list(APPEND tests Tests/CoreAudioTests.cpp)
     elseif(WIN32)
@@ -54,6 +57,12 @@ if(SYMBOLENGINE_TESTS)
     symbolengine_add_tests(devices SOURCES ${tests} ALONE "[timing]")
     target_link_libraries(symbolengine_devices_tests PRIVATE Threads::Threads)
     target_include_directories(symbolengine_devices_tests PRIVATE src)
+
+    # What real hardware does while a person sleeps the computer or unplugs a device, written for the fake to replay.
+    add_executable(symbolengine_devices_recorder Tests/Recorder.cpp)
+    target_link_libraries(symbolengine_devices_recorder PRIVATE SymbolEngine::devices)
+    target_include_directories(symbolengine_devices_recorder PRIVATE src)
+    symbolengine_set_warnings(symbolengine_devices_recorder)
     if(asio)
         target_include_directories(symbolengine_devices_tests SYSTEM PRIVATE "${SYMBOLENGINE_ASIO_SDK}/common")
         target_compile_definitions(symbolengine_devices_tests PRIVATE SYMBOLENGINE_ASIO=1)

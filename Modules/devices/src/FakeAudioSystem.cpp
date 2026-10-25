@@ -1,5 +1,9 @@
 #include "symbolengine/devices/FakeAudioSystem.h"
 
+#include "AudioRecordFormat.h"
+
+#include <symbolengine/core/Json.h>
+
 #include <algorithm>
 #include <cmath>
 #include <condition_variable>
@@ -563,6 +567,83 @@ void FakeAudioSystem::notify(AudioSystemChange change, int times, int threads)
         });
     for (auto& sender : senders)
         sender.join();
+}
+
+void FakeAudioSystem::replay(const std::vector<std::string>& lines, double speed)
+{
+    const auto began = std::chrono::steady_clock::now();
+    for (const auto& text : lines)
+    {
+        const auto value = json::tryParse(text);
+        if (!value)
+            continue;
+        const auto& line = *value;
+        const auto seconds = line["seconds"].numberOr(0.0) / std::max(speed, 1e-6);
+        std::this_thread::sleep_until(began + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                                  std::chrono::duration<double>(seconds)));
+
+        const auto event = line["event"].stringOr("");
+        const auto id = line["device"].stringOr("");
+        if (event == "devices")
+        {
+            // The devices as recorded: each found again by its identifier or made, and those gone unlisted quietly.
+            std::vector<std::string> ids;
+            if (const auto* listed = line["devices"].ifArray())
+                for (const auto& recorded : *listed)
+                {
+                    auto info = devices::detail::deviceFrom(recorded);
+                    fillDefaults(info);
+                    ids.push_back(info.id);
+                    if (const auto state = impl->find(info.id, false))
+                    {
+                        const std::lock_guard hold(state->lock);
+                        state->info = std::move(info);
+                        state->listed = true;
+                        state->quiet = false;
+                        continue;
+                    }
+                    auto state = std::make_shared<FakeAudioDevice::State>();
+                    state->system = impl.get();
+                    state->info = std::move(info);
+                    auto device = std::make_unique<FakeAudioDevice>(state);
+                    const std::lock_guard hold(impl->lock);
+                    impl->devices.push_back(std::move(device));
+                    impl->states.push_back(std::move(state));
+                }
+            {
+                const std::lock_guard hold(impl->lock);
+                for (auto& state : impl->states)
+                {
+                    const std::lock_guard device(state->lock);
+                    if (std::find(ids.begin(), ids.end(), state->info.id) == ids.end())
+                    {
+                        state->listed = false;
+                        state->quiet = true;
+                    }
+                }
+                impl->defaultInput = line["defaultInput"].stringOr("");
+                impl->defaultOutput = line["defaultOutput"].stringOr("");
+            }
+            impl->muted = line["inputMuted"].boolOr(false);
+            impl->tell(AudioSystemChange::devices);
+        }
+        else if (event == "notice")
+        {
+            AudioSystemChange change{};
+            if (devices::detail::changeNamed(line["change"].stringOr(""), change))
+                impl->tell(change);
+        }
+        else if (auto* device = this->device(id))
+        {
+            AudioLoss why{};
+            if (event == "lost" && devices::detail::lossNamed(line["why"].stringOr(""), why))
+                device->lose(why, line["code"].intOr(0));
+            else if (event == "changed")
+                device->changed();
+            else if (event == "reopen")
+                device->askToReopen();
+        }
+    }
 }
 
 void FakeAudioSystem::setInputMuted(bool muted)
