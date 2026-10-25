@@ -756,7 +756,12 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
     // as soon as one isn't.
     void watchIdle()
     {
-        if (options.idleAfter.count() <= 0 || state.load() != State::running)
+        std::chrono::milliseconds after{};
+        {
+            const std::lock_guard hold(lock);
+            after = request.idleAfter;
+        }
+        if (after.count() <= 0 || state.load() != State::running)
             return;
         const bool everyIdle = !callbacks.empty() &&
                                std::all_of(callbacks.begin(), callbacks.end(), [](const AudioCallback* c) { return c->idle(); });
@@ -779,7 +784,7 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
         const auto now = steadyNanoseconds();
         if (idleSince < 0)
             idleSince = now;
-        else if (now - idleSince >= nanoseconds(options.idleAfter))
+        else if (now - idleSince >= nanoseconds(after))
         {
             teardown();
             resting = true;

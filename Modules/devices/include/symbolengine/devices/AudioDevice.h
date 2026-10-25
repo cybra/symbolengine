@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -102,6 +103,12 @@ struct AudioStreamRequest
         device goes, as AirPods connecting move a Mac's sound. Never a stream with an input, which stays where a take
         began. */
     bool followDefault = false;
+
+    /** How long every callback may be idle before the stream stops its device, until one wants sound again: an
+        output left running in silence keeps a Mac's AirPods from moving to another device after about two seconds,
+        and keeps any computer from saving power. Never for a stream with an input; 0, the default, never at all.
+        Starting again takes as long as opening the device does, which for an ASIO driver is long. */
+    std::chrono::milliseconds idleAfter{0};
 };
 
 /** What a device runs at once its stream is open, as the device gives it back. */

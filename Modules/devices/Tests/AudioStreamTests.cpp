@@ -765,9 +765,9 @@ TEST_CASE("An output whose callbacks are all idle stops its device after a while
     auto& speakers = system->add(fakeDevice("speakers", 0, 2));
     speakers.run({.speed = 1.0});
     Events events;
-    auto options = quick(events);
-    options.idleAfter = 100ms;
-    AudioStream stream(system, "speakers", stereo(false, true), options);
+    auto request = stereo(false, true);
+    request.idleAfter = 100ms;
+    AudioStream stream(system, "speakers", request, quick(events));
     Player player;
     REQUIRE(!stream.add(player));
     REQUIRE(!stream.start());
@@ -817,9 +817,9 @@ TEST_CASE("A stream with an input never stops its device for idle callbacks")
     auto& device = system->add(fakeDevice("interface"));
     device.run({.speed = 1.0});
     Events events;
-    auto options = quick(events);
-    options.idleAfter = 50ms;
-    AudioStream stream(system, "interface", stereo(), options);
+    auto request = stereo();
+    request.idleAfter = 50ms;
+    AudioStream stream(system, "interface", request, quick(events));
     Quiet quiet;
     REQUIRE(!stream.add(quiet));
     REQUIRE(!stream.start());

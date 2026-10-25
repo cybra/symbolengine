@@ -58,7 +58,7 @@ public:
 
     /** Whether the callback has nothing to play for now, as a player that is stopped; read on the control thread
         while blocks run, so from what the callback keeps atomically. A stream with Options::idleAfter stops its
-        device once every callback has been idle that long. */
+        device once every callback has been idle for AudioStreamRequest::idleAfter. */
     virtual bool idle() const noexcept { return false; }
 };
 
@@ -105,7 +105,7 @@ struct AudioEvent
             there, a new stretch. */
         moved,
 
-        /** Every callback was idle for Options::idleAfter, so the stream stopped its device, as an output not playing
+        /** Every callback was idle for AudioStreamRequest::idleAfter, so the stream stopped its device, as an output not playing
             should; and one wanted sound again, so it started it again, a new stretch. */
         idle,
         active,
@@ -175,12 +175,6 @@ public:
 
         /** How long an input gives exact zeros before it is said. */
         std::chrono::milliseconds silentInputAfter{10000};
-
-        /** How long every callback may be idle before the stream stops its device, until one wants sound again: an
-            output left running in silence keeps a Mac's AirPods from moving to another device after about two
-            seconds, and keeps any computer from saving power. Never for a stream with an input; 0, the default,
-            never at all. Starting again takes as long as opening the device does, which for an ASIO driver is long. */
-        std::chrono::milliseconds idleAfter{0};
 
         /** How often the control thread looks at a running device. */
         std::chrono::milliseconds watchEvery{20};
