@@ -164,7 +164,7 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
     std::atomic<double> load{0.0};
 
     // Set by the system's notifications, from any thread.
-    std::atomic<bool> changePending{false};
+    std::atomic<bool> changePending{false}, reopenPending{false};
     std::atomic<std::int64_t> changeAt{0};
     std::atomic<int> lossPending{-1};
     std::atomic<std::int64_t> lossCode{0};
@@ -543,6 +543,7 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
                      : why == AudioLoss::takenExclusively ? "Another program took the audio device for its own use."
                      : why == AudioLoss::serviceRestarted ? "The computer's audio service restarted."
                      : why == AudioLoss::refused ? "The system refused the audio device."
+                     : why == AudioLoss::clockLost ? "The audio device lost its clock."
                                                  : "The audio device stopped.",
                      "lost", lossCode.load()};
         tell({.kind = AudioEvent::Kind::lost, .loss = why, .error = error});
@@ -588,6 +589,7 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
         if (changePending.load() && steadyNanoseconds() - changeAt.load() >= nanoseconds(options.settle))
         {
             changePending = false;
+            const auto asked = reopenPending.exchange(false);
             if (stream != nullptr)
             {
                 const auto now = stream->info();
@@ -596,7 +598,7 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
                     const std::lock_guard hold(lock);
                     before = info;
                 }
-                if (!sameShape(now, before))
+                if (asked || !sameShape(now, before))
                     rebuild(before, now);
             }
         }
@@ -606,6 +608,9 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
     void rebuild(const AudioStreamInfo& before, const AudioStreamInfo& now)
     {
         teardown();
+
+        // What the device let go of asked before it went is answered by this; what the one opened now asks, after.
+        reopenPending = false;
         {
             const std::lock_guard hold(lock);
             request.sampleRate = now.sampleRate;
@@ -752,6 +757,12 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
         changePending = true;
         if (!audioThread::isCurrent())
             nudge();
+    }
+
+    void reopen() noexcept override
+    {
+        reopenPending = true;
+        changed();
     }
 
     void lost(AudioLoss why, std::int64_t code) noexcept override

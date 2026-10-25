@@ -173,6 +173,48 @@ TEST_CASE("No channels saved takes an input's first and an output's first two")
     CHECK(resolved.output.channels == std::vector<int>{0, 1});
 }
 
+TEST_CASE("An ASIO driver not yet read is taken at its word, and never put in another's place")
+{
+    AudioDeviceInfo unread;
+    unread.id = "{driver}";
+    unread.name = "Interface USB ASIO";
+    unread.unread = true;
+    const std::vector<AudioDeviceInfo> drivers{unread};
+
+    // Chosen with channels and settings saved: all of them, as saved, until the driver says what it has.
+    AudioSetup setup;
+    setup.system = "ASIO";
+    setup.choose(AudioDirection::input, device("{driver}", 8, 8, "Interface USB ASIO"), {6, 7});
+    setup.choose(AudioDirection::output, device("{driver}", 8, 8, "Interface USB ASIO"), {2, 3});
+    setup.sampleRate = 96000.0;
+    setup.blockSize = 64;
+    auto resolved = setup.resolve(drivers, "", "");
+    CHECK(resolved.input.id == "{driver}");
+    CHECK(resolved.input.channels == std::vector<int>{6, 7});
+    CHECK_FALSE(resolved.input.channelsMissing);
+    CHECK(resolved.output.channels == std::vector<int>{2, 3});
+    CHECK(resolved.output.sampleRate == 96000.0);
+    CHECK(resolved.output.blockSize == 64);
+    CHECK(resolved.output.said.empty());
+
+    // Found by its name when its identifier changed, and given an input's first and an output's first two.
+    AudioSetup renamed;
+    renamed.output.choice = AudioSetup::Choice::device;
+    renamed.output.id = "{old}";
+    renamed.output.name = "Interface USB ASIO";
+    resolved = renamed.resolve(drivers, "", "");
+    CHECK(resolved.output.id == "{driver}");
+    CHECK(resolved.output.byName);
+    CHECK(resolved.output.channels == std::vector<int>{0, 1});
+
+    // A driver another stood for isn't loaded in its place.
+    AudioSetup missing;
+    missing.output.choice = AudioSetup::Choice::device;
+    missing.output.id = "{gone}";
+    missing.output.name = "Another ASIO";
+    CHECK(missing.resolve(drivers, "", "").output.id.empty());
+}
+
 TEST_CASE("A setup reads back as it was written, and anything missing or wrong reads as its default")
 {
     AudioSetup setup;

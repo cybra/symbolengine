@@ -1,5 +1,9 @@
 #include "Systems.h"
 
+#if defined(SYMBOLENGINE_ASIO)
+    #include "AsioSystem.h"
+#endif
+
 #include <symbolengine/devices/AudioSystem.h>
 
 #ifndef NOMINMAX
@@ -1008,7 +1012,11 @@ namespace devices::detail
 {
 std::vector<std::shared_ptr<AudioSystem>> systemsOfThisComputer()
 {
-    return {std::make_shared<WindowsAudioSystem>()};
+    std::vector<std::shared_ptr<AudioSystem>> systems{std::make_shared<WindowsAudioSystem>()};
+#if defined(SYMBOLENGINE_ASIO)
+    systems.push_back(asio::detail::makeSystem());
+#endif
+    return systems;
 }
 }
 

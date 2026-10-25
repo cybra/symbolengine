@@ -98,9 +98,22 @@ jobs:
           if [ "$RUNNER_OS" != "Linux" ]; then options="$options -DSYMBOLENGINE_PLUGINVAL_EDITORS=ON"; fi
           echo "VALIDATORS=$options" >> "$GITHUB_ENV"
 
+      # Steinberg's ASIO SDK on Windows, for the ASIO layer and its tests against fake drivers, pinned by checksum
+      # and fetched for the run alone: the SDK is the developer's own, under Steinberg's terms, never in this repository.
+      - name: ASIO SDK
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/asio" && cd "$RUNNER_TEMP/asio"
+          curl -sSfL -o sdk.zip https://download.steinberg.net/sdk_downloads/ASIO-SDK_2.3.4_2025-10-15.zip
+          actual=$(sha256sum sdk.zip | cut -d' ' -f1)
+          [ "$actual" = "d5ebf0c20dd2c5f43771fd0c1418f4b361bf52434ee670097cfa6b3a335e2eca" ] || { echo "The ASIO SDK has checksum $actual"; exit 1; }
+          unzip -q sdk.zip
+          echo "ASIO=-DSYMBOLENGINE_ASIO_SDK=$(cygpath -m "$RUNNER_TEMP/asio/ASIOSDK")" >> "$GITHUB_ENV"
+
       - name: Configure
         shell: bash
-        run: cmake --preset ${{ matrix.preset }} $VALIDATORS
+        run: cmake --preset ${{ matrix.preset }} $VALIDATORS $ASIO
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
       - name: Test

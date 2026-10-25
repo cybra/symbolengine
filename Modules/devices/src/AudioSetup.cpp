@@ -143,7 +143,8 @@ AudioResolution::Direction resolveDirection(const AudioSetup& setup, const Audio
             // Its identifier gone: a name only one device has, or a question between those that share it.
             std::vector<const AudioDeviceInfo*> sameName;
             for (const auto& candidate : devices)
-                if (!saved.name.empty() && candidate.name == saved.name && channelsOf(candidate, direction) > 0)
+                if (!saved.name.empty() && candidate.name == saved.name &&
+                    (channelsOf(candidate, direction) > 0 || candidate.unread))
                     sameName.push_back(&candidate);
             if (sameName.size() == 1)
             {
@@ -174,8 +175,18 @@ AudioResolution::Direction resolveDirection(const AudioSetup& setup, const Audio
     found.id = device->id;
     found.name = device->name;
 
-    // The channels saved, those the device has; none saved, its first or first two.
+    // The channels saved, those the device has; none saved, its first or first two. A driver not yet read is
+    // taken at its word: what it has is known once it opens.
     const auto count = channelsOf(*device, direction);
+    if (device->unread)
+    {
+        found.channels = saved.channels;
+        if (found.channels.empty())
+            found.channels = direction == AudioDirection::output ? std::vector<int>{0, 1} : std::vector<int>{0};
+        found.sampleRate = setup.sampleRate;
+        found.blockSize = setup.blockSize;
+        return found;
+    }
     if (saved.channels.empty())
     {
         found.channels.push_back(0);

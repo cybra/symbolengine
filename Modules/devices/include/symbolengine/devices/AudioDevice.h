@@ -71,6 +71,11 @@ struct AudioDeviceInfo
     bool answering = true;
     std::string problem{};
 
+    /** An ASIO driver not loaded since the program began, listed by its name alone, since loading drivers to list
+        them hangs programs: its channels, rates and block sizes are read when a stream first opens it, and the lists
+        change then. */
+    bool unread = false;
+
     int inputs() const noexcept { return static_cast<int>(inputNames.size()); }
     int outputs() const noexcept { return static_cast<int>(outputNames.size()); }
 };

@@ -37,7 +37,7 @@ bool sameList(const std::vector<AudioDeviceInfo>& a, const std::vector<AudioDevi
     for (std::size_t i = 0; i < a.size(); ++i)
         if (a[i].id != b[i].id || a[i].name != b[i].name || a[i].answering != b[i].answering ||
             a[i].inputNames != b[i].inputNames || a[i].outputNames != b[i].outputNames ||
-            a[i].currentRate != b[i].currentRate || a[i].currentBlock != b[i].currentBlock)
+            a[i].currentRate != b[i].currentRate || a[i].currentBlock != b[i].currentBlock || a[i].unread != b[i].unread)
             return false;
     return true;
 }

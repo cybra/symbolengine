@@ -101,6 +101,9 @@ public:
     /** The system says the device changed, after the change is applied, from the calling thread. */
     void changed(const std::function<void(AudioDeviceInfo&)>& change = {});
 
+    /** The device asks its stream to open it again, as an ASIO driver asking to reset does. */
+    void askToReopen();
+
     /** The device stops, telling its stream why. */
     void lose(AudioLoss why, std::int64_t code = 0);
 

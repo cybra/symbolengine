@@ -428,6 +428,13 @@ void FakeAudioDevice::changed(const std::function<void(AudioDeviceInfo&)>& chang
             client->changed();
 }
 
+void FakeAudioDevice::askToReopen()
+{
+    if (const auto stream = state->current())
+        if (auto* client = stream->client.load())
+            client->reopen();
+}
+
 void FakeAudioDevice::lose(AudioLoss why, std::int64_t code)
 {
     if (const auto stream = state->current())

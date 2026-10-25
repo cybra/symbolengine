@@ -28,6 +28,9 @@ enum class AudioLoss
     /** The system refused it, as for a microphone the program may not use. */
     refused,
 
+    /** It lost the clock it runs from, as an interface following another's clock does when that is unplugged. */
+    clockLost,
+
     other
 };
 
@@ -88,6 +91,10 @@ public:
 
     /** The device's rate, format, channels, block size or clock changed, from any thread. */
     virtual void changed() noexcept = 0;
+
+    /** The device asks to be opened again, whether anything about it changed or not, as an ASIO driver asking to
+        reset does, from any thread. It is opened again as it now runs once changes have settled. */
+    virtual void reopen() noexcept = 0;
 
     /** The device stopped while it ran, from any thread, the audio thread included. */
     virtual void lost(AudioLoss why, std::int64_t code) noexcept = 0;

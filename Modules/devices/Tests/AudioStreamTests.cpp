@@ -665,6 +665,43 @@ TEST_CASE("A change that leaves the device as it was opens nothing again")
     CHECK(rig.events.count(Kind::formatChanged) == 0);
 }
 
+TEST_CASE("A device asking to be opened again, though nothing about it changed, is opened again once, as it now runs")
+{
+    Rig rig;
+    auto stream = rig.stream();
+    REQUIRE(!stream->start());
+    REQUIRE(rig.device.cycle());
+    const auto opens = rig.device.opens();
+
+    // Asked twice before the change settles, as a driver resetting asks again.
+    rig.device.askToReopen();
+    rig.device.askToReopen();
+    REQUIRE(rig.events.waitFor(Kind::formatChanged));
+    std::this_thread::sleep_for(100ms);
+    CHECK(rig.device.opens() == opens + 1);
+    CHECK(rig.events.count(Kind::formatChanged) == 1);
+    CHECK(stream->state() == AudioStream::State::running);
+
+    // A change after that opens nothing again.
+    rig.device.changed();
+    std::this_thread::sleep_for(100ms);
+    CHECK(rig.device.opens() == opens + 1);
+}
+
+TEST_CASE("A device that lost its clock ends its stream, saying so")
+{
+    Rig rig;
+    auto stream = rig.stream();
+    REQUIRE(!stream->start());
+    REQUIRE(rig.device.cycle());
+    rig.device.lose(AudioLoss::clockLost);
+    REQUIRE(rig.events.waitFor(Kind::lost));
+    const auto lost = rig.events.of(Kind::lost).front();
+    CHECK(lost.loss == AudioLoss::clockLost);
+    CHECK(lost.error.message == "The audio device lost its clock.");
+    CHECK(stream->state() == AudioStream::State::lost);
+}
+
 // Losing a device
 
 TEST_CASE("A device unplugged during a take ends it with exactly its frames, and nothing takes its place")

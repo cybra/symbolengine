@@ -42,7 +42,11 @@ TEST_CASE("Windows Audio lists the PC's endpoints, each an input or an output, w
 
     Events events;
     AudioDevices devices(options(events));
+#if defined(SYMBOLENGINE_ASIO)
+    REQUIRE(devices.systems() == std::vector<std::string>{"Windows Audio", "ASIO"});
+#else
     REQUIRE(devices.systems() == std::vector<std::string>{"Windows Audio"});
+#endif
     const auto list = devices.devices("Windows Audio");
     REQUIRE_FALSE(list.empty());
     for (const auto& device : list)
