@@ -38,7 +38,7 @@ void misuse(const char* plugin, const std::string& what)
     const std::lock_guard held(lock);
 
     if (const char* path = std::getenv("SYMBOLENGINE_TEST_VST3_LOG"))
-        if (FILE* log = std::fopen(path, "a"))
+        if (FILE* log = std::fopen(path, "ab"))
         {
             std::fprintf(log, "%s: %s\n", plugin, what.c_str());
             std::fclose(log);
@@ -49,7 +49,7 @@ void misuse(const char* plugin, const std::string& what)
 void life(const char* what)
 {
     if (const char* path = std::getenv("SYMBOLENGINE_TEST_VST3_LIFE"))
-        if (FILE* log = std::fopen(path, "a"))
+        if (FILE* log = std::fopen(path, "ab"))
         {
             std::fprintf(log, "%s\n", what);
             std::fclose(log);
