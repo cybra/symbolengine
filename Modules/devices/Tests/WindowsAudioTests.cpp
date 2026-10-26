@@ -4,6 +4,7 @@
 // input for its own while a stream records from it. Runners have no endpoints, so these are run by hand.
 
 #include "Helpers.h"
+#include "Systems.h"
 
 #include <symbolengine/core/System.h>
 #include <symbolengine/devices/AudioDevices.h>
@@ -16,9 +17,13 @@
 #include <windows.h>
 
 #include <mmdeviceapi.h>
+#include <functiondiscoverykeys_devpkey.h>
 
 // Whether an endpoint offers the raw stream, the key Windows 8.1 added, which the SDK's headers don't declare.
 const PROPERTYKEY rawProcessingSupported{{0x8943b373, 0x388c, 0x4395, {0xb5, 0x57, 0xbc, 0x6d, 0xba, 0xff, 0xaf, 0xdb}}, 2};
+
+// The bus that enumerated an endpoint's device, DEVPKEY_Device_EnumeratorName.
+const PROPERTYKEY enumeratorName{{0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}}, 24};
 
 #include <cmath>
 
@@ -71,6 +76,60 @@ bool offersRaw(const std::string& id)
     if (SUCCEEDED(com))
         CoUninitialize();
     return offered;
+}
+
+// Every endpoint the PC has known that a Bluetooth headset's hands-free profile made, present or not, by its
+// identifier and name, read from its properties apart from the module.
+std::vector<std::pair<std::string, std::string>> handsFreeEndpoints()
+{
+    const auto com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    std::vector<std::pair<std::string, std::string>> found;
+    const auto text = [](IPropertyStore* store, const PROPERTYKEY& key) {
+        PROPVARIANT value;
+        PropVariantInit(&value);
+        std::string result;
+        if (SUCCEEDED(store->GetValue(key, &value)) && value.vt == VT_LPWSTR)
+            for (const auto* c = value.pwszVal; *c != 0; ++c)
+                result.push_back(*c < 128 ? static_cast<char>(*c) : '?');
+        PropVariantClear(&value);
+        return result;
+    };
+    IMMDeviceEnumerator* enumerator = nullptr;
+    IMMDeviceCollection* all = nullptr;
+    if (SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
+                                   reinterpret_cast<void**>(&enumerator))) &&
+        SUCCEEDED(enumerator->EnumAudioEndpoints(eAll, DEVICE_STATEMASK_ALL, &all)))
+    {
+        UINT count = 0;
+        all->GetCount(&count);
+        for (UINT i = 0; i < count; ++i)
+        {
+            IMMDevice* device = nullptr;
+            IPropertyStore* properties = nullptr;
+            LPWSTR id = nullptr;
+            if (SUCCEEDED(all->Item(i, &device)) && SUCCEEDED(device->OpenPropertyStore(STGM_READ, &properties)) &&
+                SUCCEEDED(device->GetId(&id)) && text(properties, enumeratorName) == "BTHHFENUM")
+            {
+                std::string identifier;
+                for (const auto* c = id; *c != 0; ++c)
+                    identifier.push_back(static_cast<char>(*c));
+                found.emplace_back(identifier, text(properties, PKEY_Device_FriendlyName));
+            }
+            if (id != nullptr)
+                CoTaskMemFree(id);
+            if (properties != nullptr)
+                properties->Release();
+            if (device != nullptr)
+                device->Release();
+        }
+    }
+    if (all != nullptr)
+        all->Release();
+    if (enumerator != nullptr)
+        enumerator->Release();
+    if (SUCCEEDED(com))
+        CoUninitialize();
+    return found;
 }
 
 AudioDevices::Options options(Events& events)
@@ -432,4 +491,27 @@ TEST_CASE("A thread of the program's joins the multimedia scheduler's Pro Audio 
     worker.join();
     CHECK(joined);
     REQUIRE(!stream->stop());
+}
+
+TEST_CASE("Every Bluetooth hands-free endpoint the PC has known is described as one, whatever Windows names it")
+{
+    if (setting("SYMBOLENGINE_REAL_DEVICES") != "1")
+        SKIP("SYMBOLENGINE_REAL_DEVICES=1 reads the PC's own endpoints");
+    const auto endpoints = handsFreeEndpoints();
+    if (endpoints.empty())
+        SKIP("This PC has known no Bluetooth headset's hands-free endpoint");
+
+    std::shared_ptr<AudioSystem> windows;
+    for (auto& system : devices::detail::systemsOfThisComputer())
+        if (system->name() == "Windows Audio")
+            windows = system;
+    REQUIRE(windows != nullptr);
+    WARN(endpoints.size() << " hands-free endpoints");
+    for (const auto& [id, name] : endpoints)
+    {
+        INFO(name);
+        const auto info = windows->describe(id);
+        CHECK(info.handsFree);
+        CHECK(info.transport == AudioTransport::bluetooth);
+    }
 }

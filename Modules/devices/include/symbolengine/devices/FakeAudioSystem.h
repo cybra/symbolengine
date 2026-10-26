@@ -165,7 +165,8 @@ public:
     /** Plays back what a RecordingAudioSystem wrote, at the times it wrote it divided by speed: each notice sent, each
         list of devices and the defaults put in place and told of again, as the recorder reads them only once the
         notices have settled, and each stream's losses, changes and requests to be opened again given to the stream on
-        that device. Returns once the last line is played. */
+        that device, the system's clock keeping the session's time while no device moves it on. Returns once the last
+        line is played. */
     void replay(const std::vector<std::string>& lines, double speed = 1.0);
 
     /** The system mutes or unmutes this program's input, telling listeners. */

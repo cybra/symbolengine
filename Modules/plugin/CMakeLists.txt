@@ -21,10 +21,14 @@ if(TARGET symbolengine_ui)
 endif()
 
 if(SYMBOLENGINE_TESTS)
+    # The editor's tests open a web view, so they run alone, where the system has one.
+    if(TARGET symbolengine_ui)
+        set(alone ALONE "[webview]")
+    endif()
     symbolengine_add_tests(plugin SOURCES
         Tests/ClapTests.cpp
         Tests/ParameterTests.cpp
-        ALONE "[webview]")
+        ${alone})
     target_include_directories(symbolengine_plugin_tests PRIVATE src)
     target_link_libraries(symbolengine_plugin_tests PRIVATE clap-wrapper-extensions)
     symbolengine_add_files(symbolengine_plugin_tests FOLDER Tests/EditorPage FUNCTION testEditorFiles)

@@ -11,7 +11,10 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <mutex>
+#include <set>
 
 using namespace symbolengine;
 using Kind = AudioEvent::Kind;
@@ -54,6 +57,38 @@ private:
     std::vector<std::string> kept;
 };
 
+// A session recorded on real hardware with the owner, trimmed, its devices' identifiers and names replaced
+// (Tests/Sessions), split where the recorder first opened a stream: the devices as they were then, and the rest.
+struct Session
+{
+    std::vector<std::string> before, after;
+};
+
+Session session(const char* name)
+{
+    std::ifstream file(std::filesystem::path(SYMBOLENGINE_SESSIONS_FOLDER) / name);
+    Session found;
+    bool opened = false;
+    for (std::string line; std::getline(file, line);)
+    {
+        if (line.empty())
+            continue;
+        opened = opened || json::parse(line)["event"].stringOr("") == "open";
+        (opened ? found.after : found.before).push_back(line);
+    }
+    return found;
+}
+
+// The sleeps, wakings and losses a stream met, in order.
+std::vector<Kind> met(const Events& events)
+{
+    std::vector<Kind> kinds;
+    for (const auto& event : events.all())
+        if (event.kind == Kind::sleeping || event.kind == Kind::woke || event.kind == Kind::lost)
+            kinds.push_back(event.kind);
+    return kinds;
+}
+
 AudioDevices::Options optionsFor(std::shared_ptr<AudioSystem> system, Events& events)
 {
     AudioDevices::Options options;
@@ -94,7 +129,7 @@ TEST_CASE("A device's description reads back from its line as it was written")
     CHECK(back.problem == "Asleep");
 }
 
-TEST_CASE("A stream whose start takes a while is recorded starting, with no stall while it starts")
+TEST_CASE("A stream whose start takes a while is recorded starting, with no stall while it starts", "[timing]")
 {
     // As AirPods' hands-free input on Windows, which took 1.7 s to start while its call link connected.
     Lines lines;
@@ -191,3 +226,106 @@ TEST_CASE("A session recorded on one system and played back on a fake meets a st
     CHECK(events.of(Kind::lost).front().loss == AudioLoss::unplugged);
     CHECK(soon([&] { return devices.devices("Fake").size() == 1; }));
 }
+
+// A stream on the interface through each session as the computer met it: its sleep, its waking, the interface lost and
+// back, and the program opening it again as an editor carrying a take on does.
+void replayOnInterface(const char* name, const std::string& system, const std::string& interface)
+{
+    const auto recorded = session(name);
+    REQUIRE(!recorded.before.empty());
+    REQUIRE(!recorded.after.empty());
+    auto fake = std::make_shared<FakeAudioSystem>(system);
+    fake->replay(recorded.before);
+    REQUIRE(fake->device(interface) != nullptr);
+    fake->device(interface)->run({.speed = 1.0});
+
+    Events events;
+    auto options = optionsFor(fake, events);
+    options.streams.wakeDelay = 200ms;
+    AudioDevices devices(options);
+    Recording recording(1 << 18);
+    AudioStreamRequest request;
+    request.inputChannels = {0};
+    AudioError error;
+    auto stream = devices.open(system, interface, request, error);
+    REQUIRE(stream != nullptr);
+    REQUIRE(!stream->add(recording));
+    REQUIRE(!stream->start());
+    REQUIRE(soon([&] { return recording.frames > 4800; }));
+
+    fake->replay(recorded.after);
+    CHECK(met(events) == std::vector<Kind>{Kind::sleeping, Kind::woke, Kind::lost});
+    REQUIRE(!events.of(Kind::lost).empty());
+    CHECK(events.of(Kind::lost).front().loss == AudioLoss::unplugged);
+    CHECK(stream->state() == AudioStream::State::lost);
+
+    const auto had = recording.frames.load();
+    REQUIRE(!stream->start());
+    CHECK(soon([&] { return recording.frames > had + 4800; }));
+}
+
+TEST_CASE("A Mac's session played back: a stream on a USB interface stops as the Mac sleeps, opens again once it wakes, and is lost when the interface's hub is unplugged", "[timing]")
+{
+    // The hub's going slept the Mac, its lid closed, and the Mac's word of that sleep came only as it woke: the stream,
+    // lost already, stays so.
+    replayOnInterface("mac-sleep-unplug-headset.jsonl", "Core Audio", "usb-interface");
+}
+
+TEST_CASE("A Windows PC's session played back: a stream on a USB interface stops as the PC sleeps, opens again once it wakes, and is lost when the interface is unplugged", "[timing]")
+{
+    // Windows said nothing of the loss to the stream; the interface going from the list is the word.
+    replayOnInterface("windows-sleep-unplug-headset.jsonl", "Windows Audio", "{0.0.1.00000000}.{interface-in}");
+}
+
+TEST_CASE("A Mac's session played back: an output following the default moves with it as a headset comes and goes, across sleep and the hub unplugged, and is never lost", "[timing]")
+{
+    const auto recorded = session("mac-sleep-unplug-headset.jsonl");
+    REQUIRE(!recorded.before.empty());
+
+    // Every device the session lists made first, each running whenever a stream opens it, and then the devices as
+    // they were when it began.
+    auto fake = std::make_shared<FakeAudioSystem>("Core Audio");
+    std::set<std::string> ids;
+    for (const auto* part : {&recorded.before, &recorded.after})
+        for (const auto& line : *part)
+        {
+            const auto parsed = json::parse(line);
+            if (const auto* listed = parsed["devices"].ifArray())
+                for (const auto& device : *listed)
+                    ids.insert(device["id"].stringOr(""));
+        }
+    auto whole = recorded.before;
+    whole.insert(whole.end(), recorded.after.begin(), recorded.after.end());
+    fake->replay(whole, 1e6);
+    for (const auto& id : ids)
+        if (auto* device = fake->device(id))
+            device->run({.speed = 1.0});
+    fake->replay(recorded.before, 1e6);
+    REQUIRE(ids.size() == 9);
+    REQUIRE(fake->defaultDevice(AudioDirection::output) == "usb-interface");
+
+    Events events;
+    auto options = optionsFor(fake, events);
+    options.streams.wakeDelay = 200ms;
+    AudioDevices devices(options);
+    Recording recording(1 << 18);
+    AudioStreamRequest request;
+    request.outputChannels = {0, 1};
+    request.followDefault = true;
+    AudioError error;
+    auto stream = devices.open("Core Audio", "usb-interface", request, error);
+    REQUIRE(stream != nullptr);
+    REQUIRE(!stream->add(recording));
+    REQUIRE(!stream->start());
+    REQUIRE(soon([&] { return recording.frames > 4800; }));
+
+    fake->replay(recorded.after);
+    INFO(events.count(Kind::moved) << " moves, " << events.count(Kind::sleeping) << " sleeps, ending on "
+                                   << stream->deviceId());
+    CHECK(events.count(Kind::lost) == 0);
+    CHECK(events.count(Kind::moved) >= 3);
+    CHECK(stream->deviceId() == fake->defaultDevice(AudioDirection::output));
+    const auto had = recording.frames.load();
+    CHECK(soon([&] { return recording.frames > had + 4800; }));
+}
+

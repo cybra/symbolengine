@@ -46,7 +46,7 @@ endif()
 
 if(SYMBOLENGINE_TESTS)
     set(tests Tests/AsioDetailTests.cpp Tests/AudioBridgeTests.cpp Tests/AudioDevicesTests.cpp Tests/AudioPlayerTests.cpp Tests/AudioSetupTests.cpp Tests/AudioStreamTests.cpp
-        Tests/RecordingTests.cpp)
+        Tests/RecordingTests.cpp Tests/WindowsAudioDetailTests.cpp)
     if(APPLE)
         list(APPEND tests Tests/CoreAudioTests.cpp)
     elseif(WIN32)
@@ -58,6 +58,9 @@ if(SYMBOLENGINE_TESTS)
     symbolengine_add_tests(devices SOURCES ${tests} ALONE "[timing]")
     target_link_libraries(symbolengine_devices_tests PRIVATE Threads::Threads)
     target_include_directories(symbolengine_devices_tests PRIVATE src)
+    # Sessions recorded on real hardware with the owner, trimmed and their devices' identifiers replaced, to replay.
+    target_compile_definitions(symbolengine_devices_tests PRIVATE
+                               SYMBOLENGINE_SESSIONS_FOLDER="${CMAKE_CURRENT_SOURCE_DIR}/Tests/Sessions")
 
     # What real hardware does while a person sleeps the computer or unplugs a device, written for the fake to replay.
     add_executable(symbolengine_devices_recorder Tests/Recorder.cpp)

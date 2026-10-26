@@ -484,7 +484,8 @@ private:
 };
 }
 
-TEST_CASE("What is played into a loopback device comes back as its input sample for sample")
+// The loopback tests run alone, each in real time through the same loopback devices, which two at once would mix.
+TEST_CASE("What is played into a loopback device comes back as its input sample for sample", "[timing]")
 {
     const auto part = loopback();
     if (part.empty())
@@ -541,7 +542,7 @@ TEST_CASE("What is played into a loopback device comes back as its input sample 
     CHECK(events.count(AudioEvent::Kind::dropout) == 0);
 }
 
-TEST_CASE("A Multi-Output device of two loopback devices carries what is played to both, and an aggregate each to its own")
+TEST_CASE("A Multi-Output device of two loopback devices carries what is played to both, and an aggregate each to its own", "[timing]")
 {
     const auto part = loopback();
     if (part.empty())
@@ -595,7 +596,7 @@ TEST_CASE("A Multi-Output device of two loopback devices carries what is played 
     }
 }
 
-TEST_CASE("An input carried to a loopback device on the computer's clock holds its delay and measures the two clocks' drift")
+TEST_CASE("An input carried to a loopback device on the computer's clock holds its delay and measures the two clocks' drift", "[timing]")
 {
     const auto part = loopback();
     if (!realDevices() || part.empty())

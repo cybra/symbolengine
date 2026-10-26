@@ -342,11 +342,18 @@ public:
     {
         auto& device = *state->device;
         ++device.starts;
-        // A slow start takes its time on the system's clock too, which runs on through it.
-        for (auto left = device.owner->startMilliseconds.load(); left > 0; left -= 5)
+        // A slow start takes its time on the system's clock too, which runs on through it, however coarse the
+        // system's sleeps.
+        if (const auto wait = device.owner->startMilliseconds.load(); wait > 0)
         {
-            std::this_thread::sleep_for(5ms);
-            device.system->clock += std::chrono::nanoseconds(5ms).count();
+            const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(wait);
+            for (auto last = std::chrono::steady_clock::now(); last < until;)
+            {
+                std::this_thread::sleep_for(std::min<std::chrono::steady_clock::duration>(5ms, until - last));
+                const auto now = std::chrono::steady_clock::now();
+                device.system->clock += std::chrono::duration_cast<std::chrono::nanoseconds>(now - last).count();
+                last = now;
+            }
         }
         if (device.owner->failStart.load())
         {
@@ -577,16 +584,33 @@ void FakeAudioSystem::notify(AudioSystemChange change, int times, int threads)
 
 void FakeAudioSystem::replay(const std::vector<std::string>& lines, double speed)
 {
+    // The system's clock keeps the session's time while no device moves it on, as a real one runs on while nothing
+    // plays and the computer sleeps, and goes no faster when one does.
     const auto began = std::chrono::steady_clock::now();
+    const auto clockAt = impl->clock.load();
+    const auto keepUp = [&](double upTo) {
+        const auto passed = std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count() * speed;
+        const auto target = clockAt + static_cast<std::int64_t>(std::min(passed, upTo) * 1e9);
+        auto now = impl->clock.load();
+        while (now < target && !impl->clock.compare_exchange_weak(now, target))
+        {
+        }
+    };
     for (const auto& text : lines)
     {
         const auto value = json::tryParse(text);
         if (!value)
             continue;
         const auto& line = *value;
-        const auto seconds = line["seconds"].numberOr(0.0) / std::max(speed, 1e-6);
-        std::this_thread::sleep_until(began + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                                                  std::chrono::duration<double>(seconds)));
+        const auto at = line["seconds"].numberOr(0.0);
+        const auto due = began + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                     std::chrono::duration<double>(at / std::max(speed, 1e-6)));
+        while (std::chrono::steady_clock::now() < due)
+        {
+            keepUp(at);
+            std::this_thread::sleep_for(std::min<std::chrono::steady_clock::duration>(2ms, due - std::chrono::steady_clock::now()));
+        }
+        keepUp(at);
 
         const auto event = line["event"].stringOr("");
         const auto id = line["device"].stringOr("");

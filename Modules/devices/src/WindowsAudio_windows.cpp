@@ -1,5 +1,6 @@
 #include "AudioWorkgroupDetail.h"
 #include "Systems.h"
+#include "WindowsAudioDetail.h"
 
 #if defined(SYMBOLENGINE_ASIO)
     #include "AsioSystem.h"
@@ -154,6 +155,10 @@ std::string idOf(IMMDevice* device)
     CoTaskMemFree(id);
     return result;
 }
+
+// The bus that enumerated an endpoint's device, as BTHHFENUM for a Bluetooth headset's hands-free profile: the
+// system's DEVPKEY_Device_EnumeratorName, which the endpoint's own properties carry.
+const PROPERTYKEY enumeratorName{{0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}}, 24};
 
 std::string textProperty(IPropertyStore* store, const PROPERTYKEY& key)
 {
@@ -941,10 +946,11 @@ public:
         for (int c = 0; c < channels; ++c)
             names.push_back((flow == eCapture ? "Input " : "Output ") + std::to_string(c + 1));
 
-        // A Bluetooth headset's hands-free endpoints carry its profile's name.
-        info.handsFree = info.name.find("Hands-Free") != std::string::npos;
-        if (info.handsFree)
-            info.transport = AudioTransport::bluetooth;
+        // A Bluetooth headset's hands-free endpoints are known by the bus that enumerated them, since Windows 11 leaves
+        // the profile out of their names.
+        const auto kind = windowsAudio::detail::kindOf(textProperty(store.get(), enumeratorName), info.name);
+        info.handsFree = kind.handsFree;
+        info.transport = kind.transport;
         return info;
     }
 
