@@ -91,6 +91,10 @@ public:
     /** start() asks to be opened again before it returns, as an ASIO driver resetting while its buffers are made. */
     std::atomic<bool> reopenInsideStart{false};
 
+    /** start() takes this long to return, the system's clock moving on by as much, as a Bluetooth headset's input does
+        on Windows while its call link connects. */
+    std::atomic<int> startMilliseconds{0};
+
     /** It has a settings window of its own, as an ASIO driver's control panel, which counts each time it opens. */
     std::atomic<bool> hasSettings{false};
     std::atomic<int> settingsShown{0};

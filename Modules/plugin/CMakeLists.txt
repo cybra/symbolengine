@@ -23,7 +23,8 @@ endif()
 if(SYMBOLENGINE_TESTS)
     symbolengine_add_tests(plugin SOURCES
         Tests/ClapTests.cpp
-        Tests/ParameterTests.cpp)
+        Tests/ParameterTests.cpp
+        ALONE "[webview]")
     target_include_directories(symbolengine_plugin_tests PRIVATE src)
     target_link_libraries(symbolengine_plugin_tests PRIVATE clap-wrapper-extensions)
     symbolengine_add_files(symbolengine_plugin_tests FOLDER Tests/EditorPage FUNCTION testEditorFiles)

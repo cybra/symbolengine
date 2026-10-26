@@ -234,11 +234,12 @@ public:
             now.sampleRate > 0.0 ? static_cast<std::int64_t>(1e9 * now.maxBlock / now.sampleRate) : 0;
         watched->expectInput = -1;
         watched->expectOutput = -1;
-        watched->lastCycle = impl->real->now();
-        watched->started = true;
+
+        // Watched for stalls from when the start returns, since a start can take seconds, as a Bluetooth headset's
+        // input's does on Windows while its call link connects.
         const bool started = real->start(*client, error);
-        if (!started)
-            watched->started = false;
+        watched->lastCycle = impl->real->now();
+        watched->started = started;
         impl->line(started ? Object{{"event", "start"}, {"device", watched->id}, {"rate", now.sampleRate},
                                     {"block", now.maxBlock}}
                            : Object{{"event", "start failed"}, {"device", watched->id}, {"message", error.message}});

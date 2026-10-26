@@ -23,8 +23,9 @@ function(symbolengine_add_tests module)
     add_executable(${target} ${tests_SOURCES})
     target_link_libraries(${target} PRIVATE SymbolEngine::${module} Catch2::Catch2WithMain)
     symbolengine_set_warnings(${target})
-    # Tests matching ALONE, a Catch2 test spec such as [timing], measure time on the clock, so they run with no other
-    # test beside them taking a crowded runner's cores.
+    # Tests matching ALONE, a Catch2 test spec such as [timing] or [webview], run with no other test beside them taking a
+    # crowded runner's cores: those that measure time on the clock, and those that open a web view, whose engine starts
+    # processes of its own, which two or three at once on a crowded runner took longer than the tests wait.
     if(tests_ALONE)
         catch_discover_tests(${target} TEST_PREFIX "${module}: " TEST_SPEC "~${tests_ALONE}" DISCOVERY_MODE PRE_TEST)
         catch_discover_tests(${target} TEST_PREFIX "${module}: " TEST_SPEC "${tests_ALONE}" DISCOVERY_MODE PRE_TEST

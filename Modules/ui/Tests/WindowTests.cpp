@@ -105,7 +105,7 @@ bool standsAlone(void* view)
 }
 }
 
-TEST_CASE("A window holds a view that fills it, at the size asked for")
+TEST_CASE("A window holds a view that fills it, at the size asked for", "[webview]")
 {
     choc::messageloop::initialise();
 
@@ -190,7 +190,7 @@ TEST_CASE("The close button leaves the window to the program, which may let go o
     CHECK(pressed == 2);
 }
 
-TEST_CASE("A window shows see-through until told otherwise, and letting go of it leaves its view to its owner")
+TEST_CASE("A window shows see-through until told otherwise, and letting go of it leaves its view to its owner", "[webview]")
 {
     choc::messageloop::initialise();
 
@@ -247,7 +247,7 @@ TEST_CASE("A maximized window fills the screen it is on, and goes back to where 
 }
 
 #if defined(__APPLE__)
-TEST_CASE("A window's view has the keyboard whenever the window does")
+TEST_CASE("A window's view has the keyboard whenever the window does", "[webview]")
 {
     choc::messageloop::initialise();
 

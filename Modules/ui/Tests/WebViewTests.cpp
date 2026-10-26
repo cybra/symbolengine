@@ -171,7 +171,7 @@ TEST_CASE("Files are given MIME types by their names")
     CHECK(ui::mimeTypeFor("/data") == "application/octet-stream");
 }
 
-TEST_CASE("A page loads its files and talks to the native side both ways")
+TEST_CASE("A page loads its files and talks to the native side both ways", "[webview]")
 {
     const auto reports = runPage({.resources = onePage(pageWith(checks))}, [](ui::WebView& view) {
         view.expose("add", [](const Value& arguments) { return Value(arguments[0].asInt() + arguments[1].asInt()); });
@@ -193,7 +193,7 @@ TEST_CASE("A page loads its files and talks to the native side both ways")
     CHECK(reports.at("early")["held"].boolOr(false));
 }
 
-TEST_CASE("A function's answer can come later, after the call has returned, and only the first counts")
+TEST_CASE("A function's answer can come later, after the call has returned, and only the first counts", "[webview]")
 {
     const auto page = pageWith(R"js(
 (async () => {
@@ -233,7 +233,7 @@ TEST_CASE("A function's answer can come later, after the call has returned, and 
     CHECK(reports.at("throws").stringOr("") == "no answer");
 }
 
-TEST_CASE("A script run in the page gives what it came to, or what went wrong")
+TEST_CASE("A script run in the page gives what it came to, or what went wrong", "[webview]")
 {
     Value sum, object, thrown;
     std::string sumError = "not run", thrownError;
@@ -267,7 +267,7 @@ TEST_CASE("A script run in the page gives what it came to, or what went wrong")
 #endif
 }
 
-TEST_CASE("Pages with different names keep what they store apart, and pages with the same name share it")
+TEST_CASE("Pages with different names keep what they store apart, and pages with the same name share it", "[webview]")
 {
     // Names new to this run, so what an earlier run stored can't answer for this one.
     const auto first = unique("first"), second = unique("second");
@@ -291,7 +291,7 @@ TEST_CASE("Pages with different names keep what they store apart, and pages with
 }
 
 #if defined(_WIN32)
-TEST_CASE("WebView2 keeps its data in the folder it is given")
+TEST_CASE("WebView2 keeps its data in the folder it is given", "[webview]")
 {
     const auto folder = std::filesystem::temp_directory_path() / unique("symbolengine-webview");
     runPage({.resources = onePage(pageWith(R"js(symbolengine.call("done");)js")), .dataFolder = folder});
@@ -304,7 +304,7 @@ TEST_CASE("WebView2 keeps its data in the folder it is given")
 #endif
 
 #if defined(__APPLE__)
-TEST_CASE("A snapshot saves the page as it is drawn")
+TEST_CASE("A snapshot saves the page as it is drawn", "[webview]")
 {
     const auto png = std::filesystem::temp_directory_path() / (unique("symbolengine-snapshot") + ".png");
     const auto red = pageWith(R"js(

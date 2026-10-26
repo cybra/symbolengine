@@ -342,6 +342,12 @@ public:
     {
         auto& device = *state->device;
         ++device.starts;
+        // A slow start takes its time on the system's clock too, which runs on through it.
+        for (auto left = device.owner->startMilliseconds.load(); left > 0; left -= 5)
+        {
+            std::this_thread::sleep_for(5ms);
+            device.system->clock += std::chrono::nanoseconds(5ms).count();
+        }
         if (device.owner->failStart.load())
         {
             error = {"The device didn't start.", "start", -1};

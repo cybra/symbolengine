@@ -94,6 +94,29 @@ TEST_CASE("A device's description reads back from its line as it was written")
     CHECK(back.problem == "Asleep");
 }
 
+TEST_CASE("A stream whose start takes a while is recorded starting, with no stall while it starts")
+{
+    // As AirPods' hands-free input on Windows, which took 1.7 s to start while its call link connected.
+    Lines lines;
+    auto real = std::make_shared<FakeAudioSystem>();
+    auto& headset = real->add(fakeDevice("headset", 2, 0, "Headset"));
+    headset.run({.speed = 1.0});
+    headset.startMilliseconds = 400;
+    auto recorder = std::make_shared<RecordingAudioSystem>(real, lines.writer());
+    Events events;
+    AudioDevices devices(optionsFor(recorder, events));
+    Recording recording(1 << 16);
+    AudioError error;
+    auto stream = devices.open("Fake", "headset", stereo(true, false), error);
+    REQUIRE(stream != nullptr);
+    REQUIRE(!stream->add(recording));
+    REQUIRE(!stream->start());
+    REQUIRE(soon([&] { return recording.frames > 4800; }));
+    std::this_thread::sleep_for(200ms);
+    CHECK(lines.has("start"));
+    CHECK_FALSE(lines.has("stall"));
+}
+
 TEST_CASE("A session recorded on one system and played back on a fake meets a stream there with what it met first")
 {
     // Recorded: an interface recorded from, its rate changed under it by another program, and then unplugged.

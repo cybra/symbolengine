@@ -287,6 +287,10 @@ TEST_CASE("A jump while playing never steps further between samples than the fad
     auto heard = deck.play(4800)[0];
     for (int jump = 0; jump < 10; ++jump)
     {
+        // The reader ahead of what plays, as it is at a device's pace, so the play jumped from has frames to fade over;
+        // played faster than that by a reader the sanitizers slow, it had one block, and stopped short of silence.
+        deck.waitReady(2048);
+
         // Half a cycle out each time, where the tone is the opposite of what it was.
         deck.player.seek(deck.player.position() + 24 + jump * 1000);
         const auto out = deck.play(2400, 128);

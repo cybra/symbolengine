@@ -104,6 +104,14 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew install --cask blackhole-2ch blackhole-16ch
+          # Core Audio loads a new driver only as its service starts, so it is restarted, and the devices waited for.
+          sudo killall coreaudiod || true
+          for i in $(seq 1 30); do
+            listed=$(system_profiler SPAudioDataType | grep -c "BlackHole" || true)
+            [ "$listed" -ge 2 ] && break
+            sleep 2
+          done
+          system_profiler SPAudioDataType | grep "BlackHole"
           echo "SYMBOLENGINE_TEST_LOOPBACK=BlackHole" >> "$GITHUB_ENV"
 
       # Steinberg's ASIO SDK on Windows, for the ASIO layer and its tests against fake drivers, pinned by checksum

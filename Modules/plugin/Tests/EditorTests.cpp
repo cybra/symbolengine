@@ -93,7 +93,7 @@ struct Collected
 };
 }
 
-TEST_CASE("An editor opens in the host's window, and its page and the host change each other's parameters")
+TEST_CASE("An editor opens in the host's window, and its page and the host change each other's parameters", "[webview]")
 {
     choc::messageloop::initialise();
 
@@ -201,7 +201,7 @@ TEST_CASE("An editor opens in the host's window, and its page and the host chang
     CHECK(static_cast<double>(ticks.size() - 1) / span.count() < 10.0);
 }
 
-TEST_CASE("A resizable editor asks the host for sizes within its limits, and opens again at the size it was given")
+TEST_CASE("A resizable editor asks the host for sizes within its limits, and opens again at the size it was given", "[webview]")
 {
     choc::messageloop::initialise();
 
