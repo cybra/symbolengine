@@ -93,6 +93,9 @@ struct AudioPlayer::Impl
     std::atomic<std::int64_t> heardPosition{0};
     std::atomic<std::int64_t> playedIndex{0};
     std::atomic<bool> sounding{false};
+    // Frames whose chunks are given and not yet played or passed over: a ring holds a chunk's frames a moment before
+    // its header says what they are, and the audio thread can play them only once it does.
+    std::atomic<std::int64_t> playable{0};
     LockFreeFifo<Note> notes{256};
 
     // The audio thread's own.
@@ -258,6 +261,7 @@ struct AudioPlayer::Impl
                 else
                     rings[static_cast<std::size_t>(c)]->skip(static_cast<std::size_t>(n));
             }
+            playable -= n;
             const double target = leaving ? 0.0 : 1.0;
             for (std::int64_t i = 0; i < n; ++i)
             {
@@ -292,6 +296,7 @@ struct AudioPlayer::Impl
         const auto count = std::min(frames, chunk.frames - used);
         for (auto& ring : rings)
             ring->skip(count);
+        playable -= count;
         used += count;
         if (used == chunk.frames)
             holding = false;
@@ -521,6 +526,7 @@ struct AudioPlayer::Impl
         }
         chunks->push({fill.generation, fill.index, position, perFrame, fill.loopFrom, fill.end,
                       static_cast<std::uint32_t>(frames), false});
+        playable += static_cast<std::int64_t>(frames);
         fill.index += static_cast<std::int64_t>(frames);
     }
 
@@ -584,6 +590,7 @@ void AudioPlayer::prepare(double sampleRate, int channels)
         for (int c = 0; c < impl->channels; ++c)
             impl->rings.push_back(std::make_unique<LockFreeFifo<float>>(capacity));
         impl->chunks = std::make_unique<LockFreeFifo<Chunk>>(capacity / chunkFrames * 2 + 16);
+        impl->playable = 0;
         impl->fill = {};
         impl->current = 0;
         impl->holding = false;
@@ -622,7 +629,7 @@ std::int64_t AudioPlayer::position() const noexcept
 
 std::size_t AudioPlayer::ready() const noexcept
 {
-    return impl->rings.empty() ? 0 : impl->rings.front()->readable();
+    return static_cast<std::size_t>(std::max<std::int64_t>(0, impl->playable.load()));
 }
 
 void AudioPlayer::render(float* const* outputs, int channels, int frames) noexcept

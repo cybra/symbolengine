@@ -93,7 +93,7 @@ public:
     /** The source's frame the next block plays from. */
     std::int64_t position() const noexcept;
 
-    /** How many frames the reader has ready. */
+    /** How many frames the reader has ready, each one the audio thread can play now. */
     std::size_t ready() const noexcept;
 
     /** Writes the next frames to the outputs, on the audio thread, never allocating, locking or waiting. */

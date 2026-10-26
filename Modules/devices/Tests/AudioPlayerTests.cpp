@@ -139,6 +139,24 @@ TEST_CASE("A source at the device's rate plays sample for sample from where it s
     CHECK(deck.player.playing());
 }
 
+TEST_CASE("Frames said to be ready play at once, whenever it is asked")
+{
+    // Asked as often as the test's thread can, the moment a play starts, for a frame to play the moment one is ready.
+    for (int attempt = 0; attempt < 2000; ++attempt)
+    {
+        Deck deck;
+        deck.player.play(std::make_shared<Counting>(48000), 0);
+        const auto until = std::chrono::steady_clock::now() + 5s;
+        while (deck.player.ready() == 0)
+            if (std::chrono::steady_clock::now() > until)
+                FAIL("nothing was ready");
+        float* channels[2]{deck.left.data(), deck.right.data()};
+        deck.player.render(channels, 2, 1);
+        INFO("attempt " << attempt);
+        REQUIRE(deck.left[0] == Counting::at(0, 0));
+    }
+}
+
 TEST_CASE("A mono source plays on both outputs")
 {
     Deck deck;
