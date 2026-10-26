@@ -1,4 +1,5 @@
 include_guard(GLOBAL)
+include(SymbolEngineVst3Sdk)
 
 include(ExternalProject)
 
