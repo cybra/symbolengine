@@ -25,7 +25,15 @@ constexpr std::uint32_t modeBits = 0xFFC0;
 std::uint64_t floatingPointModes() noexcept
 {
 #if defined(SYMBOLENGINE_X86)
-    return _mm_getcsr() & modeBits;
+    // The x87 unit's control word too, beside SSE's: a plugin setting rounding sets both, and C's own fegetround reads
+    // the x87 one where the compiler lets it be reached.
+    std::uint64_t x87 = 0;
+    #if defined(__GNUC__) || defined(__clang__)
+    std::uint16_t word = 0;
+    __asm__ volatile("fnstcw %0" : "=m"(word));
+    x87 = word;
+    #endif
+    return (_mm_getcsr() & modeBits) | (x87 << 32);
 #elif defined(__aarch64__)
     std::uint64_t control = 0;
     __asm__ volatile("mrs %0, fpcr" : "=r"(control));
@@ -39,6 +47,10 @@ void setFloatingPointModes([[maybe_unused]] std::uint64_t modes) noexcept
 {
 #if defined(SYMBOLENGINE_X86)
     _mm_setcsr((_mm_getcsr() & ~modeBits) | (static_cast<std::uint32_t>(modes) & modeBits));
+    #if defined(__GNUC__) || defined(__clang__)
+    const auto word = static_cast<std::uint16_t>(modes >> 32);
+    __asm__ volatile("fldcw %0" : : "m"(word));
+    #endif
 #elif defined(__aarch64__)
     __asm__ volatile("msr fpcr, %0" : : "r"(modes));
 #endif
