@@ -1,0 +1,429 @@
+#include "symbolengine/host/FakePluginFormat.h"
+
+#include <algorithm>
+#include <atomic>
+#include <map>
+#include <mutex>
+
+namespace symbolengine
+{
+
+struct FakePluginFormat::Shared
+{
+    std::function<bool()> onMainThread;
+    std::function<void(std::function<void()>)> post;
+
+    mutable std::mutex lock;
+    std::map<std::string, Script> scripts;
+    std::map<std::string, std::vector<std::string>> calls;
+    std::vector<std::string> misuses;
+    std::vector<std::pair<std::string, PluginFormatClient*>> live;
+    bool allOnMain = true;
+
+    void record(const std::string& id, std::string call)
+    {
+        const std::lock_guard held(lock);
+        calls[id].push_back(std::move(call));
+    }
+
+    void misuse(const std::string& id, const std::string& what)
+    {
+        const std::lock_guard held(lock);
+        misuses.push_back(id + ": " + what);
+    }
+
+    Script scriptFor(const std::string& id) const
+    {
+        const std::lock_guard held(lock);
+        const auto found = scripts.find(id);
+        return found == scripts.end() ? Script{} : found->second;
+    }
+};
+
+namespace
+{
+
+class FakePlugin final : public PluginFormatInstance
+{
+public:
+    FakePlugin(std::shared_ptr<FakePluginFormat::Shared> made, std::string name, FakePluginFormat::Script given,
+               PluginFormatClient& listener)
+        : shared(std::move(made)), id(std::move(name)), script(std::move(given)), client(listener)
+    {
+        const std::lock_guard held(shared->lock);
+        shared->live.emplace_back(id, &client);
+    }
+
+    ~FakePlugin() override
+    {
+        const Main call(*this, "destroy", true);
+
+        if (active)
+            misuse("taken apart while active");
+
+        {
+            const std::lock_guard held(shared->lock);
+            shared->allOnMain = shared->allOnMain && shared->onMainThread();
+            const auto me = std::find(shared->live.begin(), shared->live.end(), std::make_pair(id, &client));
+
+            if (me != shared->live.end())
+                shared->live.erase(me);
+        }
+    }
+
+    PluginLayout arrange(PluginLayout wanted) override
+    {
+        const Main call(*this, "arrange", true);
+
+        if (active)
+            misuse("arranged while active");
+
+        if (script.takes.empty())
+            return {0, 0};
+
+        const auto taken = std::find(script.takes.begin(), script.takes.end(), wanted);
+        layout = taken != script.takes.end() ? *taken : script.takes.front();
+        return layout;
+    }
+
+    bool activate(const PluginSetup& setup, PluginError& error) override
+    {
+        const Main call(*this, "activate", true);
+
+        if (active)
+            misuse("activated while active");
+
+        if (script.failToActivate)
+        {
+            error = {"The fake plugin was told not to activate.", "activate", 2};
+            return false;
+        }
+
+        delay.assign(static_cast<std::size_t>(std::max(0, layout.outputs)),
+                     std::vector<float>(static_cast<std::size_t>(std::max(1, script.latency)), 0.0f));
+        delayAt = 0;
+        maximumFrames = setup.maximumFrames;
+        active = true;
+        return true;
+    }
+
+    void deactivate() override
+    {
+        const Main call(*this, "deactivate", true);
+
+        if (!active || processing)
+            misuse("deactivated while not active or while processing");
+
+        active = false;
+    }
+
+    int latency() override
+    {
+        const Main call(*this, "latency", false);
+
+        if (!active)
+            misuse("latency asked while not active");
+
+        return script.latency;
+    }
+
+    int tail() override
+    {
+        const Main call(*this, "tail", false);
+
+        if (!active)
+            misuse("tail asked while not active");
+
+        return script.tail;
+    }
+
+    void reset() override
+    {
+        const Main call(*this, "reset", true);
+
+        if (!active || processing)
+            misuse("reset while not active or while processing");
+
+        for (auto& line : delay)
+            std::fill(line.begin(), line.end(), 0.0f);
+    }
+
+    void startProcessing() noexcept override
+    {
+        const Audio call(*this, "startProcessing");
+
+        if (!active || processing)
+            misuse("started processing while not active or already processing");
+
+        processing = true;
+    }
+
+    void stopProcessing() noexcept override
+    {
+        const Audio call(*this, "stopProcessing");
+
+        if (!processing)
+            misuse("stopped processing while not processing");
+
+        processing = false;
+    }
+
+    bool process(const PluginBlock& block) noexcept override
+    {
+        const Audio call(*this, "process");
+
+        if (!processing)
+            misuse("processed while not processing");
+
+        if (block.frames > maximumFrames)
+            misuse("given more frames than it was set up for");
+
+        if (block.inputChannels != layout.inputs || block.outputChannels != layout.outputs)
+            misuse("given other channels than its layout");
+
+        const auto length = static_cast<std::size_t>(std::max(1, script.latency));
+
+        for (int i = 0; i < block.frames; ++i)
+        {
+            for (int c = 0; c < block.outputChannels; ++c)
+            {
+                const float in = block.inputChannels > 0
+                                     ? block.inputs[std::min(c, block.inputChannels - 1)][i] * script.gain
+                                     : 0.0f;
+                auto& line = delay[static_cast<std::size_t>(c)];
+
+                if (script.latency > 0)
+                {
+                    block.outputs[c][i] = line[delayAt];
+                    line[delayAt] = in;
+                }
+                else
+                {
+                    block.outputs[c][i] = in;
+                }
+            }
+
+            if (script.latency > 0)
+                delayAt = (delayAt + 1) % length;
+        }
+
+        return true;
+    }
+
+    void flush() override
+    {
+        const Main call(*this, "flush", true);
+
+        if (!active || processing)
+            misuse("flushed while not active or while processing");
+    }
+
+    std::optional<std::string> state(PluginStateUse, PluginError&) override
+    {
+        const Main call(*this, "state", false);
+        return std::string("fake state");
+    }
+
+    bool setState(std::string_view, PluginStateUse, PluginError&) override
+    {
+        const Main call(*this, "setState", true);
+
+        if (processing)
+            misuse("given its state while processing");
+
+        return true;
+    }
+
+private:
+    // A call on the main thread: checked for its thread and for overlapping another call into the plugin, and, for
+    // one that changes how it processes, for overlapping processing.
+    struct Main
+    {
+        Main(FakePlugin& plugin, const char* name, bool exclusive) : fake(plugin), changes(exclusive)
+        {
+            fake.shared->record(fake.id, name);
+
+            if (!fake.shared->onMainThread())
+                fake.misuse(std::string(name) + " called off the main thread");
+
+            if (++fake.mainCalls > 1)
+                fake.misuse(std::string(name) + " overlapping another call on the main thread");
+
+            if (changes)
+                ++fake.exclusive;
+
+            if (changes && fake.audioCalls > 0)
+                fake.misuse(std::string(name) + " overlapping a call on the audio thread");
+
+            // What the script makes it do, which may throw as a plugin's own code can.
+            try
+            {
+                if (fake.script.inside != nullptr)
+                    fake.script.inside(name);
+            }
+            catch (...)
+            {
+                leave();
+                throw;
+            }
+        }
+
+        void leave()
+        {
+            --fake.mainCalls;
+
+            if (changes)
+                --fake.exclusive;
+        }
+
+        ~Main() { leave(); }
+
+        Main(const Main&) = delete;
+        Main& operator=(const Main&) = delete;
+
+        FakePlugin& fake;
+        bool changes;
+    };
+
+    struct Audio
+    {
+        Audio(FakePlugin& plugin, const char* name) : fake(plugin)
+        {
+            if (std::string_view(name) != "process")
+                fake.shared->record(fake.id, name);
+
+            if (++fake.audioCalls > 1)
+                fake.misuse(std::string(name) + " overlapping another call on the audio thread");
+
+            if (fake.exclusive > 0)
+                fake.misuse(std::string(name) + " overlapping a call that changes how it processes");
+
+            if (fake.script.inside != nullptr)
+                fake.script.inside(name);
+        }
+
+        ~Audio() { --fake.audioCalls; }
+
+        Audio(const Audio&) = delete;
+        Audio& operator=(const Audio&) = delete;
+
+        FakePlugin& fake;
+    };
+
+    void misuse(const std::string& what) { shared->misuse(id, what); }
+
+    std::shared_ptr<FakePluginFormat::Shared> shared;
+    std::string id;
+    FakePluginFormat::Script script;
+    PluginFormatClient& client;
+
+    std::atomic<int> mainCalls{0}, audioCalls{0}, exclusive{0};
+    std::atomic<bool> active{false}, processing{false};
+    PluginLayout layout{};
+    int maximumFrames = 0;
+    std::vector<std::vector<float>> delay;
+    std::size_t delayAt = 0;
+};
+
+}
+
+FakePluginFormat::FakePluginFormat(std::function<bool()> onMainThread, std::function<void(std::function<void()>)> post)
+    : shared(std::make_shared<Shared>())
+{
+    shared->onMainThread = std::move(onMainThread);
+    shared->post = std::move(post);
+}
+
+FakePluginFormat::~FakePluginFormat() = default;
+
+void FakePluginFormat::script(const std::string& id, Script script)
+{
+    const std::lock_guard held(shared->lock);
+    shared->scripts[id] = std::move(script);
+}
+
+void FakePluginFormat::notify(const std::string& id, PluginNotice what)
+{
+    const std::lock_guard held(shared->lock);
+
+    for (const auto& [name, client] : shared->live)
+        if (name == id)
+            client->notice(what);
+}
+
+PluginDescription FakePluginFormat::describe(const std::string& id)
+{
+    PluginDescription plugin;
+    plugin.identity = {"Fake", id};
+    plugin.name = id;
+    plugin.maker = "SymbolEngine";
+    plugin.version = "1.0";
+    return plugin;
+}
+
+std::vector<std::string> FakePluginFormat::calls(const std::string& id) const
+{
+    const std::lock_guard held(shared->lock);
+    const auto found = shared->calls.find(id);
+    return found == shared->calls.end() ? std::vector<std::string>{} : found->second;
+}
+
+std::vector<std::string> FakePluginFormat::misuses() const
+{
+    const std::lock_guard held(shared->lock);
+    return shared->misuses;
+}
+
+int FakePluginFormat::alive() const
+{
+    const std::lock_guard held(shared->lock);
+    return static_cast<int>(shared->live.size());
+}
+
+bool FakePluginFormat::allTakenApartOnMainThread() const
+{
+    const std::lock_guard held(shared->lock);
+    return shared->allOnMain;
+}
+
+std::string FakePluginFormat::name() const
+{
+    return "Fake";
+}
+
+void FakePluginFormat::make(const PluginDescription& plugin, PluginFormatClient& client,
+                            std::function<void(std::unique_ptr<PluginFormatInstance>, PluginError)> done)
+{
+    const auto& id = plugin.identity.id;
+    shared->record(id, "make");
+
+    if (!shared->onMainThread())
+        shared->misuse(id, "made off the main thread");
+
+    const auto script = shared->scriptFor(id);
+
+    const auto finish = [held = shared, id, script, &client, done] {
+        if (script.failToMake)
+            done(nullptr, {"The fake plugin was told to fail.", "make", 1});
+        else
+            done(std::make_unique<FakePlugin>(held, id, script, client), {});
+    };
+
+    if (script.turnsToMake <= 0)
+    {
+        finish();
+        return;
+    }
+
+    // Made over turns of the main thread, as a format that makes plugins asynchronously does.
+    auto countdown = std::make_shared<std::function<void(int)>>();
+    *countdown = [post = shared->post, finish, weak = std::weak_ptr(countdown)](int left) {
+        if (left == 0)
+            finish();
+        else
+            post([held = weak.lock(), left] { (*held)(left - 1); });
+    };
+    shared->post([countdown, turns = script.turnsToMake] { (*countdown)(turns - 1); });
+}
+
+}

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/ChannelLayout.h"
+#include "core/ChildProcess.h"
 #include "core/Files.h"
 #include "core/Json.h"
 #include "core/LockFreeFifo.h"
