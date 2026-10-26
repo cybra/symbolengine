@@ -31,10 +31,18 @@ namespace symbolengine
 using namespace Steinberg;
 using namespace Steinberg::Vst;
 
+// The SDK's interfaces have no virtual destructors, as COM's don't: the objects here are only ever deleted as
+// themselves, by their own release.
+#if defined(__GNUC__)
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wnon-virtual-dtor"
+#endif
+
 namespace
 {
 
-// What the plugin is told the program is called.
+// What the plugin is told the program is called. The SDK's class counts no references, being meant to live for the
+// whole program; this one counts them, so it goes once nothing holds it.
 class HostContext final : public HostApplication
 {
 public:
@@ -45,8 +53,21 @@ public:
         return StringConvert::convert(programName, name) ? kResultTrue : kInternalError;
     }
 
+    uint32 PLUGIN_API addRef() override { return ++references; }
+
+    uint32 PLUGIN_API release() override
+    {
+        const auto left = --references;
+
+        if (left == 0)
+            delete this;
+
+        return left;
+    }
+
 private:
     std::string programName;
+    std::atomic<uint32> references{1};
 };
 
 // The count every host object a plugin is handed keeps, by COM's rules: it starts at one, as given to its maker.
@@ -361,6 +382,10 @@ SpeakerArrangement arrangementFor(int channels)
 }
 
 }
+
+#if defined(__GNUC__)
+    #pragma GCC diagnostic pop
+#endif
 
 struct Vst3Format::Shared : std::enable_shared_from_this<Vst3Format::Shared>
 {

@@ -377,19 +377,19 @@ public:
 
 BEGIN_FACTORY_DEF("SymbolEngine", "https://symbolengine.dev", "")
 
-DEF_CLASS2(SYMBOLENGINE_INLINE_UID(SYMBOLENGINE_TEST_ID(0x01)), PClassInfo::kManyInstances, kVstAudioEffectClass,
+DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x01), PClassInfo::kManyInstances, kVstAudioEffectClass,
            "Gain", Vst::kDistributable, "Fx", "1.0.0", kVstVersionString, Gain::make)
-DEF_CLASS2(SYMBOLENGINE_INLINE_UID(SYMBOLENGINE_TEST_ID(0x02)), PClassInfo::kManyInstances,
+DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x02), PClassInfo::kManyInstances,
            kVstComponentControllerClass, "Gain Controller", 0, "", "1.0.0", kVstVersionString, GainController::make)
-DEF_CLASS2(SYMBOLENGINE_INLINE_UID(SYMBOLENGINE_TEST_ID(0x03)), PClassInfo::kManyInstances, kVstAudioEffectClass,
+DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x03), PClassInfo::kManyInstances, kVstAudioEffectClass,
            "Arranged", 0, "Fx", "1.0.0", kVstVersionString, Arranged::make)
-DEF_CLASS2(SYMBOLENGINE_INLINE_UID(SYMBOLENGINE_TEST_ID(0x04)), PClassInfo::kManyInstances, kVstAudioEffectClass,
+DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x04), PClassInfo::kManyInstances, kVstAudioEffectClass,
            "Mono", 0, "Fx", "1.0.0", kVstVersionString, Mono::make)
-DEF_CLASS2(SYMBOLENGINE_INLINE_UID(SYMBOLENGINE_TEST_ID(0x05)), PClassInfo::kManyInstances, kVstAudioEffectClass,
+DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x05), PClassInfo::kManyInstances, kVstAudioEffectClass,
            "No output", 0, "Fx", "1.0.0", kVstVersionString, NoOutput::make)
-DEF_CLASS2(SYMBOLENGINE_INLINE_UID(SYMBOLENGINE_TEST_ID(0x06)), PClassInfo::kManyInstances, kVstAudioEffectClass,
+DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x06), PClassInfo::kManyInstances, kVstAudioEffectClass,
            "Latency", 0, "Fx", "1.0.0", kVstVersionString, Latency::make)
-DEF_CLASS2(SYMBOLENGINE_INLINE_UID(SYMBOLENGINE_TEST_ID(0x08)), PClassInfo::kManyInstances, kVstAudioEffectClass,
+DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x08), PClassInfo::kManyInstances, kVstAudioEffectClass,
            "Throwing", 0, "Fx", "1.0.0", kVstVersionString, Throwing::make)
 
 END_FACTORY

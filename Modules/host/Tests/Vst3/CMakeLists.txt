@@ -33,7 +33,7 @@ add_library(symbolengine_test_vst3 MODULE TestPlugins.cpp ${plugin_sdk_sources})
 target_include_directories(symbolengine_test_vst3 SYSTEM PRIVATE ${sdk})
 # The single-component plugins' source leaves the edit controller's to be built on its own, for the two-part ones.
 target_compile_definitions(symbolengine_test_vst3 PRIVATE $<IF:$<CONFIG:Debug>,DEVELOPMENT=1,RELEASE=1>
-    PROJECT_INCLUDES_VSTEDITCONTROLLER=1)
+    PROJECT_INCLUDES_VSTEDITCONTROLLER=1 $<$<CXX_COMPILER_ID:MSVC>:_CRT_SECURE_NO_WARNINGS>)
 set_source_files_properties(${plugin_sdk_sources} PROPERTIES COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/W0,-w>")
 symbolengine_set_warnings(symbolengine_test_vst3)
 find_package(Threads REQUIRED)
