@@ -28,6 +28,7 @@ extern char** environ;
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 
 namespace symbolengine::system
 {
@@ -90,6 +91,15 @@ bool openInBrowser(std::string_view url)
     int status = 0;
     return waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
 #endif
+}
+
+void endNow(int code)
+{
+#if defined(_WIN32)
+    // ExitProcess would run every library's detach code with the other threads stopped where they stood.
+    TerminateProcess(GetCurrentProcess(), static_cast<UINT>(code));
+#endif
+    std::_Exit(code);
 }
 
 }

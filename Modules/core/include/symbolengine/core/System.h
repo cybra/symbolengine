@@ -14,4 +14,10 @@ std::optional<std::string> environmentVariable(std::string_view name);
     are opened, so text from a page or a file can't open a file or another program through it. */
 bool openInBrowser(std::string_view url);
 
+/** Ends this process at once with the code, running nothing more of it: no destructors, no functions registered to
+    run at exit and, on Windows, no library's detach code, which can deadlock once the process's other threads were
+    stopped holding a lock. For a child whose link to its program is lost, and for any end that mustn't wait on code
+    the process loaded. */
+[[noreturn]] void endNow(int code);
+
 }
