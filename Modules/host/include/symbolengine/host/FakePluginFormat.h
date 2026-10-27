@@ -2,6 +2,7 @@
 
 #include "PluginFormat.h"
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -25,6 +26,11 @@ public:
         int latency = 0;
         int tail = 0;
         float gain = 1.0f;
+
+        /** Its parameters; a change to the one gainParameter names sets its gain from its next block. Its state holds
+            each parameter's value as its processing has heard it. */
+        std::vector<PluginParameter> parameters;
+        std::uint32_t gainParameter = 0xFFFFFFFF;
 
         /** Fails to be made, or to be activated, saying so. */
         bool failToMake = false;

@@ -222,3 +222,73 @@ TEST_CASE("A VST3 module is entered once, however many of its plugins are made, 
     CHECK(misuses().empty());
     CHECK(files::read(lifeLog, ignored) == "entered\nexited\n");
 }
+
+TEST_CASE("A VST3 plugin's parameters are listed in its order, known by their IDs, with their names, steps and flags")
+{
+    Rig rig;
+    auto plugin = rig.made(testIds::gain);
+    const auto parameters = plugin->parameters();
+
+    REQUIRE(parameters.size() == 5);
+    CHECK(parameters[0].id == testIds::gainParameter);
+    CHECK(parameters[0].name == "Gain");
+    CHECK(parameters[0].units == "x");
+    CHECK(parameters[0].defaultValue == 0.5);
+    CHECK(parameters[0].automatable);
+    CHECK(parameters[1].hidden);
+    CHECK(parameters[2].readOnly);
+    CHECK(parameters[3].bypass);
+    CHECK(parameters[3].steps == 1);
+    CHECK(parameters[4].programChange);
+    CHECK(parameters[4].steps == 3);
+    CHECK(plugin->parameter(testIds::gainParameter) == 0.5);
+    CHECK_FALSE(plugin->parameterText(testIds::gainParameter, 0.25).empty());
+    CHECK_FALSE(plugin->setParameter(testIds::meterParameter, 0.5));
+}
+
+TEST_CASE("A value set with no device running reaches a VST3 plugin's processing before its state is taken, "
+          "one that passes over a call with no samples included")
+{
+    Rig rig;
+
+    for (const char* id : {testIds::gain, testIds::skipsEmpty})
+    {
+        INFO(id);
+        auto plugin = rig.made(id);
+        REQUIRE(plugin->prepare({48000.0, 64, false}));
+        REQUIRE(plugin->setParameter(testIds::gainParameter, 0.25));
+
+        const auto state = plugin->saveState(PluginStateUse::document);
+        REQUIRE(state.has_value());
+        const float quarter = 0.25f;
+        CHECK(state->find(std::string(reinterpret_cast<const char*>(&quarter), sizeof quarter)) != std::string::npos);
+        CHECK(through(*plugin, 64) == std::vector<float>{0.25f, 0.5f});
+    }
+
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("A value set while a device plays reaches a VST3 plugin within a block")
+{
+    Rig rig;
+    auto plugin = rig.made(testIds::gain);
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+    std::atomic<bool> running{true};
+    std::atomic<float> heard{0.0f};
+    std::thread audio([&] {
+        while (running)
+        {
+            heard = through(*plugin, 64).front();
+            std::this_thread::sleep_for(200us);
+        }
+    });
+
+    REQUIRE(rig.main.turnUntil([&] { return heard == 0.5f; }, 2s));
+    REQUIRE(plugin->setParameter(testIds::gainParameter, 0.125));
+    const bool playedIt = rig.main.turnUntil([&] { return heard == 0.125f; }, 2s);
+    running = false;
+    audio.join();
+
+    CHECK(playedIt);
+    CHECK(misuses().empty());
+}

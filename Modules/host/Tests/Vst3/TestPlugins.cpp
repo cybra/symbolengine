@@ -10,6 +10,7 @@
 
 #include "pluginterfaces/base/ibstream.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
+#include "pluginterfaces/vst/ivstparameterchanges.h"
 #include "pluginterfaces/vst/ivstprocesscontext.h"
 #include "pluginterfaces/vst/vstspeaker.h"
 #include "public.sdk/source/main/moduleinit.h"
@@ -164,6 +165,19 @@ public:
         for (int32 i = 0; i < data.numOutputs; ++i)
             check(data.outputs[i], audioOutputs[static_cast<std::size_t>(i)]);
 
+        // The gain heard from the host's changes, the last point of its queue, whatever the block's length.
+        if (data.inputParameterChanges != nullptr)
+            for (int32 q = 0; q < data.inputParameterChanges->getParameterCount(); ++q)
+                if (auto* changes = data.inputParameterChanges->getParameterData(q);
+                    changes != nullptr && changes->getParameterId() == testIds::gainParameter &&
+                    changes->getPointCount() > 0)
+                {
+                    int32 offset = 0;
+                    ParamValue value = 0.0;
+                    changes->getPoint(changes->getPointCount() - 1, offset, value);
+                    gain = static_cast<float>(value);
+                }
+
         if (data.numSamples > 0 && data.numInputs > 0 && data.numOutputs > 0)
             play(data);
 
@@ -174,9 +188,14 @@ public:
     {
         onMain("setState");
         int32 value = 0;
+        float level = 0.0f;
+        int32 read = 0;
 
         if (state != nullptr && state->read(&value, sizeof value, nullptr) == kResultOk)
             stored = value;
+
+        if (state != nullptr && state->read(&level, sizeof level, &read) == kResultOk && read == sizeof level)
+            gain = level;
 
         return kResultOk;
     }
@@ -185,7 +204,13 @@ public:
     {
         onMain("getState");
         int32 value = stored;
-        return state != nullptr ? state->write(&value, sizeof value, nullptr) : kInvalidArgument;
+        float level = gain;
+
+        if (state == nullptr)
+            return kInvalidArgument;
+
+        state->write(&value, sizeof value, nullptr);
+        return state->write(&level, sizeof level, nullptr);
     }
 
 protected:
@@ -200,7 +225,7 @@ protected:
         return AudioEffect::setBusArrangements(inputs, ins, outputs, outs);
     }
 
-    // Half the input, channel for channel, on the main buses.
+    // The input at its gain, half to begin with, channel for channel, on the main buses.
     virtual void play(ProcessData& data)
     {
         const auto& in = data.inputs[0];
@@ -209,8 +234,10 @@ protected:
         for (int32 c = 0; c < out.numChannels; ++c)
             for (int32 i = 0; i < data.numSamples; ++i)
                 out.channelBuffers32[c][i] =
-                    in.numChannels > 0 ? 0.5f * in.channelBuffers32[std::min(c, in.numChannels - 1)][i] : 0.0f;
+                    in.numChannels > 0 ? gain * in.channelBuffers32[std::min(c, in.numChannels - 1)][i] : 0.0f;
     }
+
+    std::atomic<float> gain{0.5f};
 
     void onMain(const char* call) const
     {
@@ -258,6 +285,38 @@ class GainController : public EditController
 {
 public:
     static FUnknown* make(void*) { return static_cast<IEditController*>(new GainController); }
+
+    tresult PLUGIN_API initialize(FUnknown* context) override
+    {
+        const auto result = EditController::initialize(context);
+
+        if (result != kResultOk)
+            return result;
+
+        parameters.addParameter(STR16("Gain"), STR16("x"), 0, 0.5, ParameterInfo::kCanAutomate, testIds::gainParameter);
+        parameters.addParameter(STR16("Hidden"), nullptr, 0, 0.0, ParameterInfo::kIsHidden, testIds::hiddenParameter);
+        parameters.addParameter(STR16("Meter"), nullptr, 0, 0.0, ParameterInfo::kIsReadOnly, testIds::meterParameter);
+        parameters.addParameter(STR16("Bypass"), nullptr, 1, 0.0,
+                                ParameterInfo::kCanAutomate | ParameterInfo::kIsBypass, testIds::bypassParameter);
+        parameters.addParameter(STR16("Program"), nullptr, 3, 0.0, ParameterInfo::kIsProgramChange,
+                                testIds::programParameter);
+        return kResultOk;
+    }
+};
+
+// Gain, but passing over a call with no samples before it reads its changes, as plugins built on DPF do.
+class SkipsEmpty : public Gain
+{
+public:
+    static FUnknown* make(void*) { return static_cast<IAudioProcessor*>(new SkipsEmpty); }
+
+    tresult PLUGIN_API process(ProcessData& data) override
+    {
+        if (data.numSamples == 0)
+            return kResultOk;
+
+        return Gain::process(data);
+    }
 };
 
 // Describes its buses only once an arrangement is set on them, as some plugins do: before, it says it can't.
@@ -389,6 +448,8 @@ DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x05), PClassInfo::kMa
            "No output", 0, "Fx", "1.0.0", kVstVersionString, NoOutput::make)
 DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x06), PClassInfo::kManyInstances, kVstAudioEffectClass,
            "Latency", 0, "Fx", "1.0.0", kVstVersionString, Latency::make)
+DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x09), PClassInfo::kManyInstances, kVstAudioEffectClass,
+           "Skips empty", 0, "Fx", "1.0.0", kVstVersionString, SkipsEmpty::make)
 DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x08), PClassInfo::kManyInstances, kVstAudioEffectClass,
            "Throwing", 0, "Fx", "1.0.0", kVstVersionString, Throwing::make)
 

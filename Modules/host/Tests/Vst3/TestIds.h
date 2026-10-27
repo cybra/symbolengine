@@ -14,4 +14,9 @@ constexpr const char* mono = SYMBOLENGINE_TEST_HEX("04");
 constexpr const char* noOutput = SYMBOLENGINE_TEST_HEX("05");
 constexpr const char* latency = SYMBOLENGINE_TEST_HEX("06");
 constexpr const char* throwing = SYMBOLENGINE_TEST_HEX("08");
+constexpr const char* skipsEmpty = SYMBOLENGINE_TEST_HEX("09");
+
+// The gain plugins' parameters, listed in this order, which isn't their IDs' order.
+constexpr unsigned gainParameter = 100, hiddenParameter = 7, meterParameter = 3000000, bypassParameter = 1,
+                   programParameter = 2;
 }

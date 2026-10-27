@@ -658,6 +658,10 @@ public:
 
         // A buffer for every bus, the main buses' filled each block, the others silence in and scratch space out.
         silence.assign(static_cast<std::size_t>(std::max(1, setup.maximumFrames)), 0.0f);
+        scratchMain.assign(silence.size(), 0.0f);
+
+        // A queue for every parameter made now, so changes added on the audio thread allocate nothing.
+        inputChanges.setMaxParameters(std::max<int32>(1, controller ? controller->getParameterCount() : 0));
 
         for (const auto direction : {kInput, kOutput})
         {
@@ -726,11 +730,81 @@ public:
             for (int c = 0; c < block.outputChannels; ++c)
                 outs[static_cast<std::size_t>(main[kOutput])][static_cast<std::size_t>(c)] = block.outputs[c];
 
+        queue(block.changes, block.changeCount);
         return run(block.frames);
     }
 
-    // Values handed over with no audio: a call with no samples and every bus's buffers, never null ones.
-    void flush() override { run(0); }
+    // Values handed over with no audio: a call with no samples and every bus's buffers, never null ones. A plugin found
+    // to pass over such a call without reading its changes, as some do, is given a short block of silence instead.
+    void flush(const PluginParameterChange* changes, int count) override
+    {
+        if (!passesOverEmpty)
+        {
+            const auto before = count > 0 ? componentState() : std::string();
+            queue(changes, count);
+            run(0);
+
+            if (count == 0 || componentState() != before)
+                return;
+
+            passesOverEmpty = true;
+        }
+
+        queue(changes, count);
+        runSilence();
+    }
+
+    std::vector<PluginParameter> parameters() override
+    {
+        std::vector<PluginParameter> list;
+
+        if (!controller)
+            return list;
+
+        // Counted once: some plugins take a long time over it.
+        const auto count = controller->getParameterCount();
+
+        for (int32 i = 0; i < count; ++i)
+        {
+            ParameterInfo info{};
+
+            if (controller->getParameterInfo(i, info) != kResultOk)
+                continue;
+
+            PluginParameter parameter;
+            parameter.id = info.id;
+            parameter.name = StringConvert::convert(info.title);
+            parameter.units = StringConvert::convert(info.units);
+            parameter.defaultValue = info.defaultNormalizedValue;
+            parameter.steps = std::max(0, info.stepCount);
+            parameter.automatable = (info.flags & ParameterInfo::kCanAutomate) != 0;
+            parameter.readOnly = (info.flags & ParameterInfo::kIsReadOnly) != 0;
+            parameter.hidden = (info.flags & ParameterInfo::kIsHidden) != 0;
+            parameter.bypass = (info.flags & ParameterInfo::kIsBypass) != 0;
+            parameter.programChange = (info.flags & ParameterInfo::kIsProgramChange) != 0;
+            list.push_back(std::move(parameter));
+        }
+
+        return list;
+    }
+
+    double parameterValue(std::uint32_t id) override { return controller ? controller->getParamNormalized(id) : 0.0; }
+
+    void showParameterValue(std::uint32_t id, double value) override
+    {
+        if (controller)
+            controller->setParamNormalized(id, value);
+    }
+
+    std::string parameterText(std::uint32_t id, double value) override
+    {
+        String128 text{};
+
+        if (!controller || controller->getParamStringByValue(id, value, text) != kResultOk)
+            return {};
+
+        return StringConvert::convert(text);
+    }
 
     std::optional<std::string> state(PluginStateUse, PluginError& error) override
     {
@@ -790,9 +864,44 @@ public:
     }
 
 private:
-    bool run(int frames) noexcept
+    // The changes for the next call, each in its parameter's queue at its frame.
+    void queue(const PluginParameterChange* changes, int count) noexcept
     {
         inputChanges.clearQueue();
+
+        for (int i = 0; i < count; ++i)
+        {
+            int32 queueIndex = 0, pointIndex = 0;
+
+            if (auto* parameter = inputChanges.addParameterData(changes[i].id, queueIndex))
+                parameter->addPoint(changes[i].offset, changes[i].value, pointIndex);
+        }
+    }
+
+    std::string componentState()
+    {
+        IPtr<HostStream> stream = owned(new HostStream);
+        return component->getState(stream) == kResultOk ? stream->bytes : std::string();
+    }
+
+    // A short block of silence, processing started and stopped around it, its output thrown away.
+    void runSilence()
+    {
+        const int frames = std::clamp(processSetup.maxSamplesPerBlock, 1, 64);
+
+        for (const auto direction : {kInput, kOutput})
+            if (main[direction] >= 0)
+                for (auto& pointer : channelPointers[direction][static_cast<std::size_t>(main[direction])])
+                    pointer = direction == kInput ? silence.data() : scratchMain.data();
+
+        processor->setProcessing(true);
+        run(frames);
+        processor->setProcessing(false);
+        std::fill(silence.begin(), silence.end(), 0.0f);
+    }
+
+    bool run(int frames) noexcept
+    {
         outputChanges.clearQueue();
         inputEvents.clear();
         outputEvents.clear();
@@ -839,7 +948,8 @@ private:
     std::vector<AudioBusBuffers> busBuffers[2];
     std::vector<std::vector<Sample32*>> channelPointers[2];
     std::vector<std::vector<std::vector<float>>> scratch[2];
-    std::vector<float> silence;
+    std::vector<float> silence, scratchMain;
+    bool passesOverEmpty = false;
     ParameterChanges inputChanges, outputChanges;
     EventList inputEvents, outputEvents;
     ProcessContext context{};

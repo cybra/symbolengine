@@ -3,11 +3,13 @@
 #include "PluginFormat.h"
 
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace symbolengine
 {
@@ -138,7 +140,22 @@ public:
     int latency() const;
     int tail() const;
 
-    /** Its state for the use, or nothing with problem() set; and giving it back. */
+    /** Its parameters, as read when it was made and again when it said they changed. */
+    std::vector<PluginParameter> parameters() const;
+
+    /** A parameter's value, as the program last set it or the plugin last said it is. */
+    double parameter(std::uint32_t id) const;
+
+    /** Sets a parameter's value: the plugin's processing hears it at its next block, or, while nothing plays it,
+        before its state is next taken or once it is next prepared; the plugin shows it at once. False for a parameter
+        it doesn't have or says can't be written. */
+    bool setParameter(std::uint32_t id, double value);
+
+    /** A value of a parameter as the plugin says it in words. */
+    std::string parameterText(std::uint32_t id, double value);
+
+    /** Its state for the use, or nothing with problem() set, once its processing has heard every value set; and
+        giving it back. */
     std::optional<std::string> saveState(PluginStateUse use);
     bool loadState(std::string_view state, PluginStateUse use);
 

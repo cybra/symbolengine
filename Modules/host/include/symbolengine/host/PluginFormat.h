@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace symbolengine
 {
@@ -69,7 +70,36 @@ struct PluginSetup
     bool operator==(const PluginSetup&) const = default;
 };
 
-/** One block for a plugin's process call: a buffer for each channel of its main buses, as its layout says. */
+/** One of a plugin's parameters, as it describes it. Values run from 0 to 1, as every format gives them. */
+struct PluginParameter
+{
+    std::uint32_t id = 0;
+    std::string name;
+    std::string units;
+    double defaultValue = 0.0;
+
+    /** 0 for a continuous parameter, else how many steps it has less one, as VST3 counts them. */
+    int steps = 0;
+
+    bool automatable = true;
+    bool readOnly = false;
+    bool hidden = false;
+    bool bypass = false;
+    bool programChange = false;
+
+    bool operator==(const PluginParameter&) const = default;
+};
+
+/** A parameter's new value, at a frame of the block it comes with. */
+struct PluginParameterChange
+{
+    std::uint32_t id = 0;
+    int offset = 0;
+    double value = 0.0;
+};
+
+/** One block for a plugin's process call: a buffer for each channel of its main buses, as its layout says, and the
+    parameters changed for it, in order. */
 struct PluginBlock
 {
     const float* const* inputs = nullptr;
@@ -77,6 +107,8 @@ struct PluginBlock
     int inputChannels = 0;
     int outputChannels = 0;
     int frames = 0;
+    const PluginParameterChange* changes = nullptr;
+    int changeCount = 0;
 };
 
 /** Which state is asked for: a document's, kept with a project or a saved group; a preset's; or one for a copy made to
@@ -160,8 +192,18 @@ public:
     /** Processes a block on the audio thread, giving false if it failed, after which its output isn't heard. */
     virtual bool process(const PluginBlock& block) noexcept = 0;
 
-    /** Hands it the values set since it last processed, while it is active and not processing. */
-    virtual void flush() = 0;
+    /** Hands it parameters' new values while it is active and not processing, so its processing has them as it would
+        after a block, as before its state is taken. */
+    virtual void flush(const PluginParameterChange* changes, int count) = 0;
+
+    /** Its parameters, read on the main thread once its layout is settled, and again when it says they changed. */
+    virtual std::vector<PluginParameter> parameters() = 0;
+
+    /** A parameter's value as the plugin has it, setting the value the plugin shows, which its processing hears only
+        through a change, and a value as text. */
+    virtual double parameterValue(std::uint32_t id) = 0;
+    virtual void showParameterValue(std::uint32_t id, double value) = 0;
+    virtual std::string parameterText(std::uint32_t id, double value) = 0;
 
     /** Its state for the use, or nothing with the error set; and giving it back, while it is inactive or active. */
     virtual std::optional<std::string> state(PluginStateUse use, PluginError& error) = 0;

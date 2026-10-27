@@ -50,6 +50,9 @@ public:
                PluginFormatClient& listener)
         : shared(std::move(made)), id(std::move(name)), script(std::move(given)), client(listener)
     {
+        for (const auto& parameter : script.parameters)
+            heard[parameter.id] = parameter.defaultValue;
+
         const std::lock_guard held(shared->lock);
         shared->live.emplace_back(id, &client);
     }
@@ -181,6 +184,7 @@ public:
         if (block.inputChannels != layout.inputs || block.outputChannels != layout.outputs)
             misuse("given other channels than its layout");
 
+        hear(block.changes, block.changeCount);
         const auto length = static_cast<std::size_t>(std::max(1, script.latency));
 
         for (int i = 0; i < block.frames; ++i)
@@ -210,18 +214,58 @@ public:
         return true;
     }
 
-    void flush() override
+    void flush(const PluginParameterChange* changes, int count) override
     {
         const Main call(*this, "flush", true);
 
         if (!active || processing)
             misuse("flushed while not active or while processing");
+
+        hear(changes, count);
     }
 
     std::optional<std::string> state(PluginStateUse, PluginError&) override
     {
         const Main call(*this, "state", false);
-        return std::string("fake state");
+        std::string state = "fake state";
+
+        for (const auto& [parameter, value] : heard)
+            state += ";" + std::to_string(parameter) + "=" + std::to_string(value);
+
+        return state;
+    }
+
+    std::vector<PluginParameter> parameters() override
+    {
+        const Main call(*this, "parameters", false);
+        return script.parameters;
+    }
+
+    double parameterValue(std::uint32_t parameterId) override
+    {
+        const Main call(*this, "parameterValue", false);
+        const auto found = shown.find(parameterId);
+
+        if (found != shown.end())
+            return found->second;
+
+        for (const auto& parameter : script.parameters)
+            if (parameter.id == parameterId)
+                return parameter.defaultValue;
+
+        return 0.0;
+    }
+
+    void showParameterValue(std::uint32_t parameterId, double value) override
+    {
+        const Main call(*this, "showParameterValue", false);
+        shown[parameterId] = value;
+    }
+
+    std::string parameterText(std::uint32_t parameterId, double value) override
+    {
+        const Main call(*this, "parameterText", false);
+        return std::to_string(parameterId) + ":" + std::to_string(value);
     }
 
     bool setState(std::string_view, PluginStateUse, PluginError&) override
@@ -312,6 +356,27 @@ private:
 
     void misuse(const std::string& what) { shared->misuse(id, what); }
 
+    // Values its processing hears, from a block or a flush. Kept in a fixed map, sized when the plugin is made, so a
+    // block never allocates.
+    void hear(const PluginParameterChange* changes, int count)
+    {
+        for (int i = 0; i < count; ++i)
+        {
+            const auto found = heard.find(changes[i].id);
+
+            if (found == heard.end())
+            {
+                misuse("given a change to a parameter it doesn't have");
+                continue;
+            }
+
+            found->second = changes[i].value;
+
+            if (changes[i].id == script.gainParameter)
+                script.gain = static_cast<float>(changes[i].value);
+        }
+    }
+
     std::shared_ptr<FakePluginFormat::Shared> shared;
     std::string id;
     FakePluginFormat::Script script;
@@ -323,6 +388,7 @@ private:
     int maximumFrames = 0;
     std::vector<std::vector<float>> delay;
     std::size_t delayAt = 0;
+    std::map<std::uint32_t, double> heard, shown;
 };
 
 }

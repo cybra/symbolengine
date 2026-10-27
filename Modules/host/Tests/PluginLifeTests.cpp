@@ -588,7 +588,7 @@ TEST_CASE("Calls in the wrong state are refused and said")
     REQUIRE(plugin->state() == Plugin::State::inactive);
     CHECK_FALSE(plugin->reset());
     CHECK(rig.wrong.size() == 3);
-    CHECK(rig.fake.calls("plugin") == std::vector<std::string>{"make", "arrange"});
+    CHECK(rig.fake.calls("plugin") == std::vector<std::string>{"make", "arrange", "parameters"});
 }
 
 TEST_CASE("A notice a plugin sends from inside its process call reaches the main thread")
