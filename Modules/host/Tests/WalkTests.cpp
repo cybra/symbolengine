@@ -355,7 +355,7 @@ TEST_CASE("Files gone from a folder that can be read leave the list, and those i
 #elif defined(__APPLE__)
     const std::filesystem::path drive = "/Volumes/SymbolEngine test drive not there/VST3";
 #else
-    const std::filesystem::path drive = "/media/symbolengine-test-drive-not-there/VST3";
+    const std::filesystem::path drive = "/mnt/symbolengine-test-drive-not-there/VST3";
 #endif
     rig.list.record({drive / "Elsewhere.vst3", "VST3", true, {1, 1, "1", 0}, {}, PluginFile::Outcome::found});
     PluginScanner::walk({{&rig.vst3, {drive, true}}}, rig.list);
@@ -470,12 +470,12 @@ TEST_CASE("A program killed mid-scan leaves a list that reads, behind by no more
     auto program = ChildProcess::start(SYMBOLENGINE_SCAN_WORKER, options, error);
     REQUIRE(program);
 
-    // Killed once several files are recorded and before the last.
+    // Killed once most files are recorded and before the last.
     const auto until = std::chrono::steady_clock::now() + 30s;
     for (;;)
     {
         const auto so = files::read(said, error);
-        if (std::count(so.begin(), so.end(), '\n') >= 6 || std::chrono::steady_clock::now() > until)
+        if (std::count(so.begin(), so.end(), '\n') >= 9 || std::chrono::steady_clock::now() > until)
             break;
         std::this_thread::sleep_for(20ms);
     }
@@ -489,7 +489,7 @@ TEST_CASE("A program killed mid-scan leaves a list that reads, behind by no more
     for (const auto line : text::split(output, "\n"))
         if (const auto at = text::parseNumber(text::trim(line)))
             recorded.push_back(static_cast<long long>(*at));
-    REQUIRE(recorded.size() >= 6);
+    REQUIRE(recorded.size() >= 9);
     const PluginList saved{{listFile, "1.0", nullptr, nullptr, nullptr}};
     CHECK(saved.scanUnderway());
     const auto expected =

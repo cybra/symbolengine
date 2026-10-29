@@ -1,5 +1,7 @@
 #include "symbolengine/host/FakePluginFormat.h"
 
+#include "PluginFiles.h"
+
 #include <symbolengine/core/Paths.h>
 
 #include <algorithm>
@@ -553,9 +555,7 @@ std::optional<PluginFileFacts> FakePluginFormat::examine(const std::filesystem::
         error = {readError.message(), "read", 0};
         return std::nullopt;
     }
-    facts.stamp.modified =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::file_clock::to_sys(time).time_since_epoch())
-            .count();
+    facts.stamp.modified = pluginFiles::nanosecondsOf(time);
     error = {};
     return facts;
 }

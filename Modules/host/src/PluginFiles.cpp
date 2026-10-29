@@ -129,13 +129,21 @@ std::vector<std::string> architecturesOf(const std::filesystem::path& binary)
     return architectures;
 }
 
+std::int64_t nanosecondsOf(std::filesystem::file_time_type time)
+{
+    // MSVC's file clock converts only through clock_cast, which libc++ doesn't have; libc++ and libstdc++ have to_sys.
+#if defined(_MSC_VER)
+    const auto system = std::chrono::clock_cast<std::chrono::system_clock>(time);
+#else
+    const auto system = std::chrono::file_clock::to_sys(time);
+#endif
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(system.time_since_epoch()).count();
+}
+
 std::int64_t modifiedNanoseconds(const std::filesystem::path& file, std::error_code& error)
 {
     const auto time = std::filesystem::last_write_time(file, error);
-    if (error)
-        return 0;
-    const auto system = std::chrono::file_clock::to_sys(time);
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(system.time_since_epoch()).count();
+    return error ? 0 : nanosecondsOf(time);
 }
 
 std::string declaredVersion([[maybe_unused]] const std::filesystem::path& bundle,
