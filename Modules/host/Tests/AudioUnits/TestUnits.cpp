@@ -152,6 +152,8 @@ protected:
         return noErr;
     }
 
+    bool largestBlockSet() const { return largestSet; }
+
     void onMain(const char* call) const
     {
         if (pthread_main_np() == 0)
@@ -168,11 +170,29 @@ private:
 };
 
 // A unit that takes each change scheduled for a render at its frame, as Apple's SDK sets an immediate change's value
-// as it is scheduled, before the render: a gain from 0 to 2, parameter 0, which it applies to its input.
+// as it is scheduled, before the render: a gain from 0 to 2, parameter 0 unless it says otherwise, which it applies to
+// its input.
 class Scheduled : public Checked
 {
 public:
-    Scheduled(AudioComponentInstance instance, const char* unitName) : Checked(instance, unitName) {}
+    Scheduled(AudioComponentInstance instance, const char* unitName) : Checked(instance, unitName)
+    {
+        Globals()->UseIndexedParameters(1);
+        Globals()->SetParameter(0, 1.0f);
+    }
+
+    OSStatus GetParameterInfo(AudioUnitScope scope, AudioUnitParameterID id, AudioUnitParameterInfo& info) override
+    {
+        if (scope != kAudioUnitScope_Global || id != 0)
+            return kAudioUnitErr_InvalidParameter;
+        FillInParameterName(info, CFSTR("Gain"), false);
+        info.flags = kAudioUnitParameterFlag_IsReadable | kAudioUnitParameterFlag_IsWritable;
+        info.unit = kAudioUnitParameterUnit_LinearGain;
+        info.minValue = 0;
+        info.maxValue = 2;
+        info.defaultValue = 1;
+        return noErr;
+    }
 
     OSStatus ScheduleParameter(const AudioUnitParameterEvent* changes, UInt32 count) override
     {
@@ -561,24 +581,7 @@ protected:
 class FixedBlocks final : public Scheduled
 {
 public:
-    explicit FixedBlocks(AudioComponentInstance instance) : Scheduled(instance, "FixedBlocks")
-    {
-        Globals()->UseIndexedParameters(1);
-        Globals()->SetParameter(0, 1.0f);
-    }
-
-    OSStatus GetParameterInfo(AudioUnitScope scope, AudioUnitParameterID id, AudioUnitParameterInfo& info) override
-    {
-        if (scope != kAudioUnitScope_Global || id != 0)
-            return kAudioUnitErr_InvalidParameter;
-        FillInParameterName(info, CFSTR("Gain"), false);
-        info.flags = kAudioUnitParameterFlag_IsReadable | kAudioUnitParameterFlag_IsWritable;
-        info.unit = kAudioUnitParameterUnit_LinearGain;
-        info.minValue = 0;
-        info.maxValue = 2;
-        info.defaultValue = 1;
-        return noErr;
-    }
+    explicit FixedBlocks(AudioComponentInstance instance) : Scheduled(instance, "FixedBlocks") {}
 
 protected:
     OSStatus render(AudioUnitRenderActionFlags& flags, const AudioTimeStamp& time, UInt32 frames) override
@@ -784,6 +787,44 @@ private:
     }
 };
 
+// Takes a state only once initialized, ignoring one given before, as some units do.
+class Lazy final : public Scheduled
+{
+public:
+    explicit Lazy(AudioComponentInstance instance) : Scheduled(instance, "Lazy") {}
+
+    OSStatus RestoreState(CFPropertyListRef info) override
+    {
+        return IsInitialized() ? Scheduled::RestoreState(info) : noErr;
+    }
+};
+
+// Takes a state only once the host has set its largest block and before it is initialized, ignoring it otherwise.
+class Picky final : public Scheduled
+{
+public:
+    explicit Picky(AudioComponentInstance instance) : Scheduled(instance, "Picky") {}
+
+    OSStatus RestoreState(CFPropertyListRef info) override
+    {
+        return largestBlockSet() && !IsInitialized() ? Scheduled::RestoreState(info) : noErr;
+    }
+};
+
+// Its gain goes back to 1 whenever it takes a state, as a unit whose state leaves a parameter out.
+class Forget final : public Scheduled
+{
+public:
+    explicit Forget(AudioComponentInstance instance) : Scheduled(instance, "Forget") {}
+
+    OSStatus RestoreState(CFPropertyListRef info) override
+    {
+        const auto result = Scheduled::RestoreState(info);
+        Globals()->SetParameter(0, 1.0f);
+        return result;
+    }
+};
+
 }
 
 AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Pass)
@@ -800,3 +841,6 @@ AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Rate)
 AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, FixedBlocks)
 AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Late)
 AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Gain)
+AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Lazy)
+AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Picky)
+AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Forget)

@@ -216,6 +216,8 @@ public:
         if (initialized)
             AudioUnitUninitialize(unit);
         AudioComponentInstanceDispose(unit);
+        if (heldState != nullptr)
+            CFRelease(heldState);
     }
 
     PluginLayout arrange(PluginLayout wanted) override
@@ -273,6 +275,10 @@ public:
         AudioUnitSetProperty(unit, kAudioUnitProperty_OfflineRender, kAudioUnitScope_Global, 0, &offline,
                              sizeof offline);
 
+        // A state given while it wasn't initialized, given again now its formats and largest block are set.
+        if (heldState != nullptr)
+            give(heldState, heldAsDocument);
+
         if (const auto status = AudioUnitInitialize(unit); status != noErr)
         {
             error = {reason("It couldn't be initialized", status), "activate", status};
@@ -287,6 +293,20 @@ public:
             initialized = false;
             error = {"It changed its buses as it was initialized.", "activate", 0};
             return false;
+        }
+
+        // And once more if it didn't take, read back to see, as some units take a state only once initialized.
+        if (heldState != nullptr)
+        {
+            OSStatus status = noErr;
+            const auto now = stateOf(heldAsDocument, status);
+            if (now == nullptr || !CFEqual(now, ownPart(heldState)))
+                give(heldState, heldAsDocument);
+            if (now != nullptr)
+                CFRelease(now);
+            CFRelease(heldState);
+            heldState = nullptr;
+            valuesChanged();
         }
 
         outputs.assign(static_cast<std::size_t>(layout.outputs), std::vector<float>(maximumFrames));
@@ -495,26 +515,19 @@ public:
     }
 
     // Its state as a binary property list: for a document, its document form where it has one, and otherwise its class
-    // info.
+    // info; for a copy made to render through, with every value it can be set to, set again after it, as a unit's
+    // state may leave one out.
     std::optional<std::string> state(PluginStateUse use, PluginError& error) override
     {
-        CFPropertyListRef info = nullptr;
-        UInt32 size = sizeof info;
-        OSStatus status = kAudioUnitErr_InvalidProperty;
-        if (use == PluginStateUse::document)
-            status = AudioUnitGetProperty(unit, kAudioUnitProperty_ClassInfoFromDocument, kAudioUnitScope_Global, 0,
-                                          &info, &size);
-        if (status != noErr || info == nullptr)
-        {
-            info = nullptr;
-            size = sizeof info;
-            status = AudioUnitGetProperty(unit, kAudioUnitProperty_ClassInfo, kAudioUnitScope_Global, 0, &info, &size);
-        }
-        if (status != noErr || info == nullptr)
+        OSStatus status = noErr;
+        auto info = stateOf(use == PluginStateUse::document, status);
+        if (info == nullptr)
         {
             error = {reason("It gave no state", status), "state", status};
             return std::nullopt;
         }
+        if (use == PluginStateUse::copy)
+            info = withValues(info);
         const auto data = CFPropertyListCreateData(nullptr, info, kCFPropertyListBinaryFormat_v1_0, 0, nullptr);
         CFRelease(info);
         if (data == nullptr)
@@ -529,36 +542,38 @@ public:
     }
 
     // A document's state given as one, which a unit may take differently, keeping settings of its own; a unit that
-    // doesn't tell them apart takes it as any other. Its listeners, its own window's among them, are told every value
-    // changed, and the host reads them again.
+    // doesn't tell them apart takes it as any other. Given while it isn't initialized, the state is kept to give again
+    // once it is, as some units take one only then.
     bool setState(std::string_view state, PluginStateUse use, PluginError& error) override
     {
         const auto data =
             CFDataCreate(nullptr, reinterpret_cast<const UInt8*>(state.data()), static_cast<CFIndex>(state.size()));
-        const auto info = CFPropertyListCreateWithData(nullptr, data, kCFPropertyListImmutable, nullptr, nullptr);
+        const auto given = CFPropertyListCreateWithData(nullptr, data, kCFPropertyListImmutable, nullptr, nullptr);
         CFRelease(data);
-        if (info == nullptr)
+        if (given == nullptr)
         {
             error = {"It isn't an Audio Unit's state.", "setState", 0};
             return false;
         }
 
-        OSStatus status = kAudioUnitErr_InvalidProperty;
-        if (use == PluginStateUse::document)
-            status = AudioUnitSetProperty(unit, kAudioUnitProperty_ClassInfoFromDocument, kAudioUnitScope_Global, 0,
-                                          &info, sizeof info);
-        if (status != noErr)
-            status =
-                AudioUnitSetProperty(unit, kAudioUnitProperty_ClassInfo, kAudioUnitScope_Global, 0, &info, sizeof info);
-        CFRelease(info);
-        if (status != noErr)
+        const bool asDocument = use == PluginStateUse::document;
+        if (const auto status = give(given, asDocument); status != noErr)
         {
+            CFRelease(given);
             error = {reason("It didn't take the state", status), "setState", status};
             return false;
         }
-        AudioUnitParameter every{unit, kAUParameterListener_AnyParameter, kAudioUnitScope_Global, 0};
-        AUParameterListenerNotify(nullptr, nullptr, &every);
-        client.notice(PluginNotice::values);
+        if (heldState != nullptr)
+            CFRelease(heldState);
+        heldState = nullptr;
+        if (initialized)
+            CFRelease(given);
+        else
+        {
+            heldState = given;
+            heldAsDocument = asDocument;
+        }
+        valuesChanged();
         return true;
     }
 
@@ -581,6 +596,10 @@ private:
     AUEventListenerRef listener = nullptr;
     std::vector<AudioUnitParameterID> listened;
     bool initialized = false;
+
+    // A state given while it wasn't initialized, to give again once it is, and whether as a document's.
+    CFPropertyListRef heldState = nullptr;
+    bool heldAsDocument = false;
     const char* gone = nullptr;
     int failures = 0;
     bool fixedBlocks = false;
@@ -806,6 +825,107 @@ private:
             std::lower_bound(now->begin(), now->end(), id,
                              [](const ParameterRange& range, AudioUnitParameterID one) { return range.id < one; });
         return found != now->end() && found->id == id ? &*found : nullptr;
+    }
+
+    // Its state as the unit gives it, its document form where asked for and it has one; owned by the caller, or null.
+    CFPropertyListRef stateOf(bool document, OSStatus& status) const
+    {
+        CFPropertyListRef info = nullptr;
+        UInt32 size = sizeof info;
+        status = kAudioUnitErr_InvalidProperty;
+        if (document)
+            status = AudioUnitGetProperty(unit, kAudioUnitProperty_ClassInfoFromDocument, kAudioUnitScope_Global, 0,
+                                          &info, &size);
+        if (status != noErr || info == nullptr)
+        {
+            info = nullptr;
+            size = sizeof info;
+            status = AudioUnitGetProperty(unit, kAudioUnitProperty_ClassInfo, kAudioUnitScope_Global, 0, &info, &size);
+        }
+        return status == noErr ? info : nullptr;
+    }
+
+    // The keys of a copy's state: the unit's own, and each value it can be set to by its ID.
+    static CFStringRef ownKey() { return CFSTR("SymbolEngine state"); }
+    static CFStringRef valuesKey() { return CFSTR("SymbolEngine values"); }
+
+    // The unit's state with every value it can be set to, taking the state given.
+    CFPropertyListRef withValues(CFPropertyListRef info) const
+    {
+        const auto values =
+            CFDictionaryCreateMutable(nullptr, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        if (const auto* const now = ranges.load())
+            for (const auto& range : *now)
+            {
+                AudioUnitParameterValue value = 0;
+                if (!range.writable ||
+                    AudioUnitGetParameter(unit, range.id, kAudioUnitScope_Global, 0, &value) != noErr)
+                    continue;
+                const auto key = CFStringCreateWithFormat(nullptr, nullptr, CFSTR("%u"), range.id);
+                const auto number = CFNumberCreate(nullptr, kCFNumberFloat32Type, &value);
+                CFDictionarySetValue(values, key, number);
+                CFRelease(key);
+                CFRelease(number);
+            }
+        const auto both =
+            CFDictionaryCreateMutable(nullptr, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        CFDictionarySetValue(both, ownKey(), info);
+        CFDictionarySetValue(both, valuesKey(), values);
+        CFRelease(values);
+        CFRelease(info);
+        return both;
+    }
+
+    // The unit's own part of a state given, and a copy's values; neither owned.
+    static CFPropertyListRef ownPart(CFPropertyListRef given, CFDictionaryRef* values = nullptr)
+    {
+        if (CFGetTypeID(given) != CFDictionaryGetTypeID())
+            return given;
+        const auto both = static_cast<CFDictionaryRef>(given);
+        const auto own = CFDictionaryGetValue(both, ownKey());
+        if (own == nullptr)
+            return given;
+        const auto found = CFDictionaryGetValue(both, valuesKey());
+        if (values != nullptr && found != nullptr && CFGetTypeID(found) == CFDictionaryGetTypeID())
+            *values = static_cast<CFDictionaryRef>(found);
+        return own;
+    }
+
+    // Gives a state, a document's as one first, then a copy's values.
+    OSStatus give(CFPropertyListRef given, bool asDocument)
+    {
+        CFDictionaryRef values = nullptr;
+        const auto own = ownPart(given, &values);
+        OSStatus status = kAudioUnitErr_InvalidProperty;
+        if (asDocument)
+            status = AudioUnitSetProperty(unit, kAudioUnitProperty_ClassInfoFromDocument, kAudioUnitScope_Global, 0,
+                                          &own, sizeof own);
+        if (status != noErr)
+            status =
+                AudioUnitSetProperty(unit, kAudioUnitProperty_ClassInfo, kAudioUnitScope_Global, 0, &own, sizeof own);
+        if (status == noErr && values != nullptr)
+            CFDictionaryApplyFunction(
+                values,
+                [](const void* key, const void* value, void* context) {
+                    float number = 0;
+                    if (CFGetTypeID(value) != CFNumberGetTypeID() ||
+                        !CFNumberGetValue(static_cast<CFNumberRef>(value), kCFNumberFloat32Type, &number))
+                        return;
+                    const auto id = static_cast<AudioUnitParameterID>(std::strtoul(textOf(key).c_str(), nullptr, 10));
+                    AudioUnitSetParameter(static_cast<AudioUnitPlugin*>(context)->unit, id, kAudioUnitScope_Global, 0,
+                                          number, 0);
+                },
+                this);
+        return status;
+    }
+
+    // Its listeners, its own window's among them, told every value changed, and the host told to read them again; the
+    // host's own listener left out, as the host reads them itself.
+    void valuesChanged()
+    {
+        AudioUnitParameter every{unit, kAUParameterListener_AnyParameter, kAudioUnitScope_Global, 0};
+        AUParameterListenerNotify(listener, nullptr, &every);
+        client.notice(PluginNotice::values);
     }
 
     void set(AudioUnitParameterID id, double value)

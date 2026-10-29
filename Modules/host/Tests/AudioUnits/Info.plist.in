@@ -138,6 +138,33 @@
             <key>version</key><integer>66051</integer>
             <key>factoryFunction</key><string>GainFactory</string>
         </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>Lazy</string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: Lazy</string>
+            <key>description</key><string>SymbolEngine's test unit Lazy</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>LazyFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>Forg</string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: Forget</string>
+            <key>description</key><string>SymbolEngine's test unit Forget</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>ForgetFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>Pick</string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: Picky</string>
+            <key>description</key><string>SymbolEngine's test unit Picky</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>PickyFactory</string>
+        </dict>
     </array>
 </dict>
 </plist>

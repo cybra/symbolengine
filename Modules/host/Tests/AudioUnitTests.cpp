@@ -172,7 +172,7 @@ TEST_CASE("An Audio Unit's component and units are read from its bundle without 
     PluginError error;
     const auto plugins = rig.format.pluginsIn(units, error);
     CHECK_FALSE(error);
-    REQUIRE(plugins.size() == 14);
+    REQUIRE(plugins.size() == 17);
     CHECK(plugins[0].identity == PluginIdentity::audioUnit(code("aufx"), code("Pass"), code("SyTs")));
     CHECK(plugins[0].location == units);
     CHECK(plugins[0].maker == "SymbolEngine Tests");
@@ -594,5 +594,67 @@ TEST_CASE("An Audio Unit's document state is its document form where it has one,
     CHECK(other->loadState(*preset, PluginStateUse::document));
     CHECK(other->loadState(*preset, PluginStateUse::preset));
     CHECK(rig.main.turnUntil([&] { return other->parameter(0) == 0.75; }, 2s));
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("A state given to an Audio Unit before it is initialized is given again once its largest block is set, and "
+          "once more after it is initialized if it didn't take")
+{
+    // Lazy takes a state only once initialized; Picky only once its largest block is set and before it is initialized.
+    for (const auto* const subtype : {"Lazy", "Pick"})
+    {
+        CAPTURE(subtype);
+        Rig rig;
+        char code[5] = {};
+        std::copy_n(subtype, 4, code);
+        std::optional<std::string> state;
+        {
+            auto source = rig.made(code);
+            REQUIRE(source->setParameter(0, 0.75));
+            state = source->saveState(PluginStateUse::document);
+            REQUIRE(state);
+        }
+
+        auto plugin = rig.host.make(rig.format, rig.describe(code));
+        REQUIRE(rig.main.turnUntil([&] { return plugin->state() != Plugin::State::making; }));
+        REQUIRE(plugin->loadState(*state, PluginStateUse::document));
+        rig.main.turnUntil([] { return false; }, 100ms);
+        REQUIRE(plugin->prepare({48000.0, 512, false}));
+        CHECK(rig.main.turnUntil([&] { return plugin->parameter(0) == 0.75; }, 2s));
+
+        // Prepared and waiting to play, as a program that has just opened a project, its value kept.
+        rig.main.turnUntil([] { return false; }, 200ms);
+        CHECK(plugin->parameter(0) == 0.75);
+        const auto out = play(*plugin, 64, 1);
+        CHECK(out[0][10] == Catch::Approx(11.0f * 1.5f));
+        CHECK(misuses().empty());
+    }
+}
+
+TEST_CASE("An Audio Unit's state for a copy carries every value, set again after the state")
+{
+    Rig rig;
+    auto source = rig.made("Forg");
+    REQUIRE(source->setParameter(0, 0.75));
+    const auto state = source->saveState(PluginStateUse::copy);
+    REQUIRE(state);
+
+    auto copy = rig.made("Forg");
+    REQUIRE(copy->loadState(*state, PluginStateUse::copy));
+    CHECK(rig.main.turnUntil([&] { return copy->parameter(0) == 0.75; }, 2s));
+    const auto out = play(*copy, 64, 1);
+    CHECK(out[0][10] == Catch::Approx(11.0f * 1.5f));
+
+    // A preset's state is the unit's own, which it may take with a value left out.
+    const auto preset = source->saveState(PluginStateUse::preset);
+    REQUIRE(preset);
+    REQUIRE(copy->loadState(*preset, PluginStateUse::preset));
+    CHECK(rig.main.turnUntil([&] { return copy->parameter(0) == 0.5; }, 2s));
+
+    // Only the values a unit can be set to: never a meter's.
+    auto gain = rig.made("Gain");
+    const auto metered = gain->saveState(PluginStateUse::copy);
+    REQUIRE(metered);
+    REQUIRE(rig.made("Gain")->loadState(*metered, PluginStateUse::copy));
     CHECK(misuses().empty());
 }
