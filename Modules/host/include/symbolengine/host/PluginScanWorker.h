@@ -49,8 +49,10 @@ struct PluginScanRequest
     The worker loads plugins on its main thread with its run loop turning, as plugins need, on a Mac as an accessory
     that never shows in the Dock. Its effects are each made, offered stereo, set up, played blocks of noise and silence
     and a short block and taken down, so what passes is what the program will play; other kinds are answered as they
-    declare themselves, never made. It says each step as it begins it, answers each plugin as it finishes and the file
-    once it is done, and ends the moment its link to the program is lost, from the link's own thread, running nothing
+    declare themselves, never made. It says each step as it begins it, writing it too to a note its crash handler adds
+    the signal and a backtrace to, which comes with a crash's failure; answers each plugin as it finishes and the file
+    once it is done; comes to the front when a window of its own appears, as a plugin's license question does; and
+    ends the moment its link to the program is lost, from the link's own thread, running nothing
     more of anything it loaded; the link beats every second both ways from threads of its own.
 
     In the program, start() starts a worker and scan() asks it for one file at a time. What it says is checked before
@@ -107,6 +109,11 @@ public:
     std::function<void(const PluginDescription& plugin)> onPlugin;
     std::function<void(const PluginSetAside& plugin)> onSetAside;
     std::function<void(PluginFile::Outcome outcome, const std::optional<PluginFailure>& why)> onDone;
+
+    /** Told when a window of the worker's own appears, as a plugin's license question does, and when it is gone. The
+        worker puts its windows above every other program's, the program hands it the keyboard if the program is in
+        front, and the limit is paused while it shows, as the user may be answering. */
+    std::function<void(bool asking)> onAsking;
 
     /** Told once, on the program's main thread, when the worker crashed, made no progress within the limit or ended
         before answering the request under way: it is gone, and the failure says how, at the step it was on, with the

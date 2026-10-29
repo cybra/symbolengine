@@ -73,6 +73,52 @@ bool onMainThread()
     return GetCurrentThreadId() == mainThread;
 }
 
+namespace
+{
+
+// The worker's first visible window with a size, if it has one.
+HWND visibleWindow()
+{
+    HWND found = nullptr;
+    EnumWindows(
+        [](HWND window, LPARAM into) -> BOOL {
+            DWORD owner = 0;
+            GetWindowThreadProcessId(window, &owner);
+            RECT area{};
+            if (owner != GetCurrentProcessId() || !IsWindowVisible(window) || !GetWindowRect(window, &area) ||
+                area.right <= area.left || area.bottom <= area.top)
+                return TRUE;
+            *reinterpret_cast<HWND*>(into) = window;
+            return FALSE;
+        },
+        reinterpret_cast<LPARAM>(&found));
+    return found;
+}
+
+}
+
+bool showsWindow()
+{
+    return visibleWindow() != nullptr;
+}
+
+void comeForward()
+{
+    // Asks to be in front, which only the program in front can grant, and puts the window above every other
+    // program's meanwhile, which needs no one's leave.
+    if (const auto window = visibleWindow())
+    {
+        SetForegroundWindow(window);
+        SetWindowPos(window, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        SetWindowPos(window, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+}
+
+void letForward(std::int64_t processId)
+{
+    AllowSetForegroundWindow(static_cast<DWORD>(processId));
+}
+
 void run()
 {
     for (;;)

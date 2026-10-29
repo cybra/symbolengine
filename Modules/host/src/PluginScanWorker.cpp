@@ -1,14 +1,17 @@
 #include "symbolengine/host/PluginScanWorker.h"
 
 #include "PluginJson.h"
+#include "ScanWorkerCrash.h"
 #include "ScanWorkerLoop.h"
 #include "symbolengine/host/Plugin.h"
 
+#include <symbolengine/core/Files.h>
 #include <symbolengine/core/Json.h>
 #include <symbolengine/core/Paths.h>
 #include <symbolengine/core/System.h>
 
 #include <algorithm>
+#include <atomic>
 #include <condition_variable>
 #include <cstdio>
 #include <deque>
@@ -26,6 +29,7 @@
     #include <windows.h>
 #else
     #include <pthread.h>
+    #include <unistd.h>
 #endif
 
 namespace symbolengine
@@ -37,8 +41,10 @@ namespace
 using namespace pluginJson;
 using Steady = std::chrono::steady_clock;
 
-// The argument a worker is started with.
+// The argument a worker is started with, and the environment variable naming its crash note, which carries any path
+// whole on every system.
 constexpr std::string_view workerArgument = "--symbolengine-scan-worker";
+constexpr std::string_view noteVariable = "SYMBOLENGINE_SCAN_NOTE";
 
 // Runs a function on a thread of its own with a stack of 8 MB, as plugins assume a main thread's, and waits for it.
 void onLargeStack(const std::function<void()>& function)
@@ -117,6 +123,35 @@ public:
         scanWorkerLoop::post([this] { startNext(); });
     }
 
+    // Watches for a window of the worker's own, as a plugin's question, from a thread of its own: says when one shows
+    // and when it is gone, so the program waits meanwhile, and comes to the front with it. What it said is kept by
+    // request, so a window still showing, or showing again, as the next request begins is said for that one too.
+    void watchWindows()
+    {
+        std::int64_t askedFor = -1;
+        for (;;)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            const bool shows = scanWorkerLoop::showsWindow();
+            std::string message;
+            {
+                const std::lock_guard held(lock);
+                if (!scanning)
+                    continue;
+                if (shows && askedFor != number)
+                    askedFor = number;
+                else if (!shows && askedFor == number)
+                    askedFor = -1;
+                else
+                    continue;
+                message = json::write(Object{{"request", number}, {"asking", shows}});
+            }
+            if (shows)
+                scanWorkerLoop::comeForward();
+            link.send(message);
+        }
+    }
+
 private:
     struct Request
     {
@@ -149,6 +184,7 @@ private:
     // Says the step it begins, with the plugin in hand if the step is one plugin's.
     void say(std::string now, const PluginDescription* inHand = nullptr)
     {
+        scanWorkerCrash::note(paths::toUtf8(current.file) + ": " + now);
         std::string message;
         {
             const std::lock_guard held(lock);
@@ -344,7 +380,18 @@ struct Underway
     Steady::time_point progressed{};
     std::set<PluginIdentity> answered{};
     std::optional<PluginDescription> inHand{};
+    bool asking = false;
 };
+
+// This program's process ID, which tells its workers' notes from another program's.
+std::int64_t processNumber()
+{
+#if defined(_WIN32)
+    return static_cast<std::int64_t>(GetCurrentProcessId());
+#else
+    return static_cast<std::int64_t>(getpid());
+#endif
+}
 
 PluginFailure failureFrom(const ProcessEnding& ending, const std::string& step)
 {
@@ -379,6 +426,7 @@ struct PluginScanWorker::Shared : std::enable_shared_from_this<PluginScanWorker:
     Options options;
     std::unique_ptr<ChildProcess> child;
     std::int64_t id = 0;
+    std::filesystem::path note;
 
     // The program's object, while it wants to be told anything: the main thread's alone.
     PluginScanWorker* owner = nullptr;
@@ -400,6 +448,18 @@ struct PluginScanWorker::Shared : std::enable_shared_from_this<PluginScanWorker:
         options.post([weak = weak_from_this(), what = std::move(what)] {
             if (const auto self = weak.lock(); self != nullptr && self->owner != nullptr)
                 what(*self->owner);
+        });
+    }
+
+    // The request under way is ending: if the worker was asking something, it no longer is, whether or not it said so.
+    void endAsking()
+    {
+        if (!underway || !underway->asking)
+            return;
+        underway->asking = false;
+        tell([](PluginScanWorker& worker) {
+            if (worker.onAsking)
+                worker.onAsking(false);
         });
     }
 
@@ -461,12 +521,24 @@ struct PluginScanWorker::Shared : std::enable_shared_from_this<PluginScanWorker:
                         worker.onSetAside(set);
                 });
             }
+            else if (const auto* asking = object.find("asking"))
+            {
+                now.asking = asking->asBool();
+                now.progressed = Steady::now();
+                tell([asking = now.asking, id = this->id](PluginScanWorker& worker) {
+                    if (asking)
+                        scanWorkerLoop::letForward(id);
+                    if (worker.onAsking)
+                        worker.onAsking(asking);
+                });
+            }
             else if (const auto* done = object.find("done"))
             {
                 const auto outcome = valueOf(*done, outcomes);
                 std::optional<PluginFailure> why;
                 if (const auto* failure = object.find("failure"))
                     why = readFailure(*failure);
+                endAsking();
                 underway.reset();
                 tell([outcome, why](PluginScanWorker& worker) {
                     if (worker.onDone)
@@ -491,11 +563,12 @@ struct PluginScanWorker::Shared : std::enable_shared_from_this<PluginScanWorker:
             if (stopping || ended)
                 continue;
 
-            if (underway && Steady::now() - underway->progressed > options.limit)
+            if (underway && !underway->asking && Steady::now() - underway->progressed > options.limit)
             {
                 PluginFailure failure{PluginFailure::Kind::timedOut, underway->step, options.limit.count(),
                                       "It made no progress for " + std::to_string(options.limit.count()) + " ms."};
                 auto inHand = underway->inHand;
+                endAsking();
                 underway.reset();
                 ended = true;
                 held.unlock();
@@ -521,8 +594,12 @@ struct PluginScanWorker::Shared : std::enable_shared_from_this<PluginScanWorker:
                 ended = true;
                 if (underway)
                 {
-                    const auto failure = failureFrom(*ending, underway->step);
+                    auto failure = failureFrom(*ending, underway->step);
+                    std::error_code missing;
+                    if (const auto noted = files::read(note, missing); !missing && !noted.empty())
+                        failure.detail += "\n" + noted;
                     auto inHand = underway->inHand;
+                    endAsking();
                     underway.reset();
                     tell([failure, inHand](PluginScanWorker& worker) {
                         if (worker.onFailed)
@@ -585,20 +662,30 @@ void PluginScanWorker::work(std::vector<PluginFormat*> formats)
         system::endNow(70);
     }
 
+    if (const auto note = system::environmentVariable(noteVariable))
+        scanWorkerCrash::begin(paths::fromUtf8(*note));
+
     // Lives for as long as the process: the process ends without taking anything down.
     auto* worker = new Worker(std::move(formats), *link);
     link->onMessage([worker](std::string message) { worker->received(message); });
     link->onLost([] { system::endNow(0); });
     link->start();
     link.release();
+    std::thread([worker] { worker->watchWindows(); }).detach();
     scanWorkerLoop::run();
 }
 
 std::unique_ptr<PluginScanWorker> PluginScanWorker::start(Options options, std::error_code& error)
 {
     ChildProcess::Options process;
+    // A note of its own for its crash handler, in the system's folder for the moment, never the program's.
+    static std::atomic<int> notes{0};
+    std::error_code temporary;
+    const auto note = std::filesystem::temp_directory_path(temporary) /
+                      ("symbolengine-scan-" + std::to_string(processNumber()) + "-" + std::to_string(++notes) + ".txt");
     process.arguments = {std::string(workerArgument)};
     process.environment = options.environment;
+    process.environment.emplace_back(std::string(noteVariable), paths::toUtf8(note));
     process.outputFile = options.outputFile;
     process.link = true;
 
@@ -608,6 +695,8 @@ std::unique_ptr<PluginScanWorker> PluginScanWorker::start(Options options, std::
         return nullptr;
     shared->options = std::move(options);
     shared->id = shared->child->id();
+    shared->note = note;
+    scanWorkerLoop::letForward(shared->id);
 
     auto* link = shared->child->link();
     link->onMessage([weak = std::weak_ptr(shared)](std::string message) {
@@ -705,6 +794,8 @@ ProcessEnding PluginScanWorker::close(std::chrono::milliseconds limit)
         shared->child->kill();
         ending = shared->child->ending();
     }
+    std::error_code ignored;
+    std::filesystem::remove(shared->note, ignored);
     return ending.value_or(ProcessEnding{});
 }
 

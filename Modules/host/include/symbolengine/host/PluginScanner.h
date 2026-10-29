@@ -98,11 +98,19 @@ public:
     std::function<void(const std::filesystem::path& file, const std::string& step)> onProgress;
     std::function<void(const PluginScanEnd& end)> onFinished;
 
+    /** Told when a plugin being scanned shows a window, as a license question does, and when it is gone: the program
+        says the plugin is asking something, with Skip, while the limit waits. */
+    std::function<void(const std::filesystem::path& file, bool asking)> onAsking;
+
     /** Scans the files the list says need it, in the order given; false while a scan is under way. */
     bool scan(std::vector<PluginScanFile> files);
 
     /** Stops the scan under way: its worker ended and the file in hand recorded as cut short. */
     void stop();
+
+    /** Skips the file in hand, as for a plugin asking something the user won't answer now: its worker ended, the file
+        recorded as cut short, to be scanned again next time and never set aside, and the scan carried on. */
+    void skip();
 
     bool isScanning() const;
 

@@ -121,6 +121,40 @@ void crash()
     std::abort();
 }
 
+#if defined(__APPLE__)
+// In Misbehaving_mac.mm, as AppKit is Objective-C.
+extern "C" void askSomething(int milliseconds, bool modal);
+#elif defined(_WIN32)
+void askSomething(int milliseconds, bool)
+{
+    WNDCLASSW kind{};
+    kind.lpfnWndProc = DefWindowProcW;
+    kind.hInstance = GetModuleHandleW(nullptr);
+    kind.lpszClassName = L"SymbolEngineTestQuestion";
+    RegisterClassW(&kind);
+    // A real window, visible to the system, placed far off every display so it never covers anything.
+    const HWND window = CreateWindowExW(0, kind.lpszClassName, L"A question", WS_POPUP | WS_VISIBLE, -30000, -30000,
+                                        320, 160, nullptr, nullptr, kind.hInstance, nullptr);
+    const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(milliseconds);
+    while (std::chrono::steady_clock::now() < until)
+    {
+        MSG message;
+        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE))
+        {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    DestroyWindow(window);
+}
+#else
+void askSomething(int milliseconds, bool)
+{
+    std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
+}
+#endif
+
 volatile int deeper = 1;
 
 int overflow(int depth)
@@ -167,7 +201,8 @@ OnLoad onLoad;
 // What the plugin of this number does as it is made.
 void onMake(int number)
 {
-    if (const int ms = numberBefore(" ms"); ms > 0)
+    // Taking its time, as long as its name says, unless that is how long it asks something for.
+    if (const int ms = numberBefore(" ms"); ms > 0 && !says("asks "))
         std::this_thread::sleep_for(std::chrono::milliseconds(ms));
     if (numberBefore(" crashes") == number)
         crash();
@@ -192,6 +227,15 @@ void onMake(int number)
         std::exit(0);
     if (says("hang when made"))
         hang();
+
+    // A crash on a thread of its own, where no call the host made is under way to catch it.
+    if (says("crash on a thread when made"))
+        std::thread(crash).join();
+
+    // A window of its own shown for as long as its name says, as a license question is, and then closed: a normal
+    // window, or a modal one, which a Mac keeps above normal windows.
+    if (says("asks when made") || says("asks modally when made"))
+        askSomething(numberBefore(" ms"), says("asks modally"));
 
     // Memory taken and kept, each page written so the system counts it.
     if (const int megabytes = numberAfter("hungry "); megabytes > 0)

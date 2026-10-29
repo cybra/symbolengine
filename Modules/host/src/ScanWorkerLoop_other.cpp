@@ -35,6 +35,15 @@ bool onMainThread()
     return std::this_thread::get_id() == mainThread;
 }
 
+bool showsWindow()
+{
+    return false;
+}
+
+void comeForward() {}
+
+void letForward(std::int64_t) {}
+
 void run()
 {
     for (;;)

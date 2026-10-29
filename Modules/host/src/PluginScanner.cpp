@@ -141,6 +141,7 @@ struct PluginScanner::Inner : std::enable_shared_from_this<PluginScanner::Inner>
     // scanned no file before, and whether it was tried again in a fresh worker after failing in a used one.
     PluginFile record;
     bool inHand = false;
+    bool asking = false;
     bool fresh = false;
     bool retried = false;
 
@@ -169,11 +170,13 @@ struct PluginScanner::Inner : std::enable_shared_from_this<PluginScanner::Inner>
         });
     }
 
-    // Lets a worker go after the current call has returned, as it may be one of the worker's own callbacks.
+    // Lets a worker go after the current call has returned, as it may be one of the worker's own callbacks, and hears
+    // nothing more from it.
     void retire()
     {
         if (worker == nullptr)
             return;
+        ++workerNumber;
         std::shared_ptr<PluginScanWorker> going(std::move(worker));
         post([going](Inner& self) {
             if (going->close().killed)
@@ -266,6 +269,7 @@ struct PluginScanner::Inner : std::enable_shared_from_this<PluginScanner::Inner>
         worker->onDone = mine([](Inner& self, PluginFile::Outcome outcome, const std::optional<PluginFailure>& why) {
             self.done(outcome, why);
         });
+        worker->onAsking = mine([](Inner& self, bool now) { self.ask(now); });
         worker->onFailed = mine([](Inner& self, const PluginFailure& failure,
                                    const std::optional<PluginDescription>& plugin) { self.failed(failure, plugin); });
         return true;
@@ -335,24 +339,54 @@ struct PluginScanner::Inner : std::enable_shared_from_this<PluginScanner::Inner>
         });
     }
 
-    // Ends the scan with what was found of the file in hand let go and the file recorded as cut short, so it is
-    // scanned again; a scan the program quits during is saved as still under way.
+    // Tells the program whether the plugin in hand is asking something.
+    void ask(bool now)
+    {
+        if (std::exchange(asking, now) == now)
+            return;
+        post([now, file = record.path](Inner& self) {
+            if (self.owner != nullptr && self.owner->onAsking)
+                self.owner->onAsking(file, now);
+        });
+    }
+
+    // Records the file in hand as cut short, what was found of it let go, so it is scanned again.
+    void leaveInHand()
+    {
+        if (!inHand)
+            return;
+        auto still = list.file(record.path).value_or(PluginFile{});
+        if (still.path.empty())
+        {
+            still = record;
+            still.plugins.clear();
+            still.setAside.clear();
+        }
+        still.complete = false;
+        list.record(still);
+        inHand = false;
+    }
+
+    // Passes over the file in hand, its worker let go, and carries on with the next.
+    void skip()
+    {
+        if (!scanning || !inHand)
+            return;
+        ask(false);
+        retire();
+        leaveInHand();
+        ++index;
+        post([](Inner& self) { self.next(); });
+    }
+
+    // Ends the scan with the file in hand left to be scanned again; a scan the program quits during is saved as still
+    // under way.
     void stop(bool tell)
     {
         if (!scanning)
             return;
-        if (inHand)
-        {
-            auto still = list.file(record.path).value_or(PluginFile{});
-            if (still.path.empty())
-            {
-                still = record;
-                still.plugins.clear();
-                still.setAside.clear();
-            }
-            still.complete = false;
-            list.record(still);
-        }
+        ask(false);
+        leaveInHand();
         if (tell)
             return finish({true, {}});
         scanning = false;
@@ -492,6 +526,11 @@ bool PluginScanner::scan(std::vector<PluginScanFile> files)
     inner->save();
     inner->post([](Inner& self) { self.next(); });
     return true;
+}
+
+void PluginScanner::skip()
+{
+    inner->skip();
 }
 
 void PluginScanner::stop()

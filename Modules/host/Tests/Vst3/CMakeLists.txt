@@ -81,7 +81,8 @@ target_compile_definitions(symbolengine_test_vst3_sdk PRIVATE $<IF:$<CONFIG:Debu
     PROJECT_INCLUDES_VSTEDITCONTROLLER=1 $<$<CXX_COMPILER_ID:MSVC>:_CRT_SECURE_NO_WARNINGS>)
 set_target_properties(symbolengine_test_vst3_sdk PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-add_library(symbolengine_misbehaving_vst3 MODULE Misbehaving.cpp $<TARGET_OBJECTS:symbolengine_test_vst3_sdk>)
+add_library(symbolengine_misbehaving_vst3 MODULE Misbehaving.cpp $<$<BOOL:${APPLE}>:Misbehaving_mac.mm>
+            $<TARGET_OBJECTS:symbolengine_test_vst3_sdk>)
 target_include_directories(symbolengine_misbehaving_vst3 SYSTEM PRIVATE ${sdk})
 target_compile_definitions(symbolengine_misbehaving_vst3 PRIVATE $<IF:$<CONFIG:Debug>,DEVELOPMENT=1,RELEASE=1>)
 symbolengine_set_warnings(symbolengine_misbehaving_vst3)
@@ -89,11 +90,13 @@ target_link_libraries(symbolengine_misbehaving_vst3 PRIVATE Threads::Threads ${C
 set(misbehaving_names "Good A" "Good B" "Good C" "Crash on load" "Abort on load" "Hang on load"
     "Hang on a thread on load" "Crash when made" "Abort when made" "Throw when made" "Overflow when made"
     "Fail fast when made" "Exit when made" "Hang when made" "Many 40 with 20 crashes 50 ms" "Damage" "Slow A 1500 ms"
-    "Slow B 1500 ms" "Slow C 1500 ms" "Hungry 300" "Detach deadlock")
+    "Slow B 1500 ms" "Slow C 1500 ms" "Hungry 300" "Detach deadlock" "Crash on a thread when made"
+    "Asks when made 3000 ms" "Asks when made 60000 ms" "Asks modally when made 3000 ms")
 list(JOIN misbehaving_names "|" misbehaving_joined)
 set(misbehaving_folder "${CMAKE_CURRENT_BINARY_DIR}/Misbehaving")
 if(APPLE)
-    target_link_libraries(symbolengine_misbehaving_vst3 PRIVATE "-framework CoreFoundation" "-framework Foundation")
+    target_link_libraries(symbolengine_misbehaving_vst3 PRIVATE "-framework AppKit" "-framework CoreFoundation"
+                                                                "-framework Foundation")
     set_target_properties(symbolengine_misbehaving_vst3 PROPERTIES
         BUNDLE TRUE
         BUNDLE_EXTENSION vst3

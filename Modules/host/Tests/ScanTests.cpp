@@ -31,6 +31,7 @@ struct Rig
     PluginList list{{scratch.path / "Plugins.json", "1.0", nullptr, nullptr, nullptr}};
     std::unique_ptr<PluginScanner> scanner;
     std::vector<std::pair<std::filesystem::path, std::string>> steps;
+    std::vector<std::pair<std::filesystem::path, bool>> asking;
     std::optional<PluginScanEnd> end;
 
     explicit Rig(std::chrono::milliseconds limit = 10s, int filesPerWorker = 50,
@@ -50,6 +51,7 @@ struct Rig
             steps.emplace_back(file, step);
         };
         scanner->onFinished = [this](const PluginScanEnd& how) { end = how; };
+        scanner->onAsking = [this](const std::filesystem::path& file, bool now) { asking.emplace_back(file, now); };
     }
 
     static PluginScanFile file(const std::string& name)
@@ -300,3 +302,114 @@ TEST_CASE("Files the list says need no scan are passed over")
     CHECK(rig.scanner->workersStarted() == started);
     CHECK(rig.end->problem.empty());
 }
+
+std::string frontmostExecutable();
+
+// Whether a scan worker of the test program is the application in front, where the system says.
+std::optional<bool> frontmostWorker()
+{
+#if defined(__APPLE__)
+    std::error_code error;
+    return std::filesystem::equivalent(frontmostExecutable(), SYMBOLENGINE_SCAN_WORKER, error);
+#else
+    return std::nullopt;
+#endif
+}
+
+// The file name a frame inside the test bundle's code is shown with in a backtrace.
+std::string bundleBinary([[maybe_unused]] const std::string& name)
+{
+#if defined(__APPLE__)
+    return "SymbolEngine Misbehaving";
+#else
+    return name;
+#endif
+}
+
+TEST_CASE("A worker's crash leaves a note of the file and step it was on, the signal and where in the code it came")
+{
+    Rig rig;
+    REQUIRE(rig.scan({"Crash on a thread when made"}));
+    INFO(rig.output());
+    const auto file = rig.recorded("Crash on a thread when made");
+    REQUIRE(file);
+    REQUIRE(file->setAside.size() == 1);
+    const auto& failure = file->setAside[0].failure;
+    INFO(failure.detail);
+    CHECK(failure.kind == PluginFailure::Kind::crashed);
+    CHECK(failure.detail.find("making plugin 1 of 1") != std::string::npos);
+    CHECK(failure.detail.find("Crash on a thread when made.vst3") != std::string::npos);
+#if defined(_WIN32)
+    CHECK(failure.detail.find("0xC0000005") != std::string::npos);
+#else
+    CHECK((failure.detail.find("SIGSEGV") != std::string::npos || failure.detail.find("SIGBUS") != std::string::npos));
+#endif
+    // A frame of the backtrace inside the plugin's own code.
+    const auto backtrace = failure.detail.substr(failure.detail.find('\n') + 1);
+    CHECK(backtrace.find(bundleBinary("Crash on a thread when made")) != std::string::npos);
+}
+
+#if defined(__APPLE__) || defined(_WIN32)
+TEST_CASE("A plugin that asks something as it is made is waited for past the limit, and then found")
+{
+    Rig rig(1000ms);
+    // Whether the worker's window was in front at any moment while it asked, as someone using the computer meanwhile
+    // can bring another window in front of it again: on a computer in use, a click at the wrong moment can still fail
+    // this, which continuous integration's computers, used by no one, never see.
+    std::optional<bool> front;
+    rig.scanner->onAsking = [&](const std::filesystem::path& file, bool now) {
+        rig.asking.emplace_back(file, now);
+        if (now && rig.asking.size() == 1)
+            rig.main.post()([&] {
+                rig.main.turnUntil(
+                    [&] {
+                        front = frontmostWorker();
+                        return front.value_or(true);
+                    },
+                    2800ms);
+            });
+    };
+    REQUIRE(rig.scan({"Asks when made 3000 ms", "Asks modally when made 3000 ms", "Good A"}));
+    #if defined(__APPLE__)
+    // The first question's window above every other application's, whichever is the application in front.
+    REQUIRE(front);
+    CHECK(*front);
+    #endif
+    INFO(rig.output());
+    std::string said;
+    for (const auto& [file, now] : rig.asking)
+        said += paths::toUtf8(file.filename()) + (now ? " asking; " : " done asking; ");
+    INFO(said);
+    CHECK(foundWhole(rig.recorded("Asks when made 3000 ms")));
+    CHECK(foundWhole(rig.recorded("Asks modally when made 3000 ms")));
+    CHECK(foundWhole(rig.recorded("Good A")));
+    REQUIRE(rig.asking.size() == 4);
+    CHECK(rig.asking[0].first == Rig::file("Asks when made 3000 ms").path);
+    CHECK(rig.asking[0].second);
+    CHECK_FALSE(rig.asking[1].second);
+    CHECK(rig.asking[2].first == Rig::file("Asks modally when made 3000 ms").path);
+    CHECK(rig.asking[2].second);
+    CHECK_FALSE(rig.asking[3].second);
+    CHECK(rig.scanner->workersKilled() == 0);
+}
+
+TEST_CASE("Skip ends the worker of a plugin that is asking something, leaving it to be scanned again, never set aside")
+{
+    Rig rig(1000ms);
+    REQUIRE(rig.scanner->scan({Rig::file("Asks when made 60000 ms"), Rig::file("Good A")}));
+    REQUIRE(rig.main.turnUntil([&] { return !rig.asking.empty(); }, 20s));
+    const auto skipped = std::chrono::steady_clock::now();
+    rig.scanner->skip();
+    REQUIRE(rig.main.turnUntil([&] { return rig.end.has_value(); }, 20s));
+    CHECK(std::chrono::steady_clock::now() - skipped < 5s);
+    CHECK_FALSE(rig.end->stopped);
+
+    const auto asked = rig.recorded("Asks when made 60000 ms");
+    REQUIRE(asked);
+    CHECK_FALSE(asked->complete);
+    CHECK(asked->setAside.empty());
+    CHECK(asked->plugins.empty());
+    CHECK(rig.list.needsScan(asked->path, asked->stamp));
+    CHECK(foundWhole(rig.recorded("Good A")));
+}
+#endif

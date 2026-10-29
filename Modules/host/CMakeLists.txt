@@ -36,13 +36,14 @@ set(sources
 set(libraries Threads::Threads)
 
 if(APPLE)
-    list(APPEND sources src/ProcessState_mac.mm src/ScanWorkerLoop_mac.mm src/Vst3Module_mac.cpp)
-    list(APPEND libraries "-framework AppKit" "-framework CoreFoundation")
+    list(APPEND sources src/ProcessState_mac.mm src/ScanWorkerCrash_posix.cpp src/ScanWorkerLoop_mac.mm
+                        src/Vst3Module_mac.cpp)
+    list(APPEND libraries "-framework AppKit" "-framework CoreFoundation" "-framework CoreGraphics")
 elseif(WIN32)
-    list(APPEND sources src/ScanWorkerLoop_windows.cpp src/Vst3Module_windows.cpp)
+    list(APPEND sources src/ScanWorkerCrash_windows.cpp src/ScanWorkerLoop_windows.cpp src/Vst3Module_windows.cpp)
     list(APPEND libraries ole32 user32 version)
 else()
-    list(APPEND sources src/ScanWorkerLoop_other.cpp src/Vst3Module_linux.cpp)
+    list(APPEND sources src/ScanWorkerCrash_posix.cpp src/ScanWorkerLoop_other.cpp src/Vst3Module_linux.cpp)
     list(APPEND libraries ${CMAKE_DL_LIBS})
 endif()
 
