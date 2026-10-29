@@ -402,6 +402,24 @@ TEST_CASE("Try Again scans a file again, and a scan cut short is finished at the
     CHECK(list->needsScan(shell, stamp(5)));
 }
 
+TEST_CASE("A file the system doesn't know yet is kept as that and looked at again at every scan, changed or not")
+{
+    Rig rig;
+    const auto path = rig.place("Components/New.component");
+    {
+        auto list = rig.open();
+        auto file = found(path, stamp(1), {});
+        file.outcome = PluginFile::Outcome::notYetSeen;
+        list->record(file);
+        CHECK(list->needsScan(path, stamp(1)));
+        list->save();
+    }
+    auto list = rig.open();
+    REQUIRE(list->file(path));
+    CHECK(list->file(path)->outcome == PluginFile::Outcome::notYetSeen);
+    CHECK(list->needsScan(path, stamp(1)));
+}
+
 TEST_CASE("A file changed after signing is looked at again once the computer has restarted")
 {
     Rig rig;

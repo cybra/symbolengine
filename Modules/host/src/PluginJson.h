@@ -45,6 +45,7 @@ inline constexpr Named<PluginFile::Outcome> outcomes[] = {
     {PluginFile::Outcome::changedAfterSigning, "changedAfterSigning"},
     {PluginFile::Outcome::notNotarized, "notNotarized"},
     {PluginFile::Outcome::setAside, "setAside"},
+    {PluginFile::Outcome::notYetSeen, "notYetSeen"},
 };
 
 inline constexpr Named<PluginFailure::Kind> failureKinds[] = {

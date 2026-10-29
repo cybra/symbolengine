@@ -1,6 +1,6 @@
-// The program the scan worker tests start as a worker: a fake format whose files say what each plugin in them does, and
-// the VST3 format for the test module. Its environment can make it a worker that answers wrongly, or a program with a
-// worker of its own that the tests kill or let quit.
+// The program the scan worker tests start as a worker: a fake format whose files say what each plugin in them does, the
+// VST3 format for the test module, and on a Mac the Audio Unit format. Its environment can make it a worker that
+// answers wrongly, or a program with a worker of its own that the tests kill or let quit.
 
 #include <symbolengine/core/ChildProcess.h>
 #include <symbolengine/core/Files.h>
@@ -13,6 +13,12 @@
 #include <symbolengine/host/Vst3Format.h>
 
 #include "TestMainThread.h"
+
+#if defined(__APPLE__)
+    #include <symbolengine/host/AudioUnitFormat.h>
+
+    #include "AudioUnits/Registry.h"
+#endif
 
 #include <chrono>
 #include <condition_variable>
@@ -197,7 +203,16 @@ int main(int argc, char** argv)
         fake.files(
             [&fake](const std::filesystem::path& file, PluginError& error) { return fakeFile(fake, file, error); });
         Vst3Format vst3({"SymbolEngine tests", PluginScanWorker::post, PluginScanWorker::onMainThread});
+#if defined(__APPLE__)
+        // The test Audio Units known to the system, as if installed, where the environment names their component.
+        if (const auto units = system::environmentVariable("SYMBOLENGINE_TEST_REGISTER_AUDIO_UNITS"))
+            if (!testAudioUnits::registerAll(paths::fromUtf8(*units)))
+                return 92;
+        AudioUnitFormat audioUnits({PluginScanWorker::post, PluginScanWorker::onMainThread, nullptr});
+        PluginScanWorker::work({&fake, &vst3, &audioUnits});
+#else
         PluginScanWorker::work({&fake, &vst3});
+#endif
     }
 
     // A program scanning a folder of VST3 bundles into a list saved every so often, saying in its output how many

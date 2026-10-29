@@ -413,3 +413,44 @@ TEST_CASE("Skip ends the worker of a plugin that is asking something, leaving it
     CHECK(foundWhole(rig.recorded("Good A")));
 }
 #endif
+
+#if defined(__APPLE__)
+TEST_CASE(
+    "Audio Units the system doesn't know yet are listed as installed but not yet seen, looked at again each scan, "
+    "and found once it knows them, with every rule of their hosting kept")
+{
+    const std::filesystem::path units = SYMBOLENGINE_TEST_AUDIO_UNITS;
+    const PluginScanFile file{"AudioUnit", units, {1, 1, "1.2.3", 0}, false, {std::string(system::architecture())}};
+    {
+        Rig rig;
+        REQUIRE(rig.scanner->scan({file}));
+        REQUIRE(rig.main.turnUntil([&] { return rig.end.has_value(); }, 120s));
+        const auto recorded = rig.list.file(units);
+        REQUIRE(recorded);
+        CHECK(recorded->outcome == PluginFile::Outcome::notYetSeen);
+        CHECK(recorded->plugins.empty());
+        CHECK(recorded->setAside.empty());
+        CHECK(rig.list.needsScan(units, file.stamp));
+    }
+
+    // Known to the system in the worker, each effect made, set up and played there; the one that changes its buses as
+    // it is initialized set aside.
+    ScratchFolder logs;
+    const auto log = logs.path / "misuse.txt";
+    Rig rig(30s, 50, std::int64_t(2) * 1024 * 1024 * 1024, SYMBOLENGINE_SCAN_WORKER,
+            {{"SYMBOLENGINE_TEST_REGISTER_AUDIO_UNITS", units.string()}, {"SYMBOLENGINE_TEST_AU_LOG", log.string()}});
+    REQUIRE(rig.scanner->scan({file}));
+    REQUIRE(rig.main.turnUntil([&] { return rig.end.has_value(); }, 120s));
+    const auto recorded = rig.list.file(units);
+    REQUIRE(recorded);
+    INFO(rig.output());
+    CHECK(recorded->outcome == PluginFile::Outcome::found);
+    CHECK(recorded->plugins.size() == 16);
+    REQUIRE(recorded->setAside.size() == 1);
+    CHECK(recorded->setAside[0].plugin.name == "Grow");
+    CHECK(recorded->setAside[0].failure.detail == "It changed its buses as it was initialized.");
+    CHECK_FALSE(rig.list.needsScan(units, file.stamp));
+    std::error_code missing;
+    CHECK(files::read(log, missing).empty());
+}
+#endif

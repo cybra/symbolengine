@@ -347,6 +347,10 @@ public:
         a worker. Nothing, with the error set, if the file can't be read or its code won't load. */
     virtual std::vector<PluginDescription> pluginsIn(const std::filesystem::path& file, PluginError& error) = 0;
 
+    /** Whether the system can make the plugin now, for a format whose plugins come from the system's registry, which
+        can lag behind the folders: false for an Audio Unit installed but not yet in it. */
+    virtual bool registered(const PluginDescription&) const { return true; }
+
     /** Makes a plugin on the main thread, its notices told to the client from then on. done is called once on the main
         thread with the plugin or an error, before make returns or after turns of the run loop, as a format that makes
         plugins asynchronously does. */

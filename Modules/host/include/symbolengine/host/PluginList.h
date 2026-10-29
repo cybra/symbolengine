@@ -87,6 +87,10 @@ struct PluginFile
 
         /** Loading it failed before it named any plugin, as failure says. */
         setAside,
+
+        /** It is installed, but the system doesn't know it yet, as an Audio Unit its registry hasn't caught up with; it
+            is looked at again at every scan. */
+        notYetSeen,
     };
 
     /** Where it lies, the real path a scan reached it by, and its format's name. */

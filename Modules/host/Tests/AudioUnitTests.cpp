@@ -3,6 +3,7 @@
 #include <symbolengine/host/AudioUnitFormat.h>
 #include <symbolengine/host/Plugin.h>
 
+#include "AudioUnits/Registry.h"
 #include "TestMainThread.h"
 
 #include <catch2/catch_approx.hpp>
@@ -40,41 +41,7 @@ OSType code(const char (&four)[5])
 // Registers every unit of the test component with this process only, once, so the tests run them uninstalled.
 void registerUnits()
 {
-    static const bool registered = [] {
-        const auto path = units.string();
-        const auto url = CFURLCreateFromFileSystemRepresentation(nullptr, reinterpret_cast<const UInt8*>(path.c_str()),
-                                                                 static_cast<CFIndex>(path.size()), true);
-        const auto bundle = CFBundleCreate(nullptr, url);
-        CFRelease(url);
-        REQUIRE(bundle != nullptr);
-        REQUIRE(CFBundleLoadExecutable(bundle));
-        const auto list =
-            static_cast<CFArrayRef>(CFDictionaryGetValue(CFBundleGetInfoDictionary(bundle), CFSTR("AudioComponents")));
-        REQUIRE(list != nullptr);
-        for (CFIndex i = 0; i < CFArrayGetCount(list); ++i)
-        {
-            const auto entry = static_cast<CFDictionaryRef>(CFArrayGetValueAtIndex(list, i));
-            const auto codeOf = [entry](CFStringRef key) {
-                char text[8] = {};
-                CFStringGetCString(static_cast<CFStringRef>(CFDictionaryGetValue(entry, key)), text, sizeof text,
-                                   kCFStringEncodingASCII);
-                return static_cast<OSType>(static_cast<unsigned char>(text[0])) << 24 |
-                       static_cast<OSType>(static_cast<unsigned char>(text[1])) << 16 |
-                       static_cast<OSType>(static_cast<unsigned char>(text[2])) << 8 |
-                       static_cast<OSType>(static_cast<unsigned char>(text[3]));
-            };
-            AudioComponentDescription description{codeOf(CFSTR("type")), codeOf(CFSTR("subtype")),
-                                                  codeOf(CFSTR("manufacturer")), 0, 0};
-            const auto factory = reinterpret_cast<AudioComponentFactoryFunction>(CFBundleGetFunctionPointerForName(
-                bundle, static_cast<CFStringRef>(CFDictionaryGetValue(entry, CFSTR("factoryFunction")))));
-            REQUIRE(factory != nullptr);
-            REQUIRE(AudioComponentRegister(&description,
-                                           static_cast<CFStringRef>(CFDictionaryGetValue(entry, CFSTR("name"))), 1,
-                                           factory) != nullptr);
-        }
-        return true;
-    }();
-    static_cast<void>(registered);
+    REQUIRE(testAudioUnits::registerAll(units));
 }
 
 // What the test units found wrong in the calls made into them, which starts empty for each test.
@@ -96,7 +63,7 @@ struct Rig
 
     TestMainThread main;
     std::vector<std::string> wrong;
-    AudioUnitFormat format{{main.post(), main.isCurrent()}};
+    AudioUnitFormat format{{main.post(), main.isCurrent(), nullptr}};
     PluginHost host{
         {main.post(), main.isCurrent(), 2000ms, [this](const std::string& what) { wrong.push_back(what); }}};
 
@@ -701,4 +668,39 @@ TEST_CASE("Values an Audio Unit's processing reports, as a meter's, reach the pr
         CHECK((edit.kind != PluginEdit::Kind::reported || edit.id == 2));
     }
     CHECK(misuses().empty());
+}
+
+TEST_CASE("Whether the system knows an Audio Unit is told without making it")
+{
+    Rig rig;
+    CHECK(rig.format.registered(rig.describe("Pass")));
+    auto unknown = rig.describe("Pass");
+    unknown.identity = PluginIdentity::audioUnit(code("aufx"), code("Nope"), code("SyTs"));
+    CHECK_FALSE(rig.format.registered(unknown));
+}
+
+TEST_CASE("The system's notice that its registry of Audio Units changed reaches each format's program on its main "
+          "thread, whatever thread it comes on, and never a format taken down")
+{
+    Rig rig;
+    int told = 0;
+    int toldGone = 0;
+    bool onMain = true;
+    AudioUnitFormat format{{rig.main.post(), rig.main.isCurrent(), [&] {
+                                ++told;
+                                onMain = onMain && rig.main.isCurrent()();
+                            }}};
+    std::make_unique<AudioUnitFormat>(
+        AudioUnitFormat::Options{rig.main.post(), rig.main.isCurrent(), [&] { ++toldGone; }})
+        .reset();
+
+    // The system posts it as a unit is installed or removed, which only it registers; posted here as it would.
+    std::thread([] {
+        CFNotificationCenterPostNotification(CFNotificationCenterGetLocalCenter(),
+                                             kAudioComponentRegistrationsChangedNotification, nullptr, nullptr, true);
+    }).join();
+    CHECK(rig.main.turnUntil([&] { return told > 0; }, 5s));
+    CHECK(told == 1);
+    CHECK(toldGone == 0);
+    CHECK(onMain);
 }

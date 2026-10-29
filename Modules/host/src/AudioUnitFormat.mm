@@ -22,6 +22,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <mutex>
 
 namespace symbolengine
 {
@@ -1194,12 +1195,85 @@ struct AudioUnitFormat::Shared
     Options options;
 };
 
+namespace
+{
+
+// Every format told of the system's notice that its registry changed, through one observer for the process, as the
+// system may post it on any thread while a format is being taken down; each told on its main thread while it lives.
+struct RegistryWatch
+{
+    std::mutex lock;
+    std::vector<std::weak_ptr<AudioUnitFormat::Shared>> formats;
+};
+
+void registryChanged(CFNotificationCenterRef, void* observer, CFNotificationName, const void*, CFDictionaryRef)
+{
+    auto& watch = *static_cast<RegistryWatch*>(observer);
+    std::vector<std::shared_ptr<AudioUnitFormat::Shared>> live;
+    {
+        const std::lock_guard held(watch.lock);
+        for (const auto& format : watch.formats)
+            if (auto shared = format.lock())
+                live.push_back(std::move(shared));
+    }
+    for (const auto& shared : live)
+        if (shared->options.registryChanged != nullptr && shared->options.post != nullptr)
+            shared->options.post([weak = std::weak_ptr(shared)] {
+                if (const auto alive = weak.lock())
+                    alive->options.registryChanged();
+            });
+}
+
+// Made once and kept for the life of the process, as the system can call its observer at any moment.
+RegistryWatch& registryWatch()
+{
+    static auto* const watch = [] {
+        auto* const made = new RegistryWatch;
+        CFNotificationCenterAddObserver(CFNotificationCenterGetLocalCenter(), made, &registryChanged,
+                                        kAudioComponentRegistrationsChangedNotification, nullptr,
+                                        CFNotificationSuspensionBehaviorDeliverImmediately);
+        return made;
+    }();
+    return *watch;
+}
+
+// The system's component for a unit's codes, of version 2: a unit of version 3 standing in under the same codes isn't
+// made as it.
+AudioComponent componentFor(const PluginIdentity& identity)
+{
+    const auto description = descriptionOf(identity);
+    if (!description)
+        return nullptr;
+    for (auto component = AudioComponentFindNext(nullptr, &*description); component != nullptr;
+         component = AudioComponentFindNext(component, &*description))
+    {
+        AudioComponentDescription found{};
+        if (AudioComponentGetDescription(component, &found) == noErr &&
+            (found.componentFlags & kAudioComponentFlag_IsV3AudioUnit) == 0)
+            return component;
+    }
+    return nullptr;
+}
+
+}
+
 AudioUnitFormat::AudioUnitFormat(Options options) : shared(std::make_shared<Shared>())
 {
     shared->options = std::move(options);
+    auto& watch = registryWatch();
+    const std::lock_guard held(watch.lock);
+    watch.formats.push_back(shared);
 }
 
-AudioUnitFormat::~AudioUnitFormat() = default;
+AudioUnitFormat::~AudioUnitFormat()
+{
+    auto& watch = registryWatch();
+    const std::lock_guard held(watch.lock);
+    std::erase_if(watch.formats, [this](const std::weak_ptr<Shared>& format) {
+        const auto alive = format.lock();
+        return alive == nullptr || alive == shared;
+    });
+}
 
 std::string AudioUnitFormat::name() const
 {
@@ -1303,11 +1377,15 @@ std::vector<PluginDescription> AudioUnitFormat::pluginsIn(const std::filesystem:
     return plugins;
 }
 
+bool AudioUnitFormat::registered(const PluginDescription& plugin) const
+{
+    return componentFor(plugin.identity) != nullptr;
+}
+
 void AudioUnitFormat::make(const PluginDescription& plugin, PluginFormatClient& client,
                            std::function<void(std::unique_ptr<PluginFormatInstance>, PluginError)> done)
 {
-    const auto description = descriptionOf(plugin.identity);
-    const auto component = description ? AudioComponentFindNext(nullptr, &*description) : nullptr;
+    const auto component = componentFor(plugin.identity);
     if (component == nullptr)
     {
         done(nullptr, {"It isn't among the Audio Units the system knows.", "make", 0});

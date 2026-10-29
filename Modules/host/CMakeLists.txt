@@ -57,6 +57,10 @@ if(SYMBOLENGINE_TESTS)
     # The program the scan worker tests start as a worker, and as a program with a worker of its own.
     add_executable(symbolengine_host_scan_worker Tests/ScanWorker.cpp)
     target_link_libraries(symbolengine_host_scan_worker PRIVATE SymbolEngine::host)
+    if(APPLE)
+        target_link_libraries(symbolengine_host_scan_worker PRIVATE "-framework AudioToolbox"
+                                                                    "-framework CoreFoundation")
+    endif()
     symbolengine_set_warnings(symbolengine_host_scan_worker)
 
     set(test_sources Tests/Allocations.cpp Tests/ParameterTests.cpp Tests/PluginLifeTests.cpp Tests/PluginListTests.cpp

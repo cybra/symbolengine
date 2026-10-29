@@ -34,6 +34,10 @@ public:
         /** The main thread, as for PluginHost: the system's completion of making a unit reaches it there. */
         std::function<void(std::function<void()>)> post;
         std::function<bool()> onMainThread;
+
+        /** Told on the main thread when the system says its registry of Audio Units changed, as when one is installed,
+            so the program can offer a scan. */
+        std::function<void()> registryChanged;
     };
 
     explicit AudioUnitFormat(Options options);
@@ -56,6 +60,9 @@ public:
     /** The units its Info.plist declares, read without loading its code: each one's codes, its name, split at its first
         colon into maker and name, its version and its kind. */
     std::vector<PluginDescription> pluginsIn(const std::filesystem::path& file, PluginError& error) override;
+
+    /** Whether the system's registry returns it, a unit of version 3 standing in under its codes passed over. */
+    bool registered(const PluginDescription& plugin) const override;
 
     void make(const PluginDescription& plugin, PluginFormatClient& client,
               std::function<void(std::unique_ptr<PluginFormatInstance>, PluginError)> done) override;

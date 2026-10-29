@@ -242,6 +242,11 @@ private:
             return refuseFile(error.message);
         if (plugins.empty())
             return done(PluginFile::Outcome::nothing, std::nullopt);
+
+        // Installed, but not yet known to the system, which makes them only once it is.
+        if (std::none_of(plugins.begin(), plugins.end(),
+                         [this](const PluginDescription& one) { return format->registered(one); }))
+            return done(PluginFile::Outcome::notYetSeen, std::nullopt);
         next = 0;
         nextPlugin();
     }

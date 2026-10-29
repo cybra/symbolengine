@@ -463,7 +463,8 @@ bool PluginList::needsScan(const std::filesystem::path& path, const PluginStamp&
     if (found == inner->records.end())
         return true;
     const auto& record = found->second;
-    if (record.file.again || !record.file.complete || record.file.stamp != stamp)
+    if (record.file.again || !record.file.complete || record.file.stamp != stamp ||
+        record.file.outcome == PluginFile::Outcome::notYetSeen)
         return true;
     return record.file.outcome == PluginFile::Outcome::changedAfterSigning &&
            differentStarts(inner->computerStarted(), record.computerStarted);
