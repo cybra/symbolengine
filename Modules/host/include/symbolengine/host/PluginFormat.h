@@ -244,6 +244,10 @@ enum class PluginNotice : std::uint32_t
 
     /** It asks to be made again. */
     reload = 1u << 5,
+
+    /** It asks to be reset from the main thread, as an Audio Unit playing in real time does at a discontinuity, since
+        it can't be reset on the audio thread. */
+    reset = 1u << 6,
 };
 
 constexpr PluginNotice operator|(PluginNotice a, PluginNotice b)

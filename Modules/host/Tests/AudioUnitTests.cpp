@@ -751,3 +751,113 @@ TEST_CASE("An Audio Unit built only for Intel is run by the system through Roset
     CHECK(out[1] == numbered(2048, 1.0f, -1.0f));
 }
 #endif
+
+// Plays one block of the frames given through a plugin on an audio thread of the test's own, its input numbered from
+// a value or silent for 0, at a discontinuity or not, giving its first channel.
+std::vector<float> playBlock(Plugin& plugin, int frames, float from, bool discontinuity)
+{
+    std::vector<float> left(static_cast<std::size_t>(frames)), right(static_cast<std::size_t>(frames));
+    for (std::size_t i = 0; i < left.size(); ++i)
+        left[i] = right[i] = from == 0.0f ? 0.0f : from + static_cast<float>(i);
+    PluginTime time;
+    time.playing = true;
+    time.discontinuity = discontinuity;
+    std::thread([&] {
+        float* channels[] = {left.data(), right.data()};
+        plugin.process(channels, 2, frames, nullptr, 0, &time);
+    }).join();
+    return left;
+}
+
+bool silent(const std::vector<float>& samples, std::size_t from = 0, std::size_t to = SIZE_MAX)
+{
+    return std::all_of(samples.begin() + static_cast<std::ptrdiff_t>(from),
+                       samples.begin() + static_cast<std::ptrdiff_t>(std::min(to, samples.size())),
+                       [](float sample) { return sample == 0.0f; });
+}
+
+TEST_CASE("At a discontinuity an Audio Unit playing in real time renders on and is reset from the main thread, and "
+          "never without one")
+{
+    Rig rig;
+    auto plugin = rig.made("Echo");
+
+    // 64 frames at a time through a delay of 100: what it held comes out of the next silent blocks.
+    playBlock(*plugin, 64, 1, false);
+    playBlock(*plugin, 64, 0, false);
+    rig.main.turnUntil([] { return false; }, 100ms);
+    CHECK(playBlock(*plugin, 64, 0, false)[0] == 29.0f);
+
+    // At one, it renders on, what it held before heard until the main thread resets it, and nothing of it after.
+    playBlock(*plugin, 64, 1, false);
+    CHECK(playBlock(*plugin, 64, 0, true)[36] == 1.0f);
+    rig.main.turnUntil([] { return false; }, 100ms);
+    CHECK(silent(playBlock(*plugin, 64, 0, false)));
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("At a discontinuity an Audio Unit rendering offline is reset at once, before it renders the block")
+{
+    Rig rig;
+    auto plugin = rig.made("Echo", {48000.0, 512, true});
+    playBlock(*plugin, 64, 1, false);
+    CHECK(silent(playBlock(*plugin, 64, 0, true)));
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("At a discontinuity the host's buffer for a unit fed full blocks is cleared, so nothing from before it comes "
+          "after")
+{
+    Rig rig;
+    auto plugin = rig.made("Fixd", {48000.0, 512, true});
+
+    // The first short block shows it needs full blocks; then 600 frames numbered from 1, the gain halved at frame 550,
+    // after the last full block was rendered.
+    playBlock(*plugin, 100, 0, false);
+    for (int block = 0; block < 5; ++block)
+        playBlock(*plugin, 100, static_cast<float>(1 + 100 * block), false);
+    std::vector<float> left(100), right(100);
+    for (int i = 0; i < 100; ++i)
+        left[static_cast<std::size_t>(i)] = right[static_cast<std::size_t>(i)] = static_cast<float>(501 + i);
+    std::thread([&] {
+        const PluginParameterChange halved{0, 50, 0.25};
+        float* channels[] = {left.data(), right.data()};
+        plugin->process(channels, 2, 100, &halved, 1);
+    }).join();
+
+    // At the jump, input numbered from 1,000: nothing from before comes out, the first frame after it comes the
+    // buffer's 512 frames later, and the value set before it is the unit's from its first frame.
+    std::vector<float> out;
+    for (int block = 0; block < 7; ++block)
+    {
+        const auto played = playBlock(*plugin, 100, static_cast<float>(1000 + 100 * block), block == 0);
+        out.insert(out.end(), played.begin(), played.end());
+    }
+    CHECK(silent(out, 0, 512));
+    CHECK(out[512] == 1000.0f * 0.5f);
+    CHECK(out[699] == 1187.0f * 0.5f);
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("Resets at discontinuities while an Audio Unit plays on never overlap its render")
+{
+    Rig rig;
+    auto plugin = rig.made("Echo");
+    std::atomic<bool> playing{true};
+    std::thread audio([&] {
+        std::vector<float> left(64, 0.5f), right(64, 0.5f);
+        float* channels[] = {left.data(), right.data()};
+        for (int block = 0; playing; ++block)
+        {
+            PluginTime time;
+            time.playing = true;
+            time.discontinuity = block % 20 == 0;
+            plugin->process(channels, 2, 64, nullptr, 0, &time);
+        }
+    });
+    rig.main.turnUntil([] { return false; }, 500ms);
+    playing = false;
+    audio.join();
+    CHECK(plugin->state() == Plugin::State::active);
+    CHECK(misuses().empty());
+}

@@ -237,6 +237,7 @@ public:
     bool activate(const PluginSetup& setup, PluginError& error) override
     {
         rate = setup.rate;
+        offline = setup.offline;
 
         // Its largest block before anything else, read back, as a unit that takes less is given pieces it takes.
         UInt32 largest = static_cast<UInt32>(std::max(1, setup.maximumFrames));
@@ -276,9 +277,9 @@ public:
                                    &AudioUnitPlugin::transport, &AudioUnitPlugin::transport2};
         AudioUnitSetProperty(unit, kAudioUnitProperty_HostCallbacks, kAudioUnitScope_Global, 0, &callbacks,
                              sizeof callbacks);
-        UInt32 offline = setup.offline ? 1 : 0;
-        AudioUnitSetProperty(unit, kAudioUnitProperty_OfflineRender, kAudioUnitScope_Global, 0, &offline,
-                             sizeof offline);
+        UInt32 rendersOffline = offline ? 1 : 0;
+        AudioUnitSetProperty(unit, kAudioUnitProperty_OfflineRender, kAudioUnitScope_Global, 0, &rendersOffline,
+                             sizeof rendersOffline);
 
         // A state given while it wasn't initialized, given again now its formats and largest block are set.
         if (heldState != nullptr)
@@ -362,6 +363,19 @@ public:
     {
         if (gone != nullptr)
             return false;
+
+        // A discontinuity clears what the unit holds of the audio before it: rendering offline, at once, on this
+        // thread, between renders; in real time, from the main thread, the unit rendering on meanwhile, so what it held
+        // may be heard for as long as that takes. The host's own buffer for a unit fed full blocks is cleared at once.
+        if (block.time != nullptr && block.time->discontinuity)
+        {
+            clearHeld();
+            if (offline)
+                AudioUnitReset(unit, kAudioUnitScope_Global, 0);
+            else
+                client.notice(PluginNotice::reset);
+        }
+
         if (fixedBlocks)
             return processHeld(block);
 
@@ -609,6 +623,7 @@ private:
     const char* gone = nullptr;
     int failures = 0;
     bool fixedBlocks = false;
+    bool offline = false;
     double rate = 48000.0;
     UInt32 maximumFrames = 0;
     PluginLayout layout{};
@@ -814,6 +829,18 @@ private:
             range.reported = value;
             block.reported[block.reportedCount++] = {range.id, std::max(0, block.frames - 1), normalized(range, value)};
         }
+    }
+
+    // The buffer for a unit fed full blocks emptied, the changes gathered for its next block kept, from its start.
+    void clearHeld()
+    {
+        for (auto& channel : heldIn)
+            std::fill(channel.begin(), channel.end(), 0.0f);
+        for (auto& channel : heldOut)
+            std::fill(channel.begin(), channel.end(), 0.0f);
+        held = 0;
+        for (UInt32 i = 0; i < heldEventCount; ++i)
+            heldEvents[i].eventValues.immediate.bufferOffset = 0;
     }
 
     // A change gathered for the next full block; with no room left, the last one gathered of the same parameter takes

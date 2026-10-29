@@ -698,6 +698,15 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
         if (state == State::failed)
             return;
 
+        // Reset with nothing playing it, as a reset is made.
+        if (has(what, PluginNotice::reset) && state == State::active)
+        {
+            if (!hold() || !call("reset", [this] { instance->reset(); }))
+                return;
+
+            open();
+        }
+
         if (has(what, PluginNotice::buses) || has(what, PluginNotice::latency))
         {
             const bool wasActive = state == State::active;

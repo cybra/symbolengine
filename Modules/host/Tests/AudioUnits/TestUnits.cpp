@@ -59,9 +59,11 @@ public:
         AUEffectBase::Cleanup();
     }
 
+    // On the main thread, or rendering offline on the render thread between renders.
     OSStatus Reset(AudioUnitScope scope, AudioUnitElement element) override
     {
-        onMain("Reset");
+        if (!offline || pthread_equal(pthread_self(), renderer.load()) == 0)
+            onMain("Reset");
         if (rendering)
             misuse(name, "reset while rendering");
         return AUEffectBase::Reset(scope, element);
@@ -95,6 +97,8 @@ public:
     {
         if (id == kAudioUnitProperty_StreamFormat)
             noteFormatSet(scope);
+        if (id == kAudioUnitProperty_OfflineRender && size == sizeof(UInt32))
+            offline = *static_cast<const UInt32*>(data) != 0;
         return AUEffectBase::SetProperty(id, scope, element, data, size);
     }
 
@@ -137,6 +141,7 @@ protected:
     const char* name;
     std::atomic<bool> rendering{false};
     std::atomic<pthread_t> renderer{};
+    std::atomic<bool> offline{false};
 
     virtual OSStatus render(AudioUnitRenderActionFlags& flags, const AudioTimeStamp& time, UInt32 frames)
     {
