@@ -252,7 +252,7 @@ TEST_CASE("A worker that makes no progress is killed within its limit, and is go
     CHECK_FALSE(scan.scan(scan.fake(R"({"plugins": []})")));
 }
 
-TEST_CASE("A file of many slow plugins is never timed out while each makes progress")
+TEST_CASE("A file of many slow plugins is never timed out while each makes progress", "[timing]")
 {
     std::string plugins;
     for (int i = 0; i < 30; ++i)

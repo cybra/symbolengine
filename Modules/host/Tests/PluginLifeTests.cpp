@@ -786,7 +786,8 @@ TEST_CASE("A hold that leaves a plugin off the audio, as when its state is taken
 }
 
 TEST_CASE("A reset a plugin asks for from inside its processing comes from the main thread at once, never waiting "
-          "for the host's next look at what plugins said there")
+          "for the host's next look at what plugins said there",
+          "[timing]")
 {
     Rig rig;
     const auto now = [] { return std::chrono::steady_clock::now(); };

@@ -22,7 +22,7 @@
 - [x] A contributing guide with the sign-off, and issue and pull request templates.
 - [ ] GitHub's private vulnerability reporting and a short security policy pointing to it, nearer the first release.
 - [x] CMake build that a project takes in with `FetchContent` or `find_package`, each module a target; C++20; warnings as errors in continuous integration.
-- [x] Continuous integration on Mac, Windows and Linux on every push, with sanitizers on Linux and a project outside SymbolEngine building against it. Tests that measure time on the clock or open a web view run one at a time, since two or three web views starting at once on Windows' runner took longer than the tests wait.
+- [x] Continuous integration on Mac, Windows and Linux on every push, with sanitizers on Linux and a project outside SymbolEngine building against it. Tests that measure time on the clock, open a web view or open many windows run one at a time, since two or three web views starting at once on Windows' runner took longer than the tests wait, and the host's timing tests overran on the Mac runner beside tests opening windows.
 - [ ] Documentation site generated from the guides and the headers.
 
 ## Phase 1: Plugins

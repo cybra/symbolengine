@@ -208,7 +208,8 @@ TEST_CASE("A plugin asking for its editor is told to the program")
 #if SYMBOLENGINE_PLUGIN_WINDOWS
 
 TEST_CASE("A plugin window closed during a call into its plugin has its editor closed once the call returns, while the "
-          "window is still whole")
+          "window is still whole",
+          "[windows]")
 {
     FakeRig rig;
     std::unique_ptr<PluginWindow> window;
@@ -249,7 +250,7 @@ TEST_CASE("A plugin window closed during a call into its plugin has its editor c
     rig.checkNoMisuse();
 }
 
-TEST_CASE("A plugin window tells its editor when its screen's scale changes, once the user's move is over")
+TEST_CASE("A plugin window tells its editor when its screen's scale changes, once the user's move is over", "[windows]")
 {
     FakeRig rig;
     auto plugin = rig.made("scaled");
@@ -379,7 +380,7 @@ ui::Size windowSize(PluginWindow& window)
 
 }
 
-TEST_CASE("A VST3 plugin says whether it has an editor, asked once without one being opened")
+TEST_CASE("A VST3 plugin says whether it has an editor, asked once without one being opened", "[windows]")
 {
     Vst3Rig rig;
     auto editor = rig.made();
@@ -394,7 +395,7 @@ TEST_CASE("A VST3 plugin says whether it has an editor, asked once without one b
     CHECK(misuses().empty());
 }
 
-TEST_CASE("A VST3 editor opens in its window at its own size, in its format's order, and closes in order")
+TEST_CASE("A VST3 editor opens in its window at its own size, in its format's order, and closes in order", "[windows]")
 {
     Vst3Rig rig;
     auto plugin = rig.made();
@@ -424,7 +425,8 @@ TEST_CASE("A VST3 editor opens in its window at its own size, in its format's or
 }
 
 TEST_CASE("A VST3 editor opened and closed 200 times never has two views, and a plugin let go of with its window open "
-          "has its editor closed first")
+          "has its editor closed first",
+          "[windows]")
 {
     Vst3Rig rig;
     auto plugin = rig.made();
@@ -451,7 +453,7 @@ TEST_CASE("A VST3 editor opened and closed 200 times never has two views, and a 
     CHECK(misuses().empty());
 }
 
-TEST_CASE("A second editor of a VST3 plugin is refused while one is open")
+TEST_CASE("A second editor of a VST3 plugin is refused while one is open", "[windows]")
 {
     Vst3Rig rig;
     auto plugin = rig.made();
@@ -464,7 +466,8 @@ TEST_CASE("A second editor of a VST3 plugin is refused while one is open")
     CHECK(misuses().empty());
 }
 
-TEST_CASE("A VST3 editor asking to be resized is resized on the main thread, its window following, and told once")
+TEST_CASE("A VST3 editor asking to be resized is resized on the main thread, its window following, and told once",
+          "[windows]")
 {
     Vst3Rig rig;
     auto plugin = rig.made();
@@ -486,7 +489,8 @@ TEST_CASE("A VST3 editor asking to be resized is resized on the main thread, its
     CHECK(misuses().empty());
 }
 
-TEST_CASE("VST3 editors that ask again from inside their own resize never loop, and none is made too small")
+TEST_CASE("VST3 editors that ask again from inside their own resize never loop, and none is made too small",
+          "[windows]")
 {
     Vst3Rig rig;
 
@@ -553,7 +557,8 @@ TEST_CASE("VST3 editors that ask again from inside their own resize never loop, 
     CHECK(misuses().empty());
 }
 
-TEST_CASE("Dragging a VST3 editor's window asks it for the nearest size it takes, and tells it once per step")
+TEST_CASE("Dragging a VST3 editor's window asks it for the nearest size it takes, and tells it once per step",
+          "[windows]")
 {
     Vst3Rig rig;
 
@@ -619,7 +624,8 @@ TEST_CASE(
 }
 
     #if defined(_WIN32)
-TEST_CASE("A VST3 editor on Windows takes the size it gives at its screen's new scale once a move there is over")
+TEST_CASE("A VST3 editor on Windows takes the size it gives at its screen's new scale once a move there is over",
+          "[windows]")
 {
     Vst3Rig rig;
     auto plugin = rig.made();
@@ -643,7 +649,7 @@ TEST_CASE("A VST3 editor on Windows takes the size it gives at its screen's new 
     CHECK(misuses().empty());
 }
 
-TEST_CASE("A VST3 editor on Windows keeps its parent through a thousand moves and resizes of its window")
+TEST_CASE("A VST3 editor on Windows keeps its parent through a thousand moves and resizes of its window", "[windows]")
 {
     Vst3Rig rig;
     auto plugin = rig.made();
@@ -664,7 +670,7 @@ TEST_CASE("A VST3 editor on Windows keeps its parent through a thousand moves an
 }
     #endif
 
-TEST_CASE("A VST3 plugin asking for its editor is told to the program")
+TEST_CASE("A VST3 plugin asking for its editor is told to the program", "[windows]")
 {
     Vst3Rig rig;
     auto plugin = rig.made();
