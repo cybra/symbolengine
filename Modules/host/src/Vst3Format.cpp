@@ -9,11 +9,11 @@
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
 #include "pluginterfaces/vst/ivstmessage.h"
+#include "pluginterfaces/vst/ivstparameterchanges.h"
 #include "pluginterfaces/vst/ivstprocesscontext.h"
 #include "pluginterfaces/vst/vstspeaker.h"
 #include "public.sdk/source/vst/hosting/eventlist.h"
 #include "public.sdk/source/vst/hosting/hostclasses.h"
-#include "public.sdk/source/vst/hosting/parameterchanges.h"
 #include "public.sdk/source/vst/utility/stringconvert.h"
 
 #include <algorithm>
@@ -98,9 +98,12 @@ class ComponentHandler final : public IComponentHandler, public IComponentHandle
 public:
     std::atomic<PluginFormatClient*> client{nullptr};
 
-    tresult PLUGIN_API beginEdit(ParamID) override { return live(); }
-    tresult PLUGIN_API performEdit(ParamID, ParamValue) override { return live(); }
-    tresult PLUGIN_API endEdit(ParamID) override { return live(); }
+    tresult PLUGIN_API beginEdit(ParamID id) override { return edit({PluginEdit::Kind::begin, id, 0.0}); }
+    tresult PLUGIN_API performEdit(ParamID id, ParamValue value) override
+    {
+        return edit({PluginEdit::Kind::value, id, value});
+    }
+    tresult PLUGIN_API endEdit(ParamID id) override { return edit({PluginEdit::Kind::end, id, 0.0}); }
 
     tresult PLUGIN_API restartComponent(int32 flags) override
     {
@@ -166,6 +169,17 @@ public:
 
 private:
     tresult live() const { return client.load() != nullptr ? kResultOk : kResultFalse; }
+
+    tresult edit(const PluginEdit& edit) const
+    {
+        auto* const listener = client.load();
+
+        if (listener == nullptr)
+            return kResultFalse;
+
+        listener->edit(edit);
+        return kResultOk;
+    }
 };
 
 // One direction of the link between a plugin's two parts: a message sent from any thread reaches the other part on
@@ -206,6 +220,210 @@ private:
 
 // The stream a plugin's state is written to and read from: it takes null out-pointers, counts exactly, never reads
 // past its end or before its start, and says its size.
+// One parameter's changes in a call, in order of their frames. The host owns it and makes its room when the plugin is
+// activated, so neither the host filling it nor the plugin writing to it allocates on the audio thread.
+class ChangeQueue final : public IParamValueQueue
+{
+public:
+    struct Point
+    {
+        int32 offset = 0;
+        ParamValue value = 0.0;
+    };
+
+    ParamID id = kNoParamId;
+    Point* points = nullptr;
+    int32 count = 0, room = 0;
+
+    ParamID PLUGIN_API getParameterId() override { return id; }
+    int32 PLUGIN_API getPointCount() override { return count; }
+
+    tresult PLUGIN_API getPoint(int32 index, int32& offset, ParamValue& value) override
+    {
+        if (index < 0 || index >= count)
+            return kResultFalse;
+
+        offset = points[index].offset;
+        value = points[index].value;
+        return kResultTrue;
+    }
+
+    // A point at its frame, in order, replacing one at the same frame; with no room left the last is replaced, so the
+    // last value is always the one given last.
+    tresult PLUGIN_API addPoint(int32 offset, ParamValue value, int32& index) override
+    {
+        if (room <= 0)
+            return kResultFalse;
+
+        int32 at = count;
+
+        while (at > 0 && points[at - 1].offset > offset)
+            --at;
+
+        if (at > 0 && points[at - 1].offset == offset)
+        {
+            points[at - 1].value = value;
+            index = at - 1;
+            return kResultTrue;
+        }
+
+        if (count == room)
+        {
+            points[count - 1] = {offset, value};
+            index = count - 1;
+            return kResultTrue;
+        }
+
+        std::copy_backward(points + at, points + count, points + count + 1);
+        points[at] = {offset, value};
+        ++count;
+        index = at;
+        return kResultTrue;
+    }
+
+    tresult PLUGIN_API queryInterface(const TUID wanted, void** object) override
+    {
+        if (FUnknownPrivate::iidEqual(wanted, FUnknown::iid) ||
+            FUnknownPrivate::iidEqual(wanted, IParamValueQueue::iid))
+        {
+            *object = static_cast<IParamValueQueue*>(this);
+            return kResultOk;
+        }
+
+        *object = nullptr;
+        return kNoInterface;
+    }
+
+    uint32 PLUGIN_API addRef() override { return 1; }
+    uint32 PLUGIN_API release() override { return 1; }
+};
+
+// A call's changes, a queue for each parameter changed: the host's for the processor, filled from the block's changes,
+// or the processor's own for the host, which it writes.
+class ChangeList final : public IParameterChanges
+{
+public:
+    // Room for this many parameters at once, made on the main thread: the host's points all in one pool, each of the
+    // processor's queues with a few of its own.
+    void make(int32 parameters, bool written)
+    {
+        queues.assign(static_cast<std::size_t>(std::max(64, parameters + 16)), ChangeQueue{});
+        points.assign(written ? queues.size() * pointsWritten : static_cast<std::size_t>(maximumBlockChanges), {});
+        order.assign(written ? 0 : static_cast<std::size_t>(maximumBlockChanges), 0);
+
+        if (written)
+            for (std::size_t q = 0; q < queues.size(); ++q)
+            {
+                queues[q].points = points.data() + q * pointsWritten;
+                queues[q].room = pointsWritten;
+            }
+
+        used = 0;
+    }
+
+    void clear() noexcept
+    {
+        for (int32 q = 0; q < used; ++q)
+            queues[static_cast<std::size_t>(q)].count = 0;
+
+        used = 0;
+    }
+
+    // The block's changes, grouped by parameter in order of their frames, each within the call's frames; on the
+    // audio thread, sorting in place.
+    void fill(const PluginParameterChange* changes, int count, int frames) noexcept
+    {
+        used = 0;
+        const auto given = std::min(std::max(0, count), static_cast<int>(order.size()));
+        const int last = std::max(1, frames) - 1;
+
+        for (int i = 0; i < given; ++i)
+            order[static_cast<std::size_t>(i)] = i;
+
+        std::sort(order.begin(), order.begin() + given, [changes](int a, int b) {
+            if (changes[a].id != changes[b].id)
+                return changes[a].id < changes[b].id;
+
+            return changes[a].offset != changes[b].offset ? changes[a].offset < changes[b].offset : a < b;
+        });
+
+        std::size_t at = 0;
+
+        for (int k = 0; k < given && static_cast<std::size_t>(used) < queues.size();)
+        {
+            auto& queue = queues[static_cast<std::size_t>(used++)];
+            queue.id = changes[order[static_cast<std::size_t>(k)]].id;
+            queue.points = points.data() + at;
+            queue.count = 0;
+
+            for (; k < given && changes[order[static_cast<std::size_t>(k)]].id == queue.id; ++k)
+            {
+                const auto& change = changes[order[static_cast<std::size_t>(k)]];
+                const auto offset = static_cast<int32>(std::clamp(change.offset, 0, last));
+
+                if (queue.count > 0 && queue.points[queue.count - 1].offset == offset)
+                    queue.points[queue.count - 1].value = change.value;
+                else if (at < points.size())
+                {
+                    queue.points[queue.count++] = {offset, change.value};
+                    ++at;
+                }
+            }
+
+            queue.room = queue.count;
+        }
+    }
+
+    int32 PLUGIN_API getParameterCount() override { return used; }
+
+    IParamValueQueue* PLUGIN_API getParameterData(int32 index) override
+    {
+        return index >= 0 && index < used ? &queues[static_cast<std::size_t>(index)] : nullptr;
+    }
+
+    IParamValueQueue* PLUGIN_API addParameterData(const ParamID& id, int32& index) override
+    {
+        for (int32 q = 0; q < used; ++q)
+            if (queues[static_cast<std::size_t>(q)].id == id)
+            {
+                index = q;
+                return &queues[static_cast<std::size_t>(q)];
+            }
+
+        if (static_cast<std::size_t>(used) >= queues.size())
+            return nullptr;
+
+        auto& queue = queues[static_cast<std::size_t>(used)];
+        queue.id = id;
+        queue.count = 0;
+        index = used++;
+        return &queue;
+    }
+
+    tresult PLUGIN_API queryInterface(const TUID wanted, void** object) override
+    {
+        if (FUnknownPrivate::iidEqual(wanted, FUnknown::iid) ||
+            FUnknownPrivate::iidEqual(wanted, IParameterChanges::iid))
+        {
+            *object = static_cast<IParameterChanges*>(this);
+            return kResultOk;
+        }
+
+        *object = nullptr;
+        return kNoInterface;
+    }
+
+    uint32 PLUGIN_API addRef() override { return 1; }
+    uint32 PLUGIN_API release() override { return 1; }
+
+private:
+    static constexpr std::size_t pointsWritten = 4;
+    std::vector<ChangeQueue> queues;
+    std::vector<ChangeQueue::Point> points;
+    std::vector<int> order;
+    int32 used = 0;
+};
+
 class HostStream final : public IBStream, public ISizeableStream, Counted
 {
 public:
@@ -660,8 +878,10 @@ public:
         silence.assign(static_cast<std::size_t>(std::max(1, setup.maximumFrames)), 0.0f);
         scratchMain.assign(silence.size(), 0.0f);
 
-        // A queue for every parameter made now, so changes added on the audio thread allocate nothing.
-        inputChanges.setMaxParameters(std::max<int32>(1, controller ? controller->getParameterCount() : 0));
+        // Queues for every parameter made now, so changes added on the audio thread allocate nothing.
+        const auto parameterCount = controller ? controller->getParameterCount() : 0;
+        inputChanges.make(parameterCount, false);
+        outputChanges.make(parameterCount, true);
 
         for (const auto direction : {kInput, kOutput})
         {
@@ -716,7 +936,7 @@ public:
 
     void stopProcessing() noexcept override { processor->setProcessing(false); }
 
-    bool process(const PluginBlock& block) noexcept override
+    bool process(PluginBlock& block) noexcept override
     {
         auto& ins = channelPointers[kInput];
         auto& outs = channelPointers[kOutput];
@@ -730,8 +950,24 @@ public:
             for (int c = 0; c < block.outputChannels; ++c)
                 outs[static_cast<std::size_t>(main[kOutput])][static_cast<std::size_t>(c)] = block.outputs[c];
 
-        queue(block.changes, block.changeCount);
-        return run(block.frames);
+        inputChanges.fill(block.changes, block.changeCount, block.frames);
+        const bool fine = run(block.frames);
+
+        // The last value the processor wrote of each parameter.
+        block.reportedCount = 0;
+
+        for (int32 q = 0; q < outputChanges.getParameterCount() && block.reportedCount < block.reportedRoom; ++q)
+        {
+            auto* const written = outputChanges.getParameterData(q);
+            int32 offset = 0;
+            ParamValue value = 0.0;
+
+            if (written != nullptr && written->getPointCount() > 0 &&
+                written->getPoint(written->getPointCount() - 1, offset, value) == kResultTrue)
+                block.reported[block.reportedCount++] = {written->getParameterId(), offset, value};
+        }
+
+        return fine;
     }
 
     // Values handed over with no audio: a call with no samples and every bus's buffers, never null ones. A plugin found
@@ -741,7 +977,7 @@ public:
         if (!passesOverEmpty)
         {
             const auto before = count > 0 ? componentState() : std::string();
-            queue(changes, count);
+            inputChanges.fill(changes, count, 0);
             run(0);
 
             if (count == 0 || componentState() != before)
@@ -750,7 +986,7 @@ public:
             passesOverEmpty = true;
         }
 
-        queue(changes, count);
+        inputChanges.fill(changes, count, 0);
         runSilence();
     }
 
@@ -864,20 +1100,6 @@ public:
     }
 
 private:
-    // The changes for the next call, each in its parameter's queue at its frame.
-    void queue(const PluginParameterChange* changes, int count) noexcept
-    {
-        inputChanges.clearQueue();
-
-        for (int i = 0; i < count; ++i)
-        {
-            int32 queueIndex = 0, pointIndex = 0;
-
-            if (auto* parameter = inputChanges.addParameterData(changes[i].id, queueIndex))
-                parameter->addPoint(changes[i].offset, changes[i].value, pointIndex);
-        }
-    }
-
     std::string componentState()
     {
         IPtr<HostStream> stream = owned(new HostStream);
@@ -902,7 +1124,7 @@ private:
 
     bool run(int frames) noexcept
     {
-        outputChanges.clearQueue();
+        outputChanges.clear();
         inputEvents.clear();
         outputEvents.clear();
 
@@ -950,7 +1172,7 @@ private:
     std::vector<std::vector<std::vector<float>>> scratch[2];
     std::vector<float> silence, scratchMain;
     bool passesOverEmpty = false;
-    ParameterChanges inputChanges, outputChanges;
+    ChangeList inputChanges, outputChanges;
     EventList inputEvents, outputEvents;
     ProcessContext context{};
 };

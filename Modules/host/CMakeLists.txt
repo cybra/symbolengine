@@ -15,7 +15,6 @@ set(sdk_sources
     ${sdk}/public.sdk/source/common/commonstringconvert.cpp
     ${sdk}/public.sdk/source/vst/hosting/eventlist.cpp
     ${sdk}/public.sdk/source/vst/hosting/hostclasses.cpp
-    ${sdk}/public.sdk/source/vst/hosting/parameterchanges.cpp
     ${sdk}/public.sdk/source/vst/hosting/pluginterfacesupport.cpp
     ${sdk}/public.sdk/source/vst/utility/stringconvert.cpp
     ${sdk}/public.sdk/source/vst/vstinitiids.cpp)
@@ -45,7 +44,8 @@ target_include_directories(symbolengine_host SYSTEM PRIVATE ${sdk})
 
 if(SYMBOLENGINE_TESTS)
     add_subdirectory(Tests/Vst3)
-    symbolengine_add_tests(host SOURCES Tests/ParameterTests.cpp Tests/PluginLifeTests.cpp Tests/Vst3Tests.cpp)
+    symbolengine_add_tests(host SOURCES Tests/Allocations.cpp Tests/ParameterTests.cpp Tests/PluginLifeTests.cpp
+                                    Tests/Vst3Tests.cpp)
     target_compile_definitions(symbolengine_host_tests PRIVATE
         "SYMBOLENGINE_TEST_VST3=\"$<TARGET_GENEX_EVAL:symbolengine_test_vst3,$<TARGET_PROPERTY:symbolengine_test_vst3,SYMBOLENGINE_BUNDLE>>\""
         "SYMBOLENGINE_TEST_VST3_LOG=\"${CMAKE_CURRENT_BINARY_DIR}/test-vst3-log.txt\""

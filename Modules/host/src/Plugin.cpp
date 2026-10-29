@@ -11,6 +11,7 @@
 #include <deque>
 #include <exception>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -24,6 +25,20 @@ namespace
 // Set while the calling thread is inside a plugin's process call, so a notice the plugin sends from there is only
 // recorded, never posted, which would allocate on the audio thread.
 thread_local bool insideProcess = false;
+
+// Bits of a plugin's pending notices the host keeps for itself: its own edits waiting, and values from the audio thread
+// waiting to be shown.
+constexpr std::uint32_t editsWaiting = 1u << 30, valuesWaiting = 1u << 31;
+
+std::int64_t ticksNow() noexcept
+{
+    return std::chrono::steady_clock::now().time_since_epoch().count();
+}
+
+std::int64_t ticksIn(std::chrono::milliseconds wait)
+{
+    return ticksNow() + std::chrono::duration_cast<std::chrono::steady_clock::duration>(wait).count();
+}
 
 }
 
@@ -85,6 +100,45 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     std::map<std::uint32_t, double> values;
     std::vector<PluginParameterChange> unheard;
 
+    // The parameter being shown a value, an edit of which the plugin makes meanwhile being an echo of it, and until
+    // when its own edits aren't the user's, after its state is given.
+    std::atomic<std::int64_t> showing{-1}, quietUntil{0};
+
+    // The plugin's own edits, from any thread, and whether each was the user's, until the main thread takes them; room
+    // made as the plugin is made, so one from inside processing allocates nothing, and is passed over if the lock is
+    // held just then.
+    static constexpr std::size_t editRoom = 1024;
+    std::mutex editLock;
+    std::vector<std::pair<PluginEdit, bool>> edits = [] {
+        std::vector<std::pair<PluginEdit, bool>> room;
+        room.reserve(editRoom);
+        return room;
+    }();
+
+    // The parameters as the audio thread knows them, each with the last value the program's automation gave it and
+    // the last its processing reported, kept for the main thread to show. A new table is swapped in when they change,
+    // the old ones kept until the audio thread is next out of the plugin.
+    struct Slot
+    {
+        std::atomic<double> automated{0.0}, reported{0.0};
+        std::atomic<bool> automatedWaiting{false}, reportedWaiting{false};
+    };
+
+    struct Table
+    {
+        std::vector<std::uint32_t> ids;
+        std::unique_ptr<Slot[]> slots;
+
+        Slot* find(std::uint32_t id) const noexcept
+        {
+            const auto found = std::lower_bound(ids.begin(), ids.end(), id);
+            return found != ids.end() && *found == id ? &slots[static_cast<std::size_t>(found - ids.begin())] : nullptr;
+        }
+    };
+
+    std::atomic<Table*> table{nullptr};
+    std::vector<std::unique_ptr<Table>> tables;
+
     // Shared with the audio thread.
     std::atomic<State> state{State::making};
     std::atomic<bool> accepting{false}, inProcess{false}, processing{false};
@@ -97,7 +151,9 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     // on, and the count of blocks played, by which the main thread knows a block has carried them.
     static constexpr std::size_t changesPerBlock = 1024;
     LockFreeFifo<PluginParameterChange> toAudio{changesPerBlock};
-    std::vector<PluginParameterChange> blockChanges = std::vector<PluginParameterChange>(changesPerBlock);
+    std::vector<PluginParameterChange> blockChanges =
+        std::vector<PluginParameterChange>(static_cast<std::size_t>(maximumBlockChanges));
+    std::vector<PluginParameterChange> reportedRoom = std::vector<PluginParameterChange>(256);
     std::atomic<std::uint64_t> blocksPlayed{0};
 
     // Notices, recorded from any thread and acted on from the main thread.
@@ -107,6 +163,40 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     void notice(PluginNotice what) noexcept override
     {
         pending.fetch_or(static_cast<std::uint32_t>(what));
+
+        if (insideProcess)
+        {
+            host->audioNotices = true;
+            return;
+        }
+
+        scheduleNotices();
+    }
+
+    void edit(const PluginEdit& edit) noexcept override
+    {
+        // Made while the host shows the plugin a value for the same parameter, an echo of it: not answered.
+        if (!insideProcess && showing.load() == static_cast<std::int64_t>(edit.id) && host->onMainThread())
+            return;
+
+        const bool byUser = ticksNow() >= quietUntil.load();
+        std::unique_lock held(editLock, std::defer_lock);
+
+        if (insideProcess)
+        {
+            if (!held.try_lock())
+                return;
+        }
+        else
+        {
+            held.lock();
+        }
+
+        if (edits.size() < editRoom)
+            edits.emplace_back(edit, byUser);
+
+        held.unlock();
+        pending.fetch_or(editsWaiting);
 
         if (insideProcess)
         {
@@ -238,6 +328,9 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
         for (PluginParameterChange change; toAudio.pop(change);)
             keepUnheard(change);
 
+        // Tables the audio thread can no longer be reading.
+        std::erase_if(tables, [this](const std::unique_ptr<Table>& old) { return old.get() != table.load(); });
+
         if (processing.exchange(false))
             return call("stopProcessing", [this] { instance->stopProcessing(); });
 
@@ -275,6 +368,115 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
             for (const auto& parameter : parameterList)
                 values[parameter.id] = instance->parameterValue(parameter.id);
         });
+
+        showAudioValues();
+        auto made = std::make_unique<Table>();
+
+        for (const auto& parameter : parameterList)
+            made->ids.push_back(parameter.id);
+
+        std::sort(made->ids.begin(), made->ids.end());
+        made->ids.erase(std::unique(made->ids.begin(), made->ids.end()), made->ids.end());
+        made->slots = std::make_unique<Slot[]>(made->ids.size());
+        table = made.get();
+        tables.push_back(std::move(made));
+    }
+
+    const PluginParameter* known(std::uint32_t id) const
+    {
+        const auto found = std::find_if(parameterList.begin(), parameterList.end(),
+                                        [id](const PluginParameter& parameter) { return parameter.id == id; });
+        return found != parameterList.end() ? &*found : nullptr;
+    }
+
+    // Shows the plugin a value, an edit it makes of the same parameter meanwhile being an echo.
+    bool show(std::uint32_t id, double value)
+    {
+        showing = static_cast<std::int64_t>(id);
+        const bool fine = call("setParameter", [&] { instance->showParameterValue(id, value); });
+        showing = -1;
+        return fine;
+    }
+
+    // To the audio thread while it may be playing the plugin; kept for a flush while nothing does.
+    void giveToAudio(const PluginParameterChange& change)
+    {
+        if (!accepting || !toAudio.push(change))
+            keepUnheard(change);
+    }
+
+    void tellEdit(const PluginEdit& edit, bool byUser)
+    {
+        host->post([weak = weak_from_this(), edit, byUser] {
+            if (const auto inner = weak.lock();
+                inner != nullptr && inner->owner != nullptr && inner->owner->onEdit != nullptr)
+                inner->owner->onEdit(edit, byUser);
+        });
+    }
+
+    // Values the audio thread kept: the program's automation, shown to the plugin, and values the plugin's processing
+    // reported, shown to it and told to the program.
+    void showAudioValues()
+    {
+        const auto* const now = table.load();
+
+        if (now == nullptr)
+            return;
+
+        for (std::size_t i = 0; i < now->ids.size() && state != State::failed; ++i)
+        {
+            auto& slot = now->slots[i];
+            const auto id = now->ids[i];
+
+            if (slot.automatedWaiting.exchange(false))
+            {
+                values[id] = slot.automated.load();
+                show(id, values[id]);
+            }
+
+            if (slot.reportedWaiting.exchange(false))
+            {
+                values[id] = slot.reported.load();
+                show(id, values[id]);
+                tellEdit({PluginEdit::Kind::reported, id, values[id]}, false);
+            }
+        }
+    }
+
+    // The plugin's own edits: each value given to its processing, and shown to it if it doesn't show it already, and
+    // every one told to the program; edits of parameters it never listed passed over.
+    void takeEdits()
+    {
+        std::vector<std::pair<PluginEdit, bool>> taken;
+        {
+            const std::lock_guard held(editLock);
+            taken.assign(edits.begin(), edits.end());
+            edits.clear();
+        }
+
+        for (const auto& [edit, byUser] : taken)
+        {
+            if (state == State::failed)
+                return;
+
+            if (known(edit.id) == nullptr)
+                continue;
+
+            if (edit.kind == PluginEdit::Kind::value)
+            {
+                values[edit.id] = edit.value;
+                giveToAudio({edit.id, 0, edit.value});
+                double shown = edit.value;
+
+                if (!call("parameterValue", [&] { shown = instance->parameterValue(edit.id); }))
+                    return;
+
+                if (shown != edit.value && !show(edit.id, edit.value))
+                    return;
+            }
+
+            tellEdit(edit, byUser);
+        }
     }
 
     bool deactivate()
@@ -408,7 +610,17 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
             return;
         }
 
-        const auto what = static_cast<PluginNotice>(pending.exchange(0));
+        const auto raw = pending.exchange(0);
+        const auto what = static_cast<PluginNotice>(raw);
+
+        if ((raw & valuesWaiting) != 0)
+            showAudioValues();
+
+        if ((raw & editsWaiting) != 0)
+            takeEdits();
+
+        if (state == State::failed)
+            return;
 
         if (has(what, PluginNotice::buses) || has(what, PluginNotice::latency))
         {
@@ -454,7 +666,7 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
         if (has(what, PluginNotice::values))
             tell(PluginChange::values);
 
-        if (has(what, PluginNotice::state))
+        if (has(what, PluginNotice::state) && ticksNow() >= quietUntil.load())
             tell(PluginChange::state);
 
         if (has(what, PluginNotice::reload))
@@ -763,8 +975,13 @@ bool Plugin::loadState(std::string_view state, PluginStateUse use)
     PluginError error;
     bool loaded = false;
 
+    // The plugin's edits and its state changing as it takes the state, and for a while after, aren't the user's.
+    inner->quietUntil = ticksIn(std::chrono::milliseconds(250));
+
     if (!inner->call("loadState", [&] { loaded = inner->instance->setState(state, use, error); }))
         return false;
+
+    inner->quietUntil = ticksIn(std::chrono::milliseconds(250));
 
     if (!loaded)
         inner->problem = error ? error : PluginError{"It didn't take the state.", "loadState", 0};
@@ -813,15 +1030,10 @@ bool Plugin::setParameter(std::uint32_t id, double value)
     value = std::clamp(value, 0.0, 1.0);
     inner->values[id] = value;
 
-    if (!inner->call("setParameter", [&] { inner->instance->showParameterValue(id, value); }))
+    if (!inner->show(id, value))
         return false;
 
-    // To the audio thread while it may be playing the plugin; kept for a flush while nothing does.
-    const PluginParameterChange change{id, 0, value};
-
-    if (!inner->accepting || !inner->toAudio.push(change))
-        inner->keepUnheard(change);
-
+    inner->giveToAudio({id, 0, value});
     return true;
 }
 
@@ -856,6 +1068,12 @@ void Plugin::whenFree(std::function<void()> then)
 
 void Plugin::process(float* const* channels, int channelCount, int frames) noexcept
 {
+    process(channels, channelCount, frames, nullptr, 0);
+}
+
+void Plugin::process(float* const* channels, int channelCount, int frames, const PluginParameterChange* changes,
+                     int changeCount) noexcept
+{
     auto& held = *inner;
 
     if (channelCount <= 0 || frames <= 0)
@@ -881,6 +1099,9 @@ void Plugin::process(float* const* channels, int channelCount, int frames) noexc
     const int ins = static_cast<int>(held.inputs.size());
     const int outs = static_cast<int>(held.outputs.size());
     const int most = std::max(1, held.setup.maximumFrames);
+    const auto* const known = held.table.load();
+    bool valuesKept = false;
+    int next = 0;
 
     for (int offset = 0; offset < frames; offset += most)
     {
@@ -893,11 +1114,43 @@ void Plugin::process(float* const* channels, int channelCount, int frames) noexc
         for (auto& output : held.outputs)
             std::fill_n(output.begin(), count, 0.0f);
 
-        // The changes the main thread set since the last block, at the start of this one.
-        const auto changes = offset == 0 ? held.toAudio.read(held.blockChanges.data(), held.blockChanges.size()) : 0;
-        const PluginBlock block{held.inputPointers.data(), held.outputPointers.data(), ins, outs, count,
-                                held.blockChanges.data(),  static_cast<int>(changes)};
+        // The changes the main thread set since the last block, at the start of this one, then the program's that fall
+        // in it, at their frames within it, each kept to be shown to the plugin; any for a parameter it doesn't have
+        // passed over.
+        auto given = offset == 0 ? held.toAudio.read(held.blockChanges.data(), Inner::changesPerBlock) : 0;
+
+        for (; next < changeCount && std::clamp(changes[next].offset, 0, frames - 1) < offset + count; ++next)
+        {
+            auto* const slot = known != nullptr ? known->find(changes[next].id) : nullptr;
+
+            if (slot == nullptr || given == held.blockChanges.size())
+                continue;
+
+            held.blockChanges[given++] = {changes[next].id, std::clamp(changes[next].offset - offset, 0, count - 1),
+                                          changes[next].value};
+            slot->automated.store(changes[next].value);
+            slot->automatedWaiting.store(true);
+            valuesKept = true;
+        }
+
+        PluginBlock block{held.inputPointers.data(),
+                          held.outputPointers.data(),
+                          ins,
+                          outs,
+                          count,
+                          held.blockChanges.data(),
+                          static_cast<int>(given),
+                          held.reportedRoom.data(),
+                          static_cast<int>(held.reportedRoom.size())};
         const bool fine = plugin->process(block);
+
+        for (int r = 0; r < std::min(block.reportedCount, block.reportedRoom); ++r)
+            if (auto* const slot = known != nullptr ? known->find(block.reported[r].id) : nullptr)
+            {
+                slot->reported.store(block.reported[r].value);
+                slot->reportedWaiting.store(true);
+                valuesKept = true;
+            }
 
         // A plugin's changes to the thread's floating-point modes go no further than its own call.
         if (floatingPointModes() != modes)
@@ -910,6 +1163,12 @@ void Plugin::process(float* const* channels, int channelCount, int frames) noexc
         for (int c = 0; c < channelCount; ++c)
             std::copy_n(held.outputs[static_cast<std::size_t>(std::min(c, outs - 1))].begin(), count,
                         channels[c] + offset);
+    }
+
+    if (valuesKept)
+    {
+        held.pending.fetch_or(valuesWaiting);
+        held.host->audioNotices = true;
     }
 
     ++held.blocksPlayed;

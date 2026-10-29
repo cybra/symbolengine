@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
@@ -165,21 +166,37 @@ public:
         for (int32 i = 0; i < data.numOutputs; ++i)
             check(data.outputs[i], audioOutputs[static_cast<std::size_t>(i)]);
 
-        // The gain heard from the host's changes, the last point of its queue, whatever the block's length.
+        // Each parameter's changes in a queue of their own, at frames within the block, in order.
+        gainChanges = nullptr;
+
         if (data.inputParameterChanges != nullptr)
             for (int32 q = 0; q < data.inputParameterChanges->getParameterCount(); ++q)
-                if (auto* changes = data.inputParameterChanges->getParameterData(q);
-                    changes != nullptr && changes->getParameterId() == testIds::gainParameter &&
-                    changes->getPointCount() > 0)
+                if (auto* changes = data.inputParameterChanges->getParameterData(q); changes != nullptr)
                 {
-                    int32 offset = 0;
-                    ParamValue value = 0.0;
-                    changes->getPoint(changes->getPointCount() - 1, offset, value);
-                    gain = static_cast<float>(value);
+                    checkQueue(*changes, data.numSamples);
+
+                    if (changes->getParameterId() == testIds::gainParameter)
+                        gainChanges = changes;
                 }
 
         if (data.numSamples > 0 && data.numInputs > 0 && data.numOutputs > 0)
+        {
             play(data);
+
+            // Its output's peak, reported as its meter.
+            int32 index = 0;
+
+            if (data.outputParameterChanges != nullptr)
+                if (auto* meter = data.outputParameterChanges->addParameterData(testIds::meterParameter, index))
+                    meter->addPoint(0, peak, index);
+        }
+        else if (gainChanges != nullptr && gainChanges->getPointCount() > 0)
+        {
+            int32 offset = 0;
+            ParamValue value = 0.0;
+            gainChanges->getPoint(gainChanges->getPointCount() - 1, offset, value);
+            gain = static_cast<float>(value);
+        }
 
         return kResultOk;
     }
@@ -225,19 +242,67 @@ protected:
         return AudioEffect::setBusArrangements(inputs, ins, outputs, outs);
     }
 
-    // The input at its gain, half to begin with, channel for channel, on the main buses.
+    // The input at its gain, half to begin with, changing at the frame of each change to it, channel for channel, on
+    // the main buses.
     virtual void play(ProcessData& data)
     {
         const auto& in = data.inputs[0];
         auto& out = data.outputs[0];
+        const int32 points = gainChanges != nullptr ? gainChanges->getPointCount() : 0;
+        int32 next = 0;
+        float level = gain;
+        peak = 0.0f;
 
-        for (int32 c = 0; c < out.numChannels; ++c)
-            for (int32 i = 0; i < data.numSamples; ++i)
+        for (int32 i = 0; i < data.numSamples; ++i)
+        {
+            for (int32 offset = 0; next < points; ++next)
+            {
+                ParamValue value = 0.0;
+                gainChanges->getPoint(next, offset, value);
+
+                if (offset > i)
+                    break;
+
+                level = static_cast<float>(value);
+            }
+
+            for (int32 c = 0; c < out.numChannels; ++c)
+            {
                 out.channelBuffers32[c][i] =
-                    in.numChannels > 0 ? gain * in.channelBuffers32[std::min(c, in.numChannels - 1)][i] : 0.0f;
+                    in.numChannels > 0 ? level * in.channelBuffers32[std::min(c, in.numChannels - 1)][i] : 0.0f;
+                peak = std::max(peak, std::abs(out.channelBuffers32[c][i]));
+            }
+        }
+
+        gain = level;
+    }
+
+    // A queue's points lie within the block, the first frame for a call with no samples, in order.
+    void checkQueue(IParamValueQueue& changes, int32 frames) const
+    {
+        int32 last = -1;
+
+        for (int32 p = 0; p < changes.getPointCount(); ++p)
+        {
+            int32 offset = 0;
+            ParamValue value = 0.0;
+
+            if (changes.getPoint(p, offset, value) != kResultOk)
+                misuse(plugin, "given a point it couldn't read");
+
+            if (offset < 0 || offset >= std::max(1, frames) || offset <= last)
+                misuse(plugin, "given a change outside its block or out of order");
+
+            if (!(value >= 0.0 && value <= 1.0))
+                misuse(plugin, "given a value outside 0 to 1");
+
+            last = offset;
+        }
     }
 
     std::atomic<float> gain{0.5f};
+    float peak = 0.0f;
+    IParamValueQueue* gainChanges = nullptr;
 
     void onMain(const char* call) const
     {
@@ -300,7 +365,92 @@ public:
                                 ParameterInfo::kCanAutomate | ParameterInfo::kIsBypass, testIds::bypassParameter);
         parameters.addParameter(STR16("Program"), nullptr, 3, 0.0, ParameterInfo::kIsProgramChange,
                                 testIds::programParameter);
+        parameters.addParameter(STR16("Edit"), nullptr, 0, 0.0, ParameterInfo::kIsHidden, testIds::editParameter);
+        parameters.addParameter(STR16("Dirty"), nullptr, 0, 0.0, ParameterInfo::kIsHidden, testIds::dirtyParameter);
+        parameters.addParameter(STR16("Echo"), nullptr, 0, 0.0, ParameterInfo::kCanAutomate, testIds::echoParameter);
+        parameters.addParameter(STR16("Rounded echo"), nullptr, 0, 0.0, ParameterInfo::kCanAutomate,
+                                testIds::roundedEchoParameter);
         return kResultOk;
+    }
+
+    tresult PLUGIN_API setParamNormalized(ParamID id, ParamValue value) override
+    {
+        const auto result = EditController::setParamNormalized(id, value);
+
+        if (componentHandler == nullptr)
+            return result;
+
+        if (id == testIds::editParameter)
+        {
+            componentHandler->beginEdit(testIds::gainParameter);
+            componentHandler->performEdit(testIds::gainParameter, value);
+            componentHandler->endEdit(testIds::gainParameter);
+            componentHandler->performEdit(testIds::unlistedParameter, 0.5);
+        }
+
+        if (id == testIds::dirtyParameter)
+            if (FUnknownPtr<IComponentHandler2> handler(componentHandler); handler)
+                for (int i = 0; i < 100; ++i)
+                    handler->setDirty(true);
+
+        if (id == testIds::echoParameter)
+        {
+            ++echoes;
+            componentHandler->performEdit(id, value);
+        }
+
+        if (id == testIds::roundedEchoParameter)
+        {
+            ++roundedEchoes;
+            componentHandler->performEdit(id, static_cast<float>(value));
+        }
+
+        return result;
+    }
+
+    tresult PLUGIN_API getParamStringByValue(ParamID id, ParamValue value, String128 string) override
+    {
+        if (id != testIds::queryParameter)
+            return EditController::getParamStringByValue(id, value, string);
+
+        char text[128];
+        std::snprintf(text, sizeof text, "gain=%.6f meter=%.6f echo=%d rounded=%d",
+                      getParamNormalized(testIds::gainParameter), getParamNormalized(testIds::meterParameter),
+                      echoes.load(), roundedEchoes.load());
+
+        for (std::size_t i = 0; i < sizeof text; ++i)
+            if ((string[i] = static_cast<TChar>(text[i])) == 0)
+                break;
+
+        return kResultOk;
+    }
+
+private:
+    std::atomic<int> echoes{0}, roundedEchoes{0};
+};
+
+// A plugin with a thousand parameters, all automatable, its processing the gain's.
+class Many : public Checked
+{
+public:
+    Many() : Checked("Many", FUID(SYMBOLENGINE_TEST_ID(0x0B))) {}
+    static FUnknown* make(void*) { return static_cast<IAudioProcessor*>(new Many); }
+};
+
+class ManyController : public EditController
+{
+public:
+    static FUnknown* make(void*) { return static_cast<IEditController*>(new ManyController); }
+
+    tresult PLUGIN_API initialize(FUnknown* context) override
+    {
+        const auto result = EditController::initialize(context);
+
+        for (unsigned id = 1; result == kResultOk && id <= testIds::manyParameters; ++id)
+            parameters.addParameter(STR16("Many"), nullptr, 0, 0.0, ParameterInfo::kCanAutomate,
+                                    static_cast<int32>(id));
+
+        return result;
     }
 };
 
@@ -448,6 +598,10 @@ DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x05), PClassInfo::kMa
            "No output", 0, "Fx", "1.0.0", kVstVersionString, NoOutput::make)
 DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x06), PClassInfo::kManyInstances, kVstAudioEffectClass,
            "Latency", 0, "Fx", "1.0.0", kVstVersionString, Latency::make)
+DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x0A), PClassInfo::kManyInstances, kVstAudioEffectClass,
+           "Many", 0, "Fx", "1.0.0", kVstVersionString, Many::make)
+DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x0B), PClassInfo::kManyInstances,
+           kVstComponentControllerClass, "Many Controller", 0, "", "1.0.0", kVstVersionString, ManyController::make)
 DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x09), PClassInfo::kManyInstances, kVstAudioEffectClass,
            "Skips empty", 0, "Fx", "1.0.0", kVstVersionString, SkipsEmpty::make)
 DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x08), PClassInfo::kManyInstances, kVstAudioEffectClass,

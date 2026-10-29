@@ -8,6 +8,11 @@
 namespace symbolengine
 {
 
+namespace
+{
+class FakePlugin;
+}
+
 struct FakePluginFormat::Shared
 {
     std::function<bool()> onMainThread;
@@ -17,7 +22,14 @@ struct FakePluginFormat::Shared
     std::map<std::string, Script> scripts;
     std::map<std::string, std::vector<std::string>> calls;
     std::vector<std::string> misuses;
-    std::vector<std::pair<std::string, PluginFormatClient*>> live;
+    struct Live
+    {
+        std::string id;
+        PluginFormatClient* client = nullptr;
+        FakePlugin* plugin = nullptr;
+    };
+
+    std::vector<Live> live;
     bool allOnMain = true;
 
     void record(const std::string& id, std::string call)
@@ -54,7 +66,7 @@ public:
             heard[parameter.id] = parameter.defaultValue;
 
         const std::lock_guard held(shared->lock);
-        shared->live.emplace_back(id, &client);
+        shared->live.push_back({id, &client, this});
     }
 
     ~FakePlugin() override
@@ -67,7 +79,9 @@ public:
         {
             const std::lock_guard held(shared->lock);
             shared->allOnMain = shared->allOnMain && shared->onMainThread();
-            const auto me = std::find(shared->live.begin(), shared->live.end(), std::make_pair(id, &client));
+            const auto me =
+                std::find_if(shared->live.begin(), shared->live.end(),
+                             [this](const FakePluginFormat::Shared::Live& one) { return one.plugin == this; });
 
             if (me != shared->live.end())
                 shared->live.erase(me);
@@ -171,7 +185,7 @@ public:
         processing = false;
     }
 
-    bool process(const PluginBlock& block) noexcept override
+    bool process(PluginBlock& block) noexcept override
     {
         const Audio call(*this, "process");
 
@@ -184,11 +198,23 @@ public:
         if (block.inputChannels != layout.inputs || block.outputChannels != layout.outputs)
             misuse("given other channels than its layout");
 
-        hear(block.changes, block.changeCount);
+        for (int i = 0, last = 0; i < block.changeCount; ++i)
+        {
+            if (block.changes[i].offset < last || block.changes[i].offset >= std::max(1, block.frames))
+                misuse("given a change outside its block or out of order");
+
+            last = block.changes[i].offset;
+        }
+
         const auto length = static_cast<std::size_t>(std::max(1, script.latency));
+        int next = 0;
 
         for (int i = 0; i < block.frames; ++i)
         {
+            // Each change heard at its frame.
+            for (; next < block.changeCount && block.changes[next].offset <= i; ++next)
+                hear(&block.changes[next], 1);
+
             for (int c = 0; c < block.outputChannels; ++c)
             {
                 const float in = block.inputChannels > 0
@@ -210,6 +236,13 @@ public:
             if (script.latency > 0)
                 delayAt = (delayAt + 1) % length;
         }
+
+        hear(block.changes + next, block.changeCount - next);
+        block.reportedCount = 0;
+
+        for (const auto& report : script.reports)
+            if (block.reportedCount < block.reportedRoom)
+                block.reported[block.reportedCount++] = report;
 
         return true;
     }
@@ -244,6 +277,7 @@ public:
     double parameterValue(std::uint32_t parameterId) override
     {
         const Main call(*this, "parameterValue", false);
+        const std::lock_guard held(shownLock);
         const auto found = shown.find(parameterId);
 
         if (found != shown.end())
@@ -259,7 +293,27 @@ public:
     void showParameterValue(std::uint32_t parameterId, double value) override
     {
         const Main call(*this, "showParameterValue", false);
-        shown[parameterId] = value;
+        {
+            const std::lock_guard held(shownLock);
+            shown[parameterId] = value;
+        }
+
+        // Edited back to the host, as some plugins do.
+        if (script.echoes > 0)
+            client.edit({PluginEdit::Kind::value, parameterId,
+                         script.echoes == 2 ? static_cast<double>(static_cast<float>(value)) : value});
+    }
+
+    // An edit of its own, from any thread, as its window makes: the value it shows follows, unless it forgets.
+    void ownEdit(const PluginEdit& edit)
+    {
+        if (edit.kind == PluginEdit::Kind::value && !script.forgetsOwnEdits)
+        {
+            const std::lock_guard held(shownLock);
+            shown[edit.id] = edit.value;
+        }
+
+        client.edit(edit);
     }
 
     std::string parameterText(std::uint32_t parameterId, double value) override
@@ -389,6 +443,7 @@ private:
     std::vector<std::vector<float>> delay;
     std::size_t delayAt = 0;
     std::map<std::uint32_t, double> heard, shown;
+    std::mutex shownLock;
 };
 
 }
@@ -408,13 +463,22 @@ void FakePluginFormat::script(const std::string& id, Script script)
     shared->scripts[id] = std::move(script);
 }
 
+void FakePluginFormat::edit(const std::string& id, const PluginEdit& edit)
+{
+    const std::lock_guard held(shared->lock);
+
+    for (const auto& one : shared->live)
+        if (one.id == id)
+            one.plugin->ownEdit(edit);
+}
+
 void FakePluginFormat::notify(const std::string& id, PluginNotice what)
 {
     const std::lock_guard held(shared->lock);
 
-    for (const auto& [name, client] : shared->live)
-        if (name == id)
-            client->notice(what);
+    for (const auto& one : shared->live)
+        if (one.id == id)
+            one.client->notice(what);
 }
 
 PluginDescription FakePluginFormat::describe(const std::string& id)

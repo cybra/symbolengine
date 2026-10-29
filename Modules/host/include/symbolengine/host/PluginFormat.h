@@ -98,8 +98,12 @@ struct PluginParameterChange
     double value = 0.0;
 };
 
-/** One block for a plugin's process call: a buffer for each channel of its main buses, as its layout says, and the
-    parameters changed for it, in order. */
+/** The most parameter changes a block carries, which a format makes room for when a plugin is activated. */
+constexpr int maximumBlockChanges = 4096;
+
+/** One block for a plugin's process call: a buffer for each channel of its main buses, as its layout says; the
+    parameters changed for it, in order of their frames, at most maximumBlockChanges; and room for the values its
+    processing reports, as a meter's, the last of each parameter's, where the format says how many it put. */
 struct PluginBlock
 {
     const float* const* inputs = nullptr;
@@ -109,6 +113,28 @@ struct PluginBlock
     int frames = 0;
     const PluginParameterChange* changes = nullptr;
     int changeCount = 0;
+    PluginParameterChange* reported = nullptr;
+    int reportedRoom = 0;
+    int reportedCount = 0;
+};
+
+/** A parameter the plugin moved itself: the begin and end of a gesture in its own window around the values it set,
+    or a value its processing reports, as a meter's. */
+struct PluginEdit
+{
+    enum class Kind
+    {
+        begin,
+        value,
+        end,
+        reported,
+    };
+
+    Kind kind = Kind::value;
+    std::uint32_t id = 0;
+    double value = 0.0;
+
+    bool operator==(const PluginEdit&) const = default;
 };
 
 /** Which state is asked for: a document's, kept with a project or a saved group; a preset's; or one for a copy made to
@@ -159,6 +185,9 @@ class PluginFormatClient
 public:
     virtual void notice(PluginNotice what) noexcept = 0;
 
+    /** The plugin's own edit of a parameter, from its window or elsewhere: a gesture's begin, value or end. */
+    virtual void edit(const PluginEdit& edit) noexcept = 0;
+
     virtual ~PluginFormatClient() = default;
 };
 
@@ -189,8 +218,9 @@ public:
     virtual void startProcessing() noexcept = 0;
     virtual void stopProcessing() noexcept = 0;
 
-    /** Processes a block on the audio thread, giving false if it failed, after which its output isn't heard. */
-    virtual bool process(const PluginBlock& block) noexcept = 0;
+    /** Processes a block on the audio thread, giving false if it failed, after which its output isn't heard, and
+        putting the values its processing reports in the block's room for them. */
+    virtual bool process(PluginBlock& block) noexcept = 0;
 
     /** Hands it parameters' new values while it is active and not processing, so its processing has them as it would
         after a block, as before its state is taken. */

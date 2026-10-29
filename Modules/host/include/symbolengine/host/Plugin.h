@@ -123,6 +123,11 @@ public:
     /** Told on the main thread of what happens to it. Set as make() returns, before it is made. */
     std::function<void(PluginChange)> onChange;
 
+    /** Told on the main thread of a parameter the plugin moved itself, and whether it was the user's doing, for which
+        the program marks its document changed: a reported value isn't, nor is an edit within 250 ms of its state
+        being given, in which time it saying its state changed isn't told either. */
+    std::function<void(const PluginEdit& edit, bool byUser)> onEdit;
+
     /** The layout it settled on: stereo where it takes it, else mono in and stereo out, else mono, else its own. */
     PluginLayout layout() const;
 
@@ -170,6 +175,11 @@ public:
         layout fitted to them. While it can't be called, being made, prepared or taken down, or failed, the block
         passes as it came. */
     void process(float* const* channels, int channelCount, int frames) noexcept;
+
+    /** The same, with the program's own changes to its parameters for the block, as its automation gives them, in
+        order of their frames, which the plugin hears at those frames and is shown on the main thread. */
+    void process(float* const* channels, int channelCount, int frames, const PluginParameterChange* changes,
+                 int changeCount) noexcept;
 
     struct Inner;
 

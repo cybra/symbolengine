@@ -3,6 +3,7 @@
 #include <symbolengine/host/Plugin.h>
 #include <symbolengine/host/Vst3Format.h>
 
+#include "Allocations.h"
 #include "TestMainThread.h"
 #include "Vst3/TestIds.h"
 
@@ -229,7 +230,7 @@ TEST_CASE("A VST3 plugin's parameters are listed in its order, known by their ID
     auto plugin = rig.made(testIds::gain);
     const auto parameters = plugin->parameters();
 
-    REQUIRE(parameters.size() == 5);
+    REQUIRE(parameters.size() == 9);
     CHECK(parameters[0].id == testIds::gainParameter);
     CHECK(parameters[0].name == "Gain");
     CHECK(parameters[0].units == "x");
@@ -290,5 +291,145 @@ TEST_CASE("A value set while a device plays reaches a VST3 plugin within a block
     audio.join();
 
     CHECK(playedIt);
+    CHECK(misuses().empty());
+}
+
+namespace
+{
+
+using Told = std::vector<std::pair<PluginEdit, bool>>;
+constexpr auto begin = PluginEdit::Kind::begin, value = PluginEdit::Kind::value, end = PluginEdit::Kind::end,
+               reported = PluginEdit::Kind::reported;
+
+}
+
+TEST_CASE("A VST3 plugin's own gesture reaches its processor and the program, its controller is shown the value it "
+          "left as it was, and its edit of a parameter it never listed is passed over")
+{
+    Rig rig;
+    auto plugin = rig.made(testIds::gain);
+    Told told;
+    plugin->onEdit = [&told](const PluginEdit& edit, bool byUser) { told.emplace_back(edit, byUser); };
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+
+    REQUIRE(plugin->setParameter(testIds::editParameter, 0.75));
+    REQUIRE(rig.main.turnUntil([&] { return told.size() >= 3; }));
+    rig.main.settle();
+
+    CHECK(told == Told{{{begin, testIds::gainParameter, 0.0}, true},
+                       {{value, testIds::gainParameter, 0.75}, true},
+                       {{end, testIds::gainParameter, 0.0}, true}});
+    CHECK(plugin->parameter(testIds::gainParameter) == 0.75);
+    CHECK(through(*plugin, 64) == std::vector<float>{0.75f, 1.5f});
+    CHECK(plugin->parameterText(testIds::queryParameter, 0.0).find("gain=0.750000") != std::string::npos);
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("A VST3 controller that edits back the value it is given is given it once, with no loop, rounded or not")
+{
+    Rig rig;
+    auto plugin = rig.made(testIds::gain);
+    Told told;
+    plugin->onEdit = [&told](const PluginEdit& edit, bool byUser) { told.emplace_back(edit, byUser); };
+
+    REQUIRE(plugin->setParameter(testIds::echoParameter, 0.3));
+    REQUIRE(plugin->setParameter(testIds::roundedEchoParameter, 0.3));
+
+    for (int i = 0; i < 20; ++i)
+        rig.main.settle();
+
+    const auto text = plugin->parameterText(testIds::queryParameter, 0.0);
+    INFO(text);
+    CHECK(text.find("echo=1 rounded=1") != std::string::npos);
+    CHECK(told.empty());
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("A VST3 processor's reported values reach its controller and the program, never as the user's")
+{
+    Rig rig;
+    auto plugin = rig.made(testIds::gain);
+    Told told;
+    plugin->onEdit = [&told](const PluginEdit& edit, bool byUser) { told.emplace_back(edit, byUser); };
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+
+    through(*plugin, 64);
+    REQUIRE(rig.main.turnUntil([&] { return !told.empty(); }, 2s));
+    rig.main.settle();
+
+    CHECK(told.front() == std::make_pair(PluginEdit{reported, testIds::meterParameter, 1.0}, false));
+    CHECK(plugin->parameter(testIds::meterParameter) == 1.0);
+    CHECK(plugin->parameterText(testIds::queryParameter, 0.0).find("meter=1.000000") != std::string::npos);
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("A VST3 plugin saying its state changed a hundred times at once is told once")
+{
+    Rig rig;
+    auto plugin = rig.made(testIds::gain);
+
+    REQUIRE(plugin->setParameter(testIds::dirtyParameter, 1.0));
+    rig.main.settle();
+
+    CHECK(std::count(rig.changes.begin(), rig.changes.end(), PluginChange::state) == 1);
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("The program's automation reaches a VST3 processor at its frames, in a block split for it")
+{
+    Rig rig;
+    auto plugin = rig.made(testIds::gain);
+    REQUIRE(plugin->prepare({48000.0, 32, false}));
+    std::vector<float> left(64, 1.0f), right(64, 2.0f);
+    float* channels[] = {left.data(), right.data()};
+    const std::vector<PluginParameterChange> changes{{testIds::gainParameter, 16, 0.25},
+                                                     {testIds::gainParameter, 40, 1.0}};
+
+    plugin->process(channels, 2, 64, changes.data(), static_cast<int>(changes.size()));
+
+    CHECK(left[15] == 0.5f);
+    CHECK(left[16] == 0.25f);
+    CHECK(left[39] == 0.25f);
+    CHECK(left[40] == 1.0f);
+    CHECK(right[63] == 2.0f);
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("A thousand parameters automated every block, some many times, reach a VST3 plugin with nothing allocated "
+          "on the audio thread")
+{
+    Rig rig;
+    auto plugin = rig.made(testIds::many);
+    REQUIRE(plugin->parameters().size() == testIds::manyParameters);
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+
+    std::vector<PluginParameterChange> changes;
+
+    for (unsigned id = 1; id <= testIds::manyParameters; ++id)
+        changes.push_back({id, static_cast<int>(id % 64), (id % 100) / 100.0});
+
+    for (unsigned id = 1; id <= 50; ++id)
+        for (int point = 0; point < 8; ++point)
+            changes.push_back({id, point * 8 + 1, point / 8.0});
+
+    std::stable_sort(
+        changes.begin(), changes.end(),
+        [](const PluginParameterChange& a, const PluginParameterChange& b) { return a.offset < b.offset; });
+    std::vector<float> left(64, 1.0f), right(64, 2.0f);
+    float* channels[] = {left.data(), right.data()};
+    std::uint64_t counted = 0;
+
+    std::thread([&] {
+        const auto before = allocations::count();
+        {
+            const allocations::Counted counting;
+
+            for (int i = 0; i < 100; ++i)
+                plugin->process(channels, 2, 64, changes.data(), static_cast<int>(changes.size()));
+        }
+        counted = allocations::count() - before;
+    }).join();
+
+    CHECK(counted == 0);
     CHECK(misuses().empty());
 }

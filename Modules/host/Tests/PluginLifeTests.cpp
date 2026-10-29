@@ -311,10 +311,15 @@ TEST_CASE("A plugin's notices, from any thread and from inside its own calls, ar
         AudioThread audio(plugin);
         const auto until = std::chrono::steady_clock::now() + 1s;
 
+        // States given for the first half, the state it says changed after that being told once the 250 ms after
+        // the last have passed.
         while (std::chrono::steady_clock::now() < until)
         {
             rig.main.turn();
-            plugin->loadState("settings", PluginStateUse::document);
+
+            if (std::chrono::steady_clock::now() < until - 500ms)
+                plugin->loadState("settings", PluginStateUse::document);
+
             std::this_thread::sleep_for(1ms);
         }
 

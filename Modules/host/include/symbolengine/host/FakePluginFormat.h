@@ -32,6 +32,16 @@ public:
         std::vector<PluginParameter> parameters;
         std::uint32_t gainParameter = 0xFFFFFFFF;
 
+        /** Whether its own edits leave the value it shows as it was, as some plugins' do. */
+        bool forgetsOwnEdits = false;
+
+        /** Whether it edits a parameter back while it is shown a value for it: 0 not, 1 with the same value, 2 with
+            the value rounded to a float. */
+        int echoes = 0;
+
+        /** Values its processing reports every block, by parameter. */
+        std::vector<PluginParameterChange> reports;
+
         /** Fails to be made, or to be activated, saying so. */
         bool failToMake = false;
         bool failToActivate = false;
@@ -53,6 +63,10 @@ public:
 
     /** Tells the host of a change in every live plugin with this id, from any thread, as plugins do. */
     void notify(const std::string& id, PluginNotice what);
+
+    /** Edits a parameter in every live plugin with this id, from any thread, as a plugin's own window does, the value
+        it shows following unless its script says it forgets. */
+    void edit(const std::string& id, const PluginEdit& edit);
 
     /** The identity of a fake plugin with this id, as the host is to be given it. */
     static PluginDescription describe(const std::string& id);
