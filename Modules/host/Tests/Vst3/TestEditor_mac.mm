@@ -104,6 +104,16 @@ void ownSize(void* view, int& width, int& height)
     height = static_cast<int>(size.height);
 }
 
+bool awareAsParent(void*)
+{
+    return true;
+}
+
+bool takesDrops(void*)
+{
+    return true;
+}
+
 bool offscreenMoved(void* view)
 {
     auto* native = static_cast<Native*>(view);

@@ -37,24 +37,26 @@ set(sources
 set(libraries Threads::Threads)
 
 if(APPLE)
-    list(APPEND sources src/AudioUnitFormat.mm src/ProcessState_mac.mm src/ScanWorkerCrash_posix.cpp
-                        src/ScanWorkerLoop_mac.mm src/Vst3Module_mac.cpp src/Vst3View_mac.mm)
+    list(APPEND sources src/AudioUnitFormat.mm src/MainThread_other.cpp src/ProcessState_mac.mm
+                        src/ScanWorkerCrash_posix.cpp src/ScanWorkerLoop_mac.mm src/Vst3Module_mac.cpp
+                        src/Vst3View_mac.mm)
     list(APPEND libraries "-framework AppKit" "-framework AudioToolbox" "-framework CoreAudio" "-framework CoreFoundation"
                           "-framework CoreGraphics")
 elseif(WIN32)
-    list(APPEND sources src/ScanWorkerCrash_windows.cpp src/ScanWorkerLoop_windows.cpp src/Vst3Module_windows.cpp
-                        src/Vst3View_other.cpp)
+    list(APPEND sources src/MainThread_windows.cpp src/ScanWorkerCrash_windows.cpp src/ScanWorkerLoop_windows.cpp
+                        src/Vst3Module_windows.cpp src/Vst3View_windows.cpp)
     list(APPEND libraries ole32 user32 version)
 else()
-    list(APPEND sources src/ScanWorkerCrash_posix.cpp src/ScanWorkerLoop_other.cpp src/Vst3Module_linux.cpp
-                        src/Vst3View_other.cpp)
+    list(APPEND sources src/MainThread_other.cpp src/ScanWorkerCrash_posix.cpp src/ScanWorkerLoop_other.cpp
+                        src/Vst3Module_linux.cpp src/Vst3View_other.cpp)
     list(APPEND libraries ${CMAKE_DL_LIBS})
 endif()
 
 # A plugin's own window, built where the ui module's windows are.
 set(dependencies core)
-if(TARGET symbolengine_ui AND APPLE)
-    list(APPEND sources src/PluginWindow_mac.mm)
+if(TARGET symbolengine_ui)
+    list(APPEND sources src/PluginWindow.cpp
+                        $<IF:$<BOOL:${APPLE}>,src/PluginWindow_mac.mm,src/PluginWindow_windows.cpp>)
     list(APPEND dependencies ui)
 endif()
 
@@ -80,12 +82,12 @@ if(SYMBOLENGINE_TESTS)
         add_subdirectory(Tests/AudioUnits)
         list(APPEND test_sources Tests/AudioUnitTests.cpp Tests/ScanWorkerTests_mac.mm)
     endif()
-    if(TARGET symbolengine_ui AND APPLE)
-        list(APPEND test_sources Tests/EditorTests_mac.mm)
+    if(TARGET symbolengine_ui)
+        list(APPEND test_sources $<IF:$<BOOL:${APPLE}>,Tests/EditorTests_mac.mm,Tests/EditorTests_windows.cpp>)
     endif()
     symbolengine_add_tests(host SOURCES ${test_sources})
     target_include_directories(symbolengine_host_tests PRIVATE ${PROJECT_SOURCE_DIR}/Modules/core/Tests)
-    if(TARGET symbolengine_ui AND APPLE)
+    if(TARGET symbolengine_ui)
         target_compile_definitions(symbolengine_host_tests PRIVATE SYMBOLENGINE_PLUGIN_WINDOWS=1)
     endif()
     if(APPLE)

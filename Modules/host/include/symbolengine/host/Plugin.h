@@ -244,6 +244,10 @@ public:
     /** Tells it the view it is in has been resized to the size, as by the user's drag. */
     void resized(PluginEditorSize size);
 
+    /** Tells it the view it is in is on a screen of another scale, once the user's move there is over, so an editor
+        sized in pixels, as on Windows, can take its size for that scale. */
+    void rescaled(double scale);
+
     const std::shared_ptr<Plugin>& plugin() const { return held; }
 
 private:

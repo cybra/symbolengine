@@ -29,8 +29,14 @@ else()
     list(APPEND plugin_sdk_sources ${sdk}/public.sdk/source/main/linuxmain.cpp)
 endif()
 
-add_library(symbolengine_test_vst3 MODULE TestPlugins.cpp TestEditor.cpp
-            $<IF:$<BOOL:${APPLE}>,TestEditor_mac.mm,TestEditor_other.cpp> ${plugin_sdk_sources})
+if(APPLE)
+    set(editor_view TestEditor_mac.mm)
+elseif(WIN32)
+    set(editor_view TestEditor_windows.cpp)
+else()
+    set(editor_view TestEditor_other.cpp)
+endif()
+add_library(symbolengine_test_vst3 MODULE TestPlugins.cpp TestEditor.cpp ${editor_view} ${plugin_sdk_sources})
 target_include_directories(symbolengine_test_vst3 SYSTEM PRIVATE ${sdk})
 # The single-component plugins' source leaves the edit controller's to be built on its own, for the two-part ones.
 target_compile_definitions(symbolengine_test_vst3 PRIVATE $<IF:$<CONFIG:Debug>,DEVELOPMENT=1,RELEASE=1>
@@ -39,6 +45,9 @@ set_source_files_properties(${plugin_sdk_sources} PROPERTIES COMPILE_OPTIONS "$<
 symbolengine_set_warnings(symbolengine_test_vst3)
 find_package(Threads REQUIRED)
 target_link_libraries(symbolengine_test_vst3 PRIVATE Threads::Threads)
+if(WIN32)
+    target_link_libraries(symbolengine_test_vst3 PRIVATE ole32 user32)
+endif()
 set(name "SymbolEngine Test")
 
 if(APPLE)

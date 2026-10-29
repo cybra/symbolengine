@@ -58,7 +58,7 @@ struct Record
     std::atomic<int> mode{testIds::wellBehaved};
     std::atomic<View*> view{nullptr};
     std::atomic<int> made{0}, live{0}, attached{0}, removed{0}, sized{0}, constraints{0}, scales{0}, offMain{0};
-    std::atomic<int> width{0}, height{0}, ownWidth{0}, ownHeight{0}, nudges{0};
+    std::atomic<int> width{0}, height{0}, ownWidth{0}, ownHeight{0}, nudges{0}, scalePercent{100}, scaleFirst{0};
     std::atomic<bool> offscreenMoved{false};
 };
 
@@ -110,10 +110,16 @@ public:
         if (!testEditor::sized(parent, width, height))
             misuse("attached to a view not yet sized to it");
 
+        if (!testEditor::awareAsParent(parent))
+            misuse("attached with the thread's DPI awareness unlike its window's");
+
         native = testEditor::attach(parent, width, height);
 
         if (native == nullptr)
             return kResultFalse;
+
+        if (!testEditor::takesDrops(native))
+            misuse("couldn't take dropped files: its thread isn't set up for OLE");
 
         host = parent;
         ++record->attached;
@@ -132,6 +138,9 @@ public:
 
         if (!testEditor::stillWhole(host, native))
             misuse("removed after the host's view was hidden, changed or taken apart");
+
+        if (!testEditor::awareAsParent(host))
+            misuse("removed with the thread's DPI awareness unlike its window's");
 
         record->offscreenMoved = record->offscreenMoved || testEditor::offscreenMoved(native);
         keepOwnSize();
@@ -164,6 +173,7 @@ public:
     tresult PLUGIN_API getSize(ViewRect* size) override
     {
         check("getSize");
+        ++sizesAsked;
 
         if (size == nullptr)
             return kInvalidArgument;
@@ -178,6 +188,8 @@ public:
 
         if (native == nullptr)
             misuse("resized before it was attached");
+        else if (!testEditor::awareAsParent(host))
+            misuse("resized with the thread's DPI awareness unlike its window's");
 
         if (size == nullptr)
             return kInvalidArgument;
@@ -262,10 +274,25 @@ public:
         return kResultTrue;
     }
 
-    tresult PLUGIN_API setContentScaleFactor(ScaleFactor) override
+    // The scale of its screen: its size from then on its size at 1 times that, as a view sized in pixels answers.
+    tresult PLUGIN_API setContentScaleFactor(ScaleFactor factor) override
     {
         check("setContentScaleFactor");
-        ++record->scales;
+
+        if (record->scales++ == 0)
+            record->scaleFirst = sizesAsked == 0 ? 1 : 0;
+
+        if (host != nullptr && !testEditor::awareAsParent(host))
+            misuse("given its scale with the thread's DPI awareness unlike its window's");
+
+        if (factor > 0.0f)
+        {
+            width = static_cast<int>(std::lround(width / scale * factor));
+            height = static_cast<int>(std::lround(height / scale * factor));
+            scale = factor;
+            record->scalePercent = static_cast<int>(std::lround(factor * 100.0));
+        }
+
         return kResultTrue;
     }
 
@@ -354,7 +381,8 @@ private:
     bool cleared = false;
     void* host = nullptr;
     void* native = nullptr;
-    int width = 600, height = 400;
+    int width = 600, height = 400, sizesAsked = 0;
+    double scale = 1.0;
 };
 
 class Editor final : public SingleComponentEffect
@@ -425,6 +453,14 @@ public:
 
     tresult PLUGIN_API getParamStringByValue(ParamID id, ParamValue value, String128 string) override
     {
+        if (id == testIds::scaleQuery)
+        {
+            char text[64];
+            std::snprintf(text, sizeof text, "scale=%d first=%d", record->scalePercent.load(),
+                          record->scaleFirst.load());
+            return copy(text, string);
+        }
+
         if (id != testIds::queryParameter)
             return SingleComponentEffect::getParamStringByValue(id, value, string);
 
@@ -440,14 +476,7 @@ public:
                       record->ownHeight.load(), record->constraints.load(), record->scales.load(),
                       record->offMain.load(), record->nudges.load(), record->offscreenMoved.load() ? 1 : 0);
 
-        for (std::size_t i = 0; i < 128; ++i)
-            if ((string[i] = static_cast<TChar>(text[i])) == 0 || i == 127)
-            {
-                string[i] = 0;
-                break;
-            }
-
-        return kResultOk;
+        return copy(text, string);
     }
 
     tresult PLUGIN_API process(ProcessData& data) override
@@ -462,6 +491,18 @@ public:
     }
 
 private:
+    static tresult copy(const char* text, String128 string)
+    {
+        for (std::size_t i = 0; i < 128; ++i)
+            if ((string[i] = static_cast<TChar>(text[i])) == 0 || i == 127)
+            {
+                string[i] = 0;
+                break;
+            }
+
+        return kResultOk;
+    }
+
     std::shared_ptr<Record> record = std::make_shared<Record>();
 };
 

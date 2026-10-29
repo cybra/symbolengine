@@ -15,6 +15,7 @@
 #include "pluginterfaces/base/ipluginbase.h"
 #include "pluginterfaces/base/smartpointer.h"
 #include "pluginterfaces/gui/iplugview.h"
+#include "pluginterfaces/gui/iplugviewcontentscalesupport.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
@@ -682,11 +683,21 @@ tresult PLUGIN_API ConnectionProxy::notify(IMessage* message)
 namespace
 {
 
-// The system's views a plugin's editor is put in: a Mac's.
+// The system's views a plugin's editor is put in.
 #if defined(__APPLE__)
 const FIDString platformType = kPlatformTypeNSView;
+#elif defined(_WIN32)
+const FIDString platformType = kPlatformTypeHWND;
 #else
 const FIDString platformType = nullptr;
+#endif
+
+// Whether its editors are sized in pixels, and given the scale of the screen they are on: on Windows. On a Mac they are
+// sized in points, and a view given a scale there draws at the wrong size.
+#if defined(_WIN32)
+constexpr bool givenScale = true;
+#else
+constexpr bool givenScale = false;
 #endif
 
 // The smallest size an editor is given, raising one that asks for less.
@@ -739,10 +750,11 @@ private:
 #endif
 
 // A plugin's view in the program's, opened and closed in the order Steinberg's documentation of a view's life gives:
-// made, its kind of view checked, given its frame, sized and the program's view sized to it, put in it; and taken out
-// while the program's view is whole, its frame cleared, let go of. A resize it asks for resizes the program's view and
-// is told to it once, in the same call; one it asks for again from inside being told, as some views do, is the next
-// size told, up to a few in one call, so it never loops.
+// made, its kind of view checked, given its frame, on Windows given its screen's scale, sized and the program's view
+// sized to it, put in it, given the scale again; and taken out while the program's view is whole, its frame cleared,
+// let go of. Every call into it is made with the thread's DPI awareness the program's view's. A resize it asks for
+// resizes the program's view and is told to it once, in the same call; one it asks for again from inside being told,
+// as some views do, is the next size told, up to a few in one call, so it never loops.
 class Vst3Editor final : public PluginFormatEditor
 {
 public:
@@ -754,6 +766,8 @@ public:
 
     ~Vst3Editor() override
     {
+        const vst3View::ParentAwareness awareness(parent);
+
         if (plugFrame)
             plugFrame->undo();
 
@@ -768,9 +782,17 @@ public:
 
     bool open(PluginError& error)
     {
+        const vst3View::ParentAwareness awareness(parent);
         plugFrame = owned(new PlugFrame(this, shared));
         view->setFrame(plugFrame);
         framed = true;
+
+        // Its screen's scale before its size is first asked for, so it answers with the size for that scale.
+        if (givenScale)
+            scaled = FUnknownPtr<IPlugViewContentScaleSupport>(view);
+
+        if (scaled)
+            scaled->setContentScaleFactor(static_cast<IPlugViewContentScaleSupport::ScaleFactor>(frame.scale()));
 
         ViewRect rect{};
         const auto own = view->getSize(&rect) == kResultTrue ? PluginEditorSize{rect.getWidth(), rect.getHeight()}
@@ -785,6 +807,11 @@ public:
         }
 
         attached = true;
+
+        // Again, now it is on the screen the window is really on.
+        if (scaled)
+            scaled->setContentScaleFactor(static_cast<IPlugViewContentScaleSupport::ScaleFactor>(frame.scale()));
+
         canResize = view->canResize() == kResultTrue;
 
         // Some views say their real size only once they are in a window.
@@ -805,6 +832,7 @@ public:
 
     PluginEditorSize constrain(PluginEditorSize dragged) override
     {
+        const vst3View::ParentAwareness awareness(parent);
         ViewRect rect(0, 0, dragged.width, dragged.height);
 
         if (view->checkSizeConstraint(&rect) != kResultTrue)
@@ -815,8 +843,24 @@ public:
 
     void resized(PluginEditorSize size) override
     {
+        const vst3View::ParentAwareness awareness(parent);
+
         if (size != current)
             tell(size, false);
+    }
+
+    // The scale of its new screen, and the size it says it takes there.
+    void rescaled(double scale) override
+    {
+        if (!scaled)
+            return;
+
+        const vst3View::ParentAwareness awareness(parent);
+        scaled->setContentScaleFactor(static_cast<IPlugViewContentScaleSupport::ScaleFactor>(scale));
+
+        if (ViewRect rect{}; view->getSize(&rect) == kResultTrue)
+            if (const auto size = raised({rect.getWidth(), rect.getHeight()}); size != current)
+                tell(size, true);
     }
 
     // A resize the view asked for, on the main thread.
@@ -824,6 +868,8 @@ public:
     {
         if (from != view.get())
             return kInvalidArgument;
+
+        const vst3View::ParentAwareness awareness(parent);
 
         const auto size = raised({rect.getWidth(), rect.getHeight()});
 
@@ -887,6 +933,7 @@ private:
     PluginEditorFrame& frame;
     std::shared_ptr<Vst3Format::Shared> shared;
     IPtr<PlugFrame> plugFrame;
+    FUnknownPtr<IPlugViewContentScaleSupport> scaled;
     bool framed = false, attached = false, canResize = false, telling = false;
     PluginEditorSize current{}, told{};
     std::optional<PluginEditorSize> wanted;

@@ -130,6 +130,64 @@ ui::Size dragTo(ui::Window& window, ui::Size size)
 #endif
 }
 
+// The system telling the window its scale changed, as when the user drags it to a screen of another scale: on Windows
+// the new DPI, with the place Windows suggests, the same size at 100% on the new screen; on a Mac the notice that its
+// backing scale changed. The user's move around it, on Windows, begun and ended.
+#if defined(__APPLE__)
+void rescale(ui::Window& window, unsigned)
+{
+    const auto center = choc::objc::callClass<id>("NSNotificationCenter", "defaultCenter");
+    choc::objc::call<void>(center, "postNotificationName:object:",
+                           choc::objc::getNSString("NSWindowDidChangeBackingPropertiesNotification"),
+                           static_cast<id>(window.nativeHandle()));
+}
+
+double systemScale(ui::Window& window)
+{
+    return choc::objc::call<double>(static_cast<id>(window.nativeHandle()), "backingScaleFactor");
+}
+#else
+// The window's client area in its screen's own pixels.
+ui::Size clientPixels(ui::Window& window)
+{
+    RECT client{};
+    GetClientRect(static_cast<HWND>(window.nativeHandle()), &client);
+    return {client.right, client.bottom};
+}
+
+// The place suggested holds the client area scaled to the new DPI inside the frame the window has: a test's stand-in
+// for a real screen of that scale, whose frame Windows would draw at it.
+void rescale(ui::Window& window, unsigned dpi)
+{
+    const auto handle = static_cast<HWND>(window.nativeHandle());
+    RECT outer{}, client{};
+    GetWindowRect(handle, &outer);
+    GetClientRect(handle, &client);
+    const auto before = static_cast<int>(std::lround(window.scale() * 96.0));
+    const int edgesWide = (outer.right - outer.left) - client.right;
+    const int edgesHigh = (outer.bottom - outer.top) - client.bottom;
+    const RECT suggested{outer.left, outer.top,
+                         outer.left + edgesWide + MulDiv(client.right, static_cast<int>(dpi), before),
+                         outer.top + edgesHigh + MulDiv(client.bottom, static_cast<int>(dpi), before)};
+    SendMessageW(handle, WM_DPICHANGED, MAKEWPARAM(dpi, dpi), reinterpret_cast<LPARAM>(&suggested));
+}
+
+void beginMove(ui::Window& window)
+{
+    SendMessageW(static_cast<HWND>(window.nativeHandle()), WM_ENTERSIZEMOVE, 0, 0);
+}
+
+void endMove(ui::Window& window)
+{
+    SendMessageW(static_cast<HWND>(window.nativeHandle()), WM_EXITSIZEMOVE, 0, 0);
+}
+
+double systemScale(ui::Window& window)
+{
+    return GetDpiForWindow(static_cast<HWND>(window.nativeHandle())) / 96.0;
+}
+#endif
+
 bool seeThrough(ui::Window& window)
 {
 #if defined(__APPLE__)
@@ -241,6 +299,45 @@ TEST_CASE("A window the user drags takes the size the program gives it, and can 
     window.setResizable(true);
     CHECK(window.isResizable());
     CHECK(userCanResize(window));
+}
+
+TEST_CASE("A window says when its scale changes, once the user's move is over, and one measured in pixels keeps its "
+          "size in pixels")
+{
+    choc::messageloop::initialise();
+
+    ui::Window window({.size = {600, 400}, .minimumSize = {100, 50}, .sizedInPixels = true});
+    CHECK(window.scale() == systemScale(window));
+    int told = 0;
+    window.onScaleChanged = [&] { ++told; };
+
+#if defined(__APPLE__)
+    rescale(window, 0);
+    CHECK(told == 1);
+#else
+    // Measured in pixels: the size asked for, in pixels, whatever the scale, and kept on a screen of another.
+    CHECK(clientPixels(window) == ui::Size{600, 400});
+    CHECK(window.size() == ui::Size{600, 400});
+    const auto twice = static_cast<unsigned>(std::lround(window.scale() * 2 * 96.0));
+    beginMove(window);
+    rescale(window, twice);
+    CHECK(told == 0);
+    CHECK(window.scale() == twice / 96.0);
+    CHECK(clientPixels(window) == ui::Size{600, 400});
+    CHECK(window.size() == ui::Size{600, 400});
+    endMove(window);
+    CHECK(told == 1);
+
+    // Measured at 100%: the same size in those, its pixels following the scale, told at once when nobody moves it.
+    ui::Window units({.size = {300, 200}});
+    const auto pixels = clientPixels(units);
+    int unitsTold = 0;
+    units.onScaleChanged = [&] { ++unitsTold; };
+    rescale(units, static_cast<unsigned>(std::lround(units.scale() * 2 * 96.0)));
+    CHECK(unitsTold == 1);
+    CHECK(units.size() == ui::Size{300, 200});
+    CHECK(clientPixels(units) == ui::Size{pixels.width * 2, pixels.height * 2});
+#endif
 }
 
 TEST_CASE("The close button leaves the window to the program, which may let go of it then")

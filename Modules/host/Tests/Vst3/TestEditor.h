@@ -34,6 +34,14 @@ bool sized(void* parent, int width, int height);
 // The size of the view's own native view.
 void ownSize(void* view, int& width, int& height);
 
+// Whether the calling thread's DPI awareness is the parent's, as every call into a view is to be made with: on
+// Windows; elsewhere it is.
+bool awareAsParent(void* parent);
+
+// Whether the view's own native view takes dropped files: on Windows, registered for them, which only a thread set up
+// for OLE can; elsewhere it does.
+bool takesDrops(void* view);
+
 // Whether the host has moved or resized the off-screen view.
 bool offscreenMoved(void* view);
 

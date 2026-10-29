@@ -69,5 +69,7 @@ constexpr double editorPixels = 2000.0;
 
 // The editor plugin's text for queryParameter says what its views saw, as "made=1 live=1 attached=1 removed=0
 // sized=2 size=600x400 own=600x400 constraints=0 scales=0 offMain=0 nudges=1 offscreenMoved=0", where sized counts its
-// resizes, size is the last it was told and own is its own native view's.
+// resizes, size is the last it was told and own is its own native view's; and for scaleQuery the scale it was last
+// given, in percent, and whether the first scale came before its size was first asked for, as "scale=150 first=1".
+constexpr unsigned scaleQuery = 4001;
 }

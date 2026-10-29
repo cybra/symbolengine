@@ -55,3 +55,14 @@ bool holdsViews(void* window)
     NSView* content = static_cast<NSWindow*>(window).contentView;
     return content != nil && content.subviews.count > 0;
 }
+
+// A move by the user, on a Mac, needs nothing of the test: the system tells a window's scale once the move is over.
+void beginWindowMove(void*) {}
+void endWindowMove(void*) {}
+
+// The system's notice that the window's backing scale changed, as when it is moved to a screen of another.
+void rescaleWindow(void* window, double)
+{
+    [[NSNotificationCenter defaultCenter] postNotificationName:NSWindowDidChangeBackingPropertiesNotification
+                                                        object:static_cast<NSWindow*>(window)];
+}

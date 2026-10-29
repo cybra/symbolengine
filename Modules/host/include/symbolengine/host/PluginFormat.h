@@ -293,6 +293,10 @@ public:
     /** Sizes the view the editor is in to the size, and the window holding it to fit. */
     virtual void place(PluginEditorSize size) = 0;
 
+    /** The scale of the screen the view is on, for a format whose editors are sized in pixels: its DPI over 96 on
+        Windows. */
+    virtual double scale() const { return 1.0; }
+
     virtual ~PluginEditorFrame() = default;
 };
 
@@ -315,6 +319,10 @@ public:
 
     /** Tells it the view it is in has been resized to the size, as by the user's drag. */
     virtual void resized(PluginEditorSize size) = 0;
+
+    /** Tells it the view it is in is on a screen of another scale, once the user's move there is over, for a format
+        whose editors are sized in pixels. */
+    virtual void rescaled(double scale) { static_cast<void>(scale); }
 };
 
 /** One plugin as its format holds it, used by the host module alone. Every call is made on the main thread, one at a

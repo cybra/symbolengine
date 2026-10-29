@@ -386,6 +386,8 @@ public:
             current = size;
         }
 
+        void rescaled(double) override { const Main call(fake, "rescaled", false); }
+
     private:
         FakePlugin& fake;
         PluginEditorSize current;

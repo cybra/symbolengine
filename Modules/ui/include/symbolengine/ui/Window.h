@@ -57,6 +57,12 @@ public:
 
         /** What shows where the view hasn't drawn, as 0xRRGGBB, such as while the window is being resized. */
         std::uint32_t background = 0x000000;
+
+        /** On Windows, measures its size in the pixels of the screen it is on rather than at 100% scaling, as a window
+            holding something that sizes itself in pixels does: size(), setSize(), workArea(), its smallest size and
+            onResizing are in pixels, and moved to a screen of another scale it keeps its size in pixels. On a Mac
+            sizes are points either way. */
+        bool sizedInPixels = false;
     };
 
     /** Makes the window, hidden, in the middle of the main screen. */
@@ -104,6 +110,10 @@ public:
     /** The part of the screen it is on that windows use, without the menu bar and the Dock, or the taskbar. */
     Size workArea() const;
 
+    /** The scale of the screen it is on: its pixels to a point on a Mac, as 2 on a Retina screen, and its DPI over 96
+        on Windows, as 1.5 at 150%. */
+    double scale() const;
+
     Bounds bounds() const;
 
     /** Sets its place and size, held to its smallest size and to the screen it overlaps most, or the main screen when
@@ -150,6 +160,10 @@ public:
         takes instead, as a window holding something with sizes of its own does. Without it, it takes the size dragged
         to. */
     std::function<Size(Size)> onResizing;
+
+    /** Its scale changed, as when it is moved to a screen of another scale: told once the user's move is over, so
+        what it holds is scaled once rather than at every step of the move. */
+    std::function<void()> onScaleChanged;
 
 private:
     struct Impl;

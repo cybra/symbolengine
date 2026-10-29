@@ -215,6 +215,10 @@ Window::Window(Options options) : impl(std::make_unique<Impl>())
       if (owner->onMovedOrResized)
           owner->onMovedOrResized();
     });
+    observe(NSWindowDidChangeBackingPropertiesNotification, ^(NSNotification*) {
+      if (owner->onScaleChanged)
+          owner->onScaleChanged();
+    });
     observe(NSWindowDidResizeNotification, ^(NSNotification*) {
       keepRestored();
       if (owner->onMovedOrResized)
@@ -358,6 +362,11 @@ Size Window::workArea() const
     NSScreen* screen = impl->window.screen != nil ? impl->window.screen : mainScreen();
     const auto area = screen != nil ? screen.visibleFrame.size : NSMakeSize(1280, 800);
     return {static_cast<int>(area.width), static_cast<int>(area.height)};
+}
+
+double Window::scale() const
+{
+    return impl->window.backingScaleFactor;
 }
 
 Bounds Window::bounds() const

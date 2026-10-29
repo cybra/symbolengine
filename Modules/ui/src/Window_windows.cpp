@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <string>
+#include <utility>
 
 namespace symbolengine::ui
 {
@@ -95,13 +96,40 @@ struct Window::Impl
     HBRUSH background = nullptr;
     DWORD style = 0;
     bool maximizable = false;
+    bool sizedInPixels = false;
     Size minimum{};
     Bounds restored{};
     Appearance appearance = Appearance::system;
 
+    // Its DPI as Windows last told it, and whether the user is moving or sizing it, with a change of scale to tell once
+    // that is over.
+    UINT currentDpi = 0;
+    bool moving = false, rescaled = false;
+
+    // The scale its sizes are converted at: its DPI as Windows last told it.
     UINT dpi() const
     {
+        if (currentDpi != 0)
+            return currentDpi;
+        return frameDpi();
+    }
+
+    // The DPI its frame is drawn at, which its frame around a client area is measured by.
+    UINT frameDpi() const
+    {
         return window != nullptr ? GetDpiForWindow(window) : USER_DEFAULT_SCREEN_DPI;
+    }
+
+    // Sizes as size() measures them, to and from the screen's own pixels.
+    int toPixels(int units) const { return sizedInPixels ? units : scaled(units, dpi()); }
+    int fromPixels(int pixels) const { return sizedInPixels ? pixels : unscaled(pixels, dpi()); }
+
+    void tellRescaled()
+    {
+        if (moving)
+            rescaled = true;
+        else if (owner->onScaleChanged)
+            owner->onScaleChanged();
     }
 
     // The frame around a client area of the size given, in the window's own pixels.
@@ -213,13 +241,12 @@ struct Window::Impl
                 if (owner.onResizing)
                 {
                     auto* dragged = reinterpret_cast<RECT*>(lParam);
-                    const auto dpi = impl->dpi();
-                    const auto edges = impl->frameFor({0, 0, 0, 0}, dpi);
+                    const auto edges = impl->frameFor({0, 0, 0, 0}, impl->frameDpi());
                     const int edgesWide = edges.right - edges.left, edgesHigh = edges.bottom - edges.top;
-                    const auto taken = owner.onResizing({unscaled(dragged->right - dragged->left - edgesWide, dpi),
-                                                         unscaled(dragged->bottom - dragged->top - edgesHigh, dpi)});
-                    const int width = scaled(std::max(taken.width, impl->minimum.width), dpi) + edgesWide;
-                    const int height = scaled(std::max(taken.height, impl->minimum.height), dpi) + edgesHigh;
+                    const auto taken = owner.onResizing({impl->fromPixels(dragged->right - dragged->left - edgesWide),
+                                                         impl->fromPixels(dragged->bottom - dragged->top - edgesHigh)});
+                    const int width = impl->toPixels(std::max(taken.width, impl->minimum.width)) + edgesWide;
+                    const int height = impl->toPixels(std::max(taken.height, impl->minimum.height)) + edgesHigh;
 
                     if (wParam == WMSZ_LEFT || wParam == WMSZ_TOPLEFT || wParam == WMSZ_BOTTOMLEFT)
                         dragged->left = dragged->right - width;
@@ -237,17 +264,45 @@ struct Window::Impl
 
             case WM_GETMINMAXINFO:
             {
-                const auto dpi = impl->dpi();
-                const auto frame = impl->frameFor({0, 0, scaled(impl->minimum.width, dpi), scaled(impl->minimum.height, dpi)}, dpi);
+                const auto frame = impl->frameFor({0, 0, impl->toPixels(impl->minimum.width), impl->toPixels(impl->minimum.height)},
+                                                  impl->frameDpi());
                 auto* limits = reinterpret_cast<MINMAXINFO*>(lParam);
                 limits->ptMinTrackSize = {frame.right - frame.left, frame.bottom - frame.top};
                 return 0;
             }
 
-            // Moved to a screen of another scale, it takes the size Windows suggests, the same size on the new screen.
+            // Moved to a screen of another scale, it takes the size Windows suggests, the same size on the new screen;
+            // or, measured in pixels, keeps its size in pixels at the place suggested. The change is told once the
+            // user's move is over.
             case WM_DPICHANGED:
-                impl->place(*reinterpret_cast<const RECT*>(lParam));
+            {
+                const auto suggested = *reinterpret_cast<const RECT*>(lParam);
+                impl->currentDpi = LOWORD(wParam);
+
+                if (impl->sizedInPixels)
+                {
+                    RECT client{};
+                    GetClientRect(hwnd, &client);
+                    const auto frame = impl->frameFor(client, impl->frameDpi());
+                    SetWindowPos(hwnd, nullptr, suggested.left, suggested.top, frame.right - frame.left,
+                                 frame.bottom - frame.top, SWP_NOZORDER | SWP_NOACTIVATE);
+                }
+                else
+                    impl->place(suggested);
+
+                impl->tellRescaled();
                 return 0;
+            }
+
+            case WM_ENTERSIZEMOVE:
+                impl->moving = true;
+                break;
+
+            case WM_EXITSIZEMOVE:
+                impl->moving = false;
+                if (std::exchange(impl->rescaled, false) && owner.onScaleChanged)
+                    owner.onScaleChanged();
+                break;
 
             case WM_ERASEBKGND:
             {
@@ -304,6 +359,7 @@ Window::Window(Options options) : impl(std::make_unique<Impl>())
     w.owner = this;
     w.minimum = options.minimumSize;
     w.maximizable = options.maximizable;
+    w.sizedInPixels = options.sizedInPixels;
     w.style = windowStyle(options.resizable, options.maximizable);
     w.background = CreateSolidBrush(RGB((options.background >> 16) & 0xFF, (options.background >> 8) & 0xFF,
                                         options.background & 0xFF));
@@ -316,6 +372,7 @@ Window::Window(Options options) : impl(std::make_unique<Impl>())
     const auto area = workAreaOf(mainMonitor());
     w.window = CreateWindowExW(0, Impl::windowClass(), wide(options.title).c_str(), w.style, area.left, area.top, 100, 100,
                                nullptr, nullptr, module, impl.get());
+    w.currentDpi = GetDpiForWindow(w.window);
     w.applyAppearance();
     setSize(options.size);
     center();
@@ -398,7 +455,7 @@ void Window::setResizable(bool resizable)
     // The frame changes thickness, so the window is sized again around the same client area.
     const auto kept = GetWindowLongPtrW(w.window, GWL_STYLE) & ~static_cast<LONG_PTR>(WS_THICKFRAME | WS_MAXIMIZEBOX);
     SetWindowLongPtrW(w.window, GWL_STYLE, kept | static_cast<LONG_PTR>(w.style & (WS_THICKFRAME | WS_MAXIMIZEBOX)));
-    const auto frame = w.frameFor(client, w.dpi());
+    const auto frame = w.frameFor(client, w.frameDpi());
     SetWindowPos(w.window, nullptr, frame.left, frame.top, frame.right - frame.left, frame.bottom - frame.top,
                  SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
 }
@@ -425,18 +482,16 @@ Size Window::size() const
 {
     RECT client{};
     GetClientRect(impl->window, &client);
-    const auto dpi = impl->dpi();
-    return {unscaled(client.right, dpi), unscaled(client.bottom, dpi)};
+    return {impl->fromPixels(client.right), impl->fromPixels(client.bottom)};
 }
 
 void Window::setSize(Size size)
 {
     auto& w = *impl;
-    const auto dpi = w.dpi();
     const auto client = w.clientOnScreen();
-    const auto frame = w.frameFor({client.left, client.top, client.left + scaled(std::max(size.width, w.minimum.width), dpi),
-                                   client.top + scaled(std::max(size.height, w.minimum.height), dpi)},
-                                  dpi);
+    const auto frame = w.frameFor({client.left, client.top, client.left + w.toPixels(std::max(size.width, w.minimum.width)),
+                                   client.top + w.toPixels(std::max(size.height, w.minimum.height))},
+                                  w.frameDpi());
     SetWindowPos(w.window, nullptr, 0, 0, frame.right - frame.left, frame.bottom - frame.top,
                  SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
@@ -444,8 +499,12 @@ void Window::setSize(Size size)
 Size Window::workArea() const
 {
     const auto area = workAreaOf(MonitorFromWindow(impl->window, MONITOR_DEFAULTTOPRIMARY));
-    const auto dpi = impl->dpi();
-    return {unscaled(area.right - area.left, dpi), unscaled(area.bottom - area.top, dpi)};
+    return {impl->fromPixels(area.right - area.left), impl->fromPixels(area.bottom - area.top)};
+}
+
+double Window::scale() const
+{
+    return impl->dpi() / static_cast<double>(USER_DEFAULT_SCREEN_DPI);
 }
 
 Bounds Window::bounds() const
@@ -457,10 +516,10 @@ Bounds Window::bounds() const
 void Window::setBounds(Bounds bounds)
 {
     auto& w = *impl;
-    const auto dpi = w.dpi();
-    bounds.width = std::max(bounds.width, scaled(w.minimum.width, dpi));
-    bounds.height = std::max(bounds.height, scaled(w.minimum.height, dpi));
-    w.place(Impl::fitted(w.frameFor({bounds.x, bounds.y, bounds.x + bounds.width, bounds.y + bounds.height}, dpi)));
+    bounds.width = std::max(bounds.width, w.toPixels(w.minimum.width));
+    bounds.height = std::max(bounds.height, w.toPixels(w.minimum.height));
+    w.place(Impl::fitted(w.frameFor({bounds.x, bounds.y, bounds.x + bounds.width, bounds.y + bounds.height},
+                                    w.frameDpi())));
 }
 
 void Window::center()

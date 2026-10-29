@@ -20,4 +20,12 @@ void sizeOwnView(void* parent, int width, int height)
         own.frame = frame;
 }
 
+// The awareness it would put back is Windows' alone.
+ParentAwareness::ParentAwareness(void*)
+{
+    static_cast<void>(previous);
+}
+
+ParentAwareness::~ParentAwareness() = default;
+
 }

@@ -1,6 +1,7 @@
 #include "symbolengine/host/Plugin.h"
 
 #include "Guard.h"
+#include "MainThread.h"
 #include "ProcessState.h"
 
 #include "symbolengine/core/LockFreeFifo.h"
@@ -910,6 +911,10 @@ PluginHost::PluginHost(Options options) : shared(std::make_shared<Shared>())
 {
     shared->options = std::move(options);
 
+    // Made on the main thread, it readies that thread for plugins before any is loaded.
+    if (shared->options.onMainThread != nullptr && shared->options.onMainThread())
+        mainThread::prepare();
+
     // Notices a plugin sends from inside its process call are only recorded there; this thread passes them to the main
     // thread.
     shared->watcher = std::thread([weak = std::weak_ptr(shared)] {
@@ -1500,6 +1505,14 @@ void PluginEditor::resized(PluginEditorSize size)
 
     if (inner.state != Plugin::State::failed)
         inner.call("resized", [&] { editor->resized(size); });
+}
+
+void PluginEditor::rescaled(double scale)
+{
+    auto& inner = *held->inner;
+
+    if (inner.state != Plugin::State::failed)
+        inner.call("rescaled", [&] { editor->rescaled(scale); });
 }
 
 }

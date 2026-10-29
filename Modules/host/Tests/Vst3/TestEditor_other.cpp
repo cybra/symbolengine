@@ -39,6 +39,16 @@ void ownSize(void*, int& width, int& height)
     width = height = 0;
 }
 
+bool awareAsParent(void*)
+{
+    return true;
+}
+
+bool takesDrops(void*)
+{
+    return true;
+}
+
 bool offscreenMoved(void*)
 {
     return false;

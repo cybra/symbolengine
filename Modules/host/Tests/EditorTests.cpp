@@ -23,12 +23,15 @@ using namespace symbolengine;
 using namespace std::chrono_literals;
 
 #if SYMBOLENGINE_PLUGIN_WINDOWS
-// From EditorTests_mac.mm.
+// From EditorTests_mac.mm and EditorTests_windows.cpp.
 void turnSystemLoop();
 ui::Size dragWindow(PluginWindow& window, ui::Size to);
 void* keepWindow(void* window);
 void letGoOfWindow(void* window);
 bool holdsViews(void* window);
+void beginWindowMove(void* window);
+void endWindowMove(void* window);
+void rescaleWindow(void* window, double scale);
 #endif
 
 namespace
@@ -246,6 +249,27 @@ TEST_CASE("A plugin window closed during a call into its plugin has its editor c
     rig.checkNoMisuse();
 }
 
+TEST_CASE("A plugin window tells its editor when its screen's scale changes, once the user's move is over")
+{
+    FakeRig rig;
+    auto plugin = rig.made("scaled");
+    PluginError error;
+    auto window = PluginWindow::open(plugin, {"Scaled"}, error);
+    INFO(error.message);
+    REQUIRE(window != nullptr);
+
+    beginWindowMove(window->nativeHandle());
+    rescaleWindow(window->nativeHandle(), 1.5);
+    #if defined(_WIN32)
+    CHECK(rig.count("scaled", "rescaled") == 0);
+    #endif
+    endWindowMove(window->nativeHandle());
+    CHECK(rig.count("scaled", "rescaled") == 1);
+    window.reset();
+    rig.main.settle();
+    rig.checkNoMisuse();
+}
+
 namespace
 {
 
@@ -264,7 +288,11 @@ struct Vst3Rig
     {
         std::error_code ignored;
         std::filesystem::remove(misuseLog, ignored);
+    #if defined(_WIN32)
+        _putenv_s("SYMBOLENGINE_TEST_VST3_LOG", misuseLog.string().c_str());
+    #else
         setenv("SYMBOLENGINE_TEST_VST3_LOG", misuseLog.c_str(), 1);
+    #endif
     }
 
     TestMainThread main;
@@ -377,7 +405,15 @@ TEST_CASE("A VST3 editor opens in its window at its own size, in its format's or
     CHECK(window->isResizable());
     CHECK(seen(*plugin, "attached") == 1);
     CHECK(seen(*plugin, "live") == 1);
+
+    // Its screen's scale on Windows, where it is sized in pixels, before its size is first asked for and again once
+    // it is in its window; never on a Mac.
+    #if defined(_WIN32)
+    CHECK(seen(*plugin, "scales") == 2);
+    CHECK(plugin->parameterText(testIds::scaleQuery, 0.0) == "scale=100 first=1");
+    #else
     CHECK(seen(*plugin, "scales") == 0);
+    #endif
 
     window.reset();
     rig.settle();
@@ -495,7 +531,9 @@ TEST_CASE("VST3 editors that ask again from inside their own resize never loop, 
         ask(*plugin, 700, 500);
         CHECK(window->editorSize() == PluginEditorSize{700, 500});
         CHECK(windowSize(*window) == ui::Size{700, 500});
+    #if defined(__APPLE__)
         CHECK(seenSize(*plugin, "own") == PluginEditorSize{700, 500});
+    #endif
     }
 
     SECTION("asking for one pixel")
@@ -574,9 +612,57 @@ TEST_CASE(
 
     CHECK(seen(*plugin, "removed") == 1);
     CHECK(seen(*plugin, "offscreenMoved") == 0);
+    #if defined(__APPLE__)
     CHECK(seen(*plugin, "nudges") == 1);
+    #endif
     CHECK(misuses().empty());
 }
+
+    #if defined(_WIN32)
+TEST_CASE("A VST3 editor on Windows takes the size it gives at its screen's new scale once a move there is over")
+{
+    Vst3Rig rig;
+    auto plugin = rig.made();
+    auto window = rig.open(plugin);
+    REQUIRE(seen(*plugin, "scales") == 2);
+
+    // Dragged to a screen at 150%: nothing changes until the move is over, then once.
+    beginWindowMove(window->nativeHandle());
+    rescaleWindow(window->nativeHandle(), 1.5);
+    CHECK(seen(*plugin, "scales") == 2);
+    CHECK(window->editorSize() == PluginEditorSize{600, 400});
+    endWindowMove(window->nativeHandle());
+
+    CHECK(seen(*plugin, "scales") == 3);
+    CHECK(plugin->parameterText(testIds::scaleQuery, 0.0) == "scale=150 first=1");
+    CHECK(window->editorSize() == PluginEditorSize{900, 600});
+    CHECK(windowSize(*window) == ui::Size{900, 600});
+    CHECK(seenSize(*plugin) == PluginEditorSize{900, 600});
+    window.reset();
+    rig.settle();
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("A VST3 editor on Windows keeps its parent through a thousand moves and resizes of its window")
+{
+    Vst3Rig rig;
+    auto plugin = rig.made();
+    auto window = rig.open(plugin);
+    const auto start = window->bounds();
+
+    for (int i = 0; i < 1000; ++i)
+        if (i % 2 == 0)
+            window->moveTo(start.x + i % 40, start.y + i % 30);
+        else
+            dragWindow(*window, {600 + i % 50, 400 + i % 30});
+
+    rig.settle();
+    window.reset();
+    rig.settle();
+    CHECK(seen(*plugin, "removed") == 1);
+    CHECK(misuses().empty());
+}
+    #endif
 
 TEST_CASE("A VST3 plugin asking for its editor is told to the program")
 {
