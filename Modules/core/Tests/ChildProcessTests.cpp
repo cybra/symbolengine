@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -267,6 +268,23 @@ TEST_CASE("A child still running is said to be, and one that hangs is killed and
     REQUIRE(ending.has_value());
     CHECK(ending->killed);
     CHECK(goneWithin(id, 2s));
+}
+
+TEST_CASE("A child's memory in use is read while it runs, and none once it has ended")
+{
+    auto child = startHelper({"allocate", "300"});
+    std::int64_t most = 0;
+    const auto until = std::chrono::steady_clock::now() + 10s;
+    while (most < 280LL * 1024 * 1024 && std::chrono::steady_clock::now() < until)
+    {
+        most = std::max(most, child->memoryInUse());
+        std::this_thread::sleep_for(20ms);
+    }
+    CHECK(most >= 280LL * 1024 * 1024);
+    CHECK(most < 400LL * 1024 * 1024);
+
+    REQUIRE(child->kill());
+    CHECK(child->memoryInUse() == 0);
 }
 
 TEST_CASE("Killing a child that already ended leaves how it ended")

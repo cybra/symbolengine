@@ -125,6 +125,10 @@ public:
     const PluginDescription& description() const;
     PluginError problem() const;
 
+    /** Whether a call into it crashed, which the program survives only on Windows, where the host catches the fault:
+        the program's process can no longer be trusted. From any thread. */
+    bool hasCrashed() const;
+
     /** Told on the main thread of what happens to it. Set as make() returns, before it is made. */
     std::function<void(PluginChange)> onChange;
 

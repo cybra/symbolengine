@@ -79,6 +79,11 @@ public:
     /** The process's ID, as the system shows it. */
     std::int64_t id() const;
 
+    /** How much memory it uses now, in bytes, as the system counts it against the process: its physical footprint on a
+        Mac, its working set on Windows and its resident pages on Linux. 0 once it has ended or where the system won't
+        say. From any thread. */
+    std::int64_t memoryInUse() const;
+
     /** How it ended, or nothing while it runs. */
     std::optional<ProcessEnding> ending();
 

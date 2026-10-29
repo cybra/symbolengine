@@ -134,6 +134,17 @@ int main(int argc, [[maybe_unused]] char** narrowArguments)
     if (mode == "hang")
         hang();
 
+    // Holds the megabytes given, each page written so the system counts it, until ended.
+    if (mode == "allocate")
+    {
+        static std::vector<char> held(static_cast<std::size_t>(std::atoi(argv[2])) * 1024 * 1024);
+        for (std::size_t i = 0; i < held.size(); i += 4096)
+            held[i] = static_cast<char>(i);
+        std::puts("allocated");
+        std::fflush(stdout);
+        hang();
+    }
+
     if (mode == "link-echo")
     {
         std::error_code error;

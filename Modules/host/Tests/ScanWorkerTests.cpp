@@ -74,6 +74,7 @@ struct Scan
     std::vector<PluginSetAside> setAside;
     std::vector<std::pair<PluginFile::Outcome, std::optional<PluginFailure>>> done;
     std::vector<PluginFailure> failed;
+    std::vector<std::optional<PluginDescription>> inHand;
     int files = 0;
 
     explicit Scan(std::chrono::milliseconds limit = 20s,
@@ -89,7 +90,10 @@ struct Scan
         worker->onDone = [this](PluginFile::Outcome outcome, const std::optional<PluginFailure>& why) {
             done.emplace_back(outcome, why);
         };
-        worker->onFailed = [this](const PluginFailure& failure) { failed.push_back(failure); };
+        worker->onFailed = [this](const PluginFailure& failure, const std::optional<PluginDescription>& plugin) {
+            failed.push_back(failure);
+            inHand.push_back(plugin);
+        };
     }
 
     // A fake plugin file holding what the JSON says.
@@ -241,6 +245,8 @@ TEST_CASE("A worker that makes no progress is killed within its limit, and is go
     CHECK(scan.failed[0].kind == PluginFailure::Kind::timedOut);
     CHECK(scan.failed[0].step == "making plugin 1 of 1, Alpha");
     CHECK(scan.failed[0].code == 1000);
+    REQUIRE(scan.inHand[0]);
+    CHECK(scan.inHand[0]->name == "Alpha");
     CHECK(scan.worker->hasEnded());
     CHECK(goneWithin(id, 2s));
     CHECK_FALSE(scan.scan(scan.fake(R"({"plugins": []})")));
@@ -294,17 +300,29 @@ TEST_CASE("A plugin that crashes takes down only its worker, which says how it e
     REQUIRE(scan.finished());
 
     CHECK(scan.names() == std::vector<std::string>{"Alpha"});
+#if defined(_WIN32)
+    // On Windows the host catches the fault inside the plugin's call, so the plugin is set aside as crashed and the
+    // worker answers the file, to be let go by the scan after it, as a process that faulted can't be trusted.
+    static_cast<void>(id);
+    CHECK(scan.failed.empty());
+    REQUIRE(scan.setAside.size() == 1);
+    CHECK(scan.setAside[0].plugin.identity == PluginIdentity{"Fake", "beta"});
+    CHECK(scan.setAside[0].failure.kind == PluginFailure::Kind::crashed);
+    CHECK(scan.setAside[0].failure.code == 0xC0000005);
+    CHECK(scan.setAside[0].failure.step == "setting up plugin 2 of 2, Beta");
+    REQUIRE(scan.done.size() == 1);
+#else
     CHECK(scan.done.empty());
     REQUIRE(scan.failed.size() == 1);
     CHECK(scan.failed[0].kind == PluginFailure::Kind::crashed);
     CHECK(scan.failed[0].step == "setting up plugin 2 of 2, Beta");
-#if defined(_WIN32)
-    CHECK(scan.failed[0].code == 0xC0000005);
-#else
+    REQUIRE(scan.inHand[0]);
+    CHECK(scan.inHand[0]->identity == PluginIdentity{"Fake", "beta"});
+    CHECK(scan.inHand[0]->location == scan.plugins[0].location);
     CHECK((scan.failed[0].code == SIGSEGV || scan.failed[0].code == SIGBUS));
-#endif
     CHECK(scan.worker->hasEnded());
     CHECK(goneWithin(id, 2s));
+#endif
 }
 
 TEST_CASE("A worker that ends without answering has failed, whatever its exit code")
@@ -356,8 +374,11 @@ TEST_CASE("Answers that aren't right are never taken: another request's, cut sho
     REQUIRE(scan.failed.size() == 1);
     CHECK(scan.failed[0].kind ==
           (mode == "wrongNumber" ? PluginFailure::Kind::timedOut : PluginFailure::Kind::noAnswer));
+    CHECK_FALSE(scan.inHand[0]);
     if (mode == "progressOnly")
         CHECK(scan.failed[0].step == "loading the code");
+    if (mode == "silent")
+        CHECK(scan.failed[0].step == "starting the scan");
 }
 
 TEST_CASE("A worker ends by itself once its link is closed, and once its program is killed or quits")
@@ -380,9 +401,10 @@ TEST_CASE("A worker ends by itself once its link is closed, and once its program
         {
             ScratchFolder scratch;
             const auto idFile = scratch.path / "worker id.txt";
+            const auto quitFile = scratch.path / "quit now";
             std::error_code error;
             ChildProcess::Options options;
-            options.arguments = {how, paths::toUtf8(idFile)};
+            options.arguments = {how, paths::toUtf8(idFile), paths::toUtf8(quitFile)};
             auto program = ChildProcess::start(SYMBOLENGINE_SCAN_WORKER, options, error);
             REQUIRE(program);
             const auto until = Clock::now() + 10s;
@@ -392,6 +414,8 @@ TEST_CASE("A worker ends by itself once its link is closed, and once its program
             REQUIRE(processExists(id));
             if (how == "killed")
                 REQUIRE(program->kill());
+            else
+                files::writeSafely(quitFile, "");
             const auto stopped = Clock::now();
             CHECK(goneWithin(id, 2500ms));
             CHECK(Clock::now() - stopped < 2500ms);

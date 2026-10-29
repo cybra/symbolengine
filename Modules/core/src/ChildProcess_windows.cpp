@@ -8,6 +8,12 @@
 #endif
 #include <windows.h>
 
+// After windows.h, which it needs; version 2 takes the memory counters from kernel32, with no library of its own.
+#ifndef PSAPI_VERSION
+    #define PSAPI_VERSION 2
+#endif
+#include <psapi.h>
+
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
@@ -502,6 +508,16 @@ std::unique_ptr<ChildProcess> ChildProcess::start(const std::filesystem::path& p
 std::int64_t ChildProcess::id() const
 {
     return native->id;
+}
+
+std::int64_t ChildProcess::memoryInUse() const
+{
+    if (WaitForSingleObject(native->process, 0) == WAIT_OBJECT_0)
+        return 0;
+    PROCESS_MEMORY_COUNTERS counters{};
+    if (!GetProcessMemoryInfo(native->process, &counters, sizeof counters))
+        return 0;
+    return static_cast<std::int64_t>(counters.WorkingSetSize);
 }
 
 std::optional<ProcessEnding> ChildProcess::ending()

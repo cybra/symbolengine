@@ -919,6 +919,11 @@ Plugin::State Plugin::state() const
     return inner->state;
 }
 
+bool Plugin::hasCrashed() const
+{
+    return inner->crashed;
+}
+
 const PluginDescription& Plugin::description() const
 {
     return inner->description;

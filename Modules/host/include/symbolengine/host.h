@@ -5,4 +5,5 @@
 #include "host/PluginFormat.h"
 #include "host/PluginList.h"
 #include "host/PluginScanWorker.h"
+#include "host/PluginScanner.h"
 #include "host/Vst3Format.h"

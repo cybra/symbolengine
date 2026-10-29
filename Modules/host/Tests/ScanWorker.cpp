@@ -15,6 +15,7 @@
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -197,7 +198,7 @@ int main(int argc, char** argv)
     }
 
     // A program with a worker of its own, which writes the worker's process ID to a file and then waits to be killed,
-    // or quits without letting the worker go.
+    // or, once the file its third argument names is there, quits without letting the worker go.
     if (argc >= 3)
     {
         std::error_code error;
@@ -206,8 +207,12 @@ int main(int argc, char** argv)
         if (worker == nullptr)
             return 91;
         files::writeSafely(paths::fromUtf8(argv[2]), std::to_string(worker->processId()));
-        if (std::string(argv[1]) == "quits")
+        if (std::string(argv[1]) == "quits" && argc >= 4)
+        {
+            while (!std::filesystem::exists(paths::fromUtf8(argv[3])))
+                std::this_thread::sleep_for(10ms);
             std::exit(0);
+        }
         hang();
     }
     return 64;

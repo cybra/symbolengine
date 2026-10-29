@@ -146,14 +146,18 @@ private:
     std::size_t next = 0;
     std::shared_ptr<Plugin> plugin;
 
-    void say(std::string now)
+    // Says the step it begins, with the plugin in hand if the step is one plugin's.
+    void say(std::string now, const PluginDescription* inHand = nullptr)
     {
         std::string message;
         {
             const std::lock_guard held(lock);
             step = std::move(now);
             ++count;
-            message = json::write(Object{{"request", number}, {"step", step}, {"count", count}});
+            Object said{{"request", number}, {"step", step}, {"count", count}};
+            if (inHand != nullptr)
+                said.set("inHand", writePlugin(*inHand));
+            message = json::write(said);
         }
         link.send(message);
     }
@@ -235,12 +239,12 @@ private:
         // Only effects go in a chain, so only they are made; the rest are answered as they declare themselves.
         if (plugins[next].kind != PluginKind::effect)
         {
-            say("reading " + position());
+            say("reading " + position(), &plugins[next]);
             found(plugins[next]);
             return following();
         }
 
-        say("making " + position());
+        say("making " + position(), &plugins[next]);
         plugin = host.make(*format, plugins[next]);
         plugin->onChange = [this, made = false](PluginChange change) mutable {
             if (change == PluginChange::made && !std::exchange(made, true))
@@ -265,14 +269,14 @@ private:
             return following();
         }
 
-        say("setting up " + position());
+        say("setting up " + position(), &plugins[next]);
         if (!plugin->prepare(current.setup))
         {
             refuse(plugin->problem().message);
             return following();
         }
 
-        say("playing " + position());
+        say("playing " + position(), &plugins[next]);
         play();
         if (plugin->state() == Plugin::State::failed)
         {
@@ -310,11 +314,14 @@ private:
 
     void found(const PluginDescription& description) { answer(Object{{"plugin", writePlugin(description)}}); }
 
+    // Sets the plugin in hand aside: refused, or crashed in a call where the host caught the fault, on Windows.
     void refuse(const std::string& why)
     {
-        answer(Object{
-            {"setAside", Object{{"plugin", writePlugin(plugins[next])},
-                                {"failure", writeFailure({PluginFailure::Kind::refused, currentStep(), 0, why})}}}});
+        const bool crashed = plugin != nullptr && plugin->hasCrashed();
+        const PluginFailure failure{crashed ? PluginFailure::Kind::crashed : PluginFailure::Kind::refused,
+                                    currentStep(), crashed ? plugin->problem().code : 0, why};
+        answer(
+            Object{{"setAside", Object{{"plugin", writePlugin(plugins[next])}, {"failure", writeFailure(failure)}}}});
     }
 
     // Lets the plugin go, taken down on the main thread before the next is begun.
@@ -336,6 +343,7 @@ struct Underway
     std::int64_t count = 0;
     Steady::time_point progressed{};
     std::set<PluginIdentity> answered{};
+    std::optional<PluginDescription> inHand{};
 };
 
 PluginFailure failureFrom(const ProcessEnding& ending, const std::string& step)
@@ -417,6 +425,9 @@ struct PluginScanWorker::Shared : std::enable_shared_from_this<PluginScanWorker:
                     return;
                 now.count = count;
                 now.progressed = Steady::now();
+                now.inHand.reset();
+                if (const auto* plugin = object.find("inHand"))
+                    now.inHand = readPlugin(*plugin, now.format, now.file);
                 if (text != now.step)
                 {
                     now.step = text;
@@ -484,14 +495,15 @@ struct PluginScanWorker::Shared : std::enable_shared_from_this<PluginScanWorker:
             {
                 PluginFailure failure{PluginFailure::Kind::timedOut, underway->step, options.limit.count(),
                                       "It made no progress for " + std::to_string(options.limit.count()) + " ms."};
+                auto inHand = underway->inHand;
                 underway.reset();
                 ended = true;
                 held.unlock();
                 child->kill();
                 held.lock();
-                tell([failure](PluginScanWorker& worker) {
+                tell([failure, inHand](PluginScanWorker& worker) {
                     if (worker.onFailed)
-                        worker.onFailed(failure);
+                        worker.onFailed(failure, inHand);
                 });
                 continue;
             }
@@ -510,10 +522,11 @@ struct PluginScanWorker::Shared : std::enable_shared_from_this<PluginScanWorker:
                 if (underway)
                 {
                     const auto failure = failureFrom(*ending, underway->step);
+                    auto inHand = underway->inHand;
                     underway.reset();
-                    tell([failure](PluginScanWorker& worker) {
+                    tell([failure, inHand](PluginScanWorker& worker) {
                         if (worker.onFailed)
-                            worker.onFailed(failure);
+                            worker.onFailed(failure, inHand);
                     });
                 }
                 continue;
@@ -670,6 +683,11 @@ bool PluginScanWorker::hasEnded() const
 std::int64_t PluginScanWorker::processId() const
 {
     return shared->id;
+}
+
+std::int64_t PluginScanWorker::memoryInUse() const
+{
+    return shared->child->memoryInUse();
 }
 
 ProcessEnding PluginScanWorker::close(std::chrono::milliseconds limit)

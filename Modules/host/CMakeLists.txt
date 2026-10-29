@@ -27,6 +27,7 @@ set(sources
     src/PluginFormat.cpp
     src/PluginList.cpp
     src/PluginScanWorker.cpp
+    src/PluginScanner.cpp
     src/ProcessState.cpp
     src/Vst3Format.cpp
     src/Vst3Module.cpp
@@ -56,7 +57,7 @@ if(SYMBOLENGINE_TESTS)
     symbolengine_set_warnings(symbolengine_host_scan_worker)
 
     set(test_sources Tests/Allocations.cpp Tests/ParameterTests.cpp Tests/PluginLifeTests.cpp Tests/PluginListTests.cpp
-                     Tests/ScanWorkerTests.cpp Tests/TimeTests.cpp Tests/Vst3Tests.cpp)
+                     Tests/ScanTests.cpp Tests/ScanWorkerTests.cpp Tests/TimeTests.cpp Tests/Vst3Tests.cpp)
     if(APPLE)
         list(APPEND test_sources Tests/ScanWorkerTests_mac.mm)
     endif()
@@ -67,9 +68,10 @@ if(SYMBOLENGINE_TESTS)
     endif()
     target_compile_definitions(symbolengine_host_tests PRIVATE
         "SYMBOLENGINE_SCAN_WORKER=\"$<TARGET_FILE:symbolengine_host_scan_worker>\""
+        "SYMBOLENGINE_MISBEHAVING=\"$<TARGET_PROPERTY:symbolengine_misbehaving_vst3,SYMBOLENGINE_FOLDER>\""
         "SYMBOLENGINE_TEST_VST3=\"$<TARGET_GENEX_EVAL:symbolengine_test_vst3,$<TARGET_PROPERTY:symbolengine_test_vst3,SYMBOLENGINE_BUNDLE>>\""
         "SYMBOLENGINE_TEST_VST3_LOG=\"${CMAKE_CURRENT_BINARY_DIR}/test-vst3-log.txt\""
         "SYMBOLENGINE_MODULE_LIFE=\"$<TARGET_FILE:symbolengine_host_module_life>\"")
     add_dependencies(symbolengine_host_tests symbolengine_test_vst3 symbolengine_host_module_life
-                     symbolengine_host_scan_worker)
+                     symbolengine_host_scan_worker symbolengine_misbehaving_vst3)
 endif()

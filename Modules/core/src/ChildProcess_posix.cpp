@@ -3,10 +3,12 @@
 #include <algorithm>
 #include <cerrno>
 #include <csignal>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
 #include <spawn.h>
+#include <string>
 #include <string_view>
 #include <sys/socket.h>
 #include <sys/wait.h>
@@ -15,7 +17,9 @@
 
 #if defined(__APPLE__)
     #include <crt_externs.h>
+    #include <libproc.h>
     #include <sys/event.h>
+    #include <sys/resource.h>
 #else
 extern char** environ;
 #endif
@@ -408,6 +412,28 @@ std::unique_ptr<ChildProcess> ChildProcess::start(const std::filesystem::path& p
 std::int64_t ChildProcess::id() const
 {
     return native->id;
+}
+
+std::int64_t ChildProcess::memoryInUse() const
+{
+#if defined(__APPLE__)
+    // The footprint Activity Monitor shows, which counts compressed memory and not shared libraries' pages.
+    rusage_info_v2 usage{};
+    if (proc_pid_rusage(native->id, RUSAGE_INFO_V2, reinterpret_cast<rusage_info_t*>(&usage)) != 0)
+        return 0;
+    return static_cast<std::int64_t>(usage.ri_phys_footprint);
+#else
+    // Its resident pages, the second number in statm; a process that has ended has none.
+    const auto path = "/proc/" + std::to_string(native->id) + "/statm";
+    FILE* statm = std::fopen(path.c_str(), "r");
+    if (statm == nullptr)
+        return 0;
+    long long size = 0;
+    long long resident = 0;
+    const auto read = std::fscanf(statm, "%lld %lld", &size, &resident);
+    std::fclose(statm);
+    return read == 2 ? resident * sysconf(_SC_PAGESIZE) : 0;
+#endif
 }
 
 std::optional<ProcessEnding> ChildProcess::ending()

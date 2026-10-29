@@ -109,8 +109,10 @@ public:
     std::function<void(PluginFile::Outcome outcome, const std::optional<PluginFailure>& why)> onDone;
 
     /** Told once, on the program's main thread, when the worker crashed, made no progress within the limit or ended
-        before answering the request under way: it is gone, and the failure says how, at the step it was on. */
-    std::function<void(const PluginFailure& failure)> onFailed;
+        before answering the request under way: it is gone, and the failure says how, at the step it was on, with the
+        plugin it had in hand, if the step was one plugin's. A failure at the step "starting the scan" came before the
+        worker said anything of the request, so it was the worker's, never a plugin's. */
+    std::function<void(const PluginFailure& failure, const std::optional<PluginDescription>& inHand)> onFailed;
 
     /** Asks the worker to scan a file, giving false while a request is under way or once it has gone. */
     bool scan(const PluginScanRequest& request);
@@ -119,8 +121,9 @@ public:
     bool isBusy() const;
     bool hasEnded() const;
 
-    /** The worker's process ID, as the system shows it. */
+    /** The worker's process ID, as the system shows it, and the memory it uses now, in bytes. */
     std::int64_t processId() const;
+    std::int64_t memoryInUse() const;
 
     /** Closes the link, so the worker ends by itself, and waits up to the limit for it, killing it after; gives how it
         ended. Nothing more is told. */
