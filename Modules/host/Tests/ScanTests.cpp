@@ -106,7 +106,13 @@ TEST_CASE("Bundles that crash or abort as their code loads are set aside with wh
         CHECK(file->plugins.empty());
         CHECK_FALSE(rig.list.needsScan(file->path, file->stamp));
     }
+#if defined(_WIN32)
+    // Windows' loader catches a fault in a library's start-up code and fails the load with a reason of its own.
+    CHECK(rig.recorded("Crash on load")->failure->kind == PluginFailure::Kind::refused);
+    CHECK_FALSE(rig.recorded("Crash on load")->failure->detail.empty());
+#else
     CHECK(rig.recorded("Crash on load")->failure->kind == PluginFailure::Kind::crashed);
+#endif
     CHECK(foundWhole(rig.recorded("Good A")));
     CHECK(foundWhole(rig.recorded("Good B")));
 }
