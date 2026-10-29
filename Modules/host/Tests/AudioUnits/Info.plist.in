@@ -93,6 +93,42 @@
             <key>version</key><integer>66051</integer>
             <key>factoryFunction</key><string>GrowFactory</string>
         </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>Time</string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: Time</string>
+            <key>description</key><string>SymbolEngine's test unit Time</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>TimeFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>Rate</string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: Rate</string>
+            <key>description</key><string>SymbolEngine's test unit Rate</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>RateFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>Fixd</string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: Fixed Blocks</string>
+            <key>description</key><string>SymbolEngine's test unit Fixed Blocks</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>FixedBlocksFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>Late</string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: Late</string>
+            <key>description</key><string>SymbolEngine's test unit Late</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>LateFactory</string>
+        </dict>
     </array>
 </dict>
 </plist>

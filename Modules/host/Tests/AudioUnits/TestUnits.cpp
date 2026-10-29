@@ -5,10 +5,12 @@
 
 #include <AudioUnitSDK/AUEffectBase.h>
 
+#include <mach/mach_time.h>
 #include <pthread.h>
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
@@ -384,6 +386,149 @@ public:
     }
 };
 
+// Asks the host's callbacks for its tempo, beat, meter and transport in every render, writing the tempo / 1,000 to its
+// first channel and the beat to its second, and checks its time stamps: sample time running on by exactly the frames
+// rendered, host time near the system's clock, and no callback answering outside a render.
+class Time final : public Checked
+{
+public:
+    explicit Time(AudioComponentInstance instance) : Checked(instance, "Time") {}
+
+    OSStatus Initialize() override
+    {
+        if (CallHostBeatAndTempo(nullptr, nullptr) == -1)
+            misuse(name, "initialized before its host callbacks were set");
+        expected = -1;
+        return Checked::Initialize();
+    }
+
+    OSStatus Reset(AudioUnitScope scope, AudioUnitElement element) override
+    {
+        Float64 beat = 0;
+        Float64 tempo = 0;
+        if (IsInitialized() && CallHostBeatAndTempo(&beat, &tempo) != kAudioUnitErr_CannotDoInCurrentContext)
+            misuse(name, "a host callback answered outside a render");
+        expected = -1;
+        return Checked::Reset(scope, element);
+    }
+
+protected:
+    OSStatus render(AudioUnitRenderActionFlags& flags, const AudioTimeStamp& time, UInt32 frames) override
+    {
+        if (expected >= 0 && time.mSampleTime != expected)
+            misuse(name, "its sample time jumped from " + std::to_string(expected) + " to " +
+                             std::to_string(time.mSampleTime));
+        expected = time.mSampleTime + frames;
+        if ((time.mFlags & kAudioTimeStampHostTimeValid) != 0)
+        {
+            mach_timebase_info_data_t base{};
+            mach_timebase_info(&base);
+            const auto now = static_cast<double>(mach_absolute_time()) * base.numer / base.denom;
+            const auto then = static_cast<double>(time.mHostTime) * base.numer / base.denom;
+            if (std::abs(now - then) > 250e6)
+                misuse(name, "its host time is " + std::to_string((now - then) / 1e6) + " ms from the clock");
+        }
+
+        // Every callback, with every argument and with none.
+        CallHostBeatAndTempo(nullptr, nullptr);
+        CallHostMusicalTimeLocation(nullptr, nullptr, nullptr, nullptr);
+        CallHostTransportState(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
+        Float64 beat = -1;
+        Float64 tempo = -1;
+        UInt32 toNextBeat = 0;
+        Float32 numerator = 0;
+        UInt32 denominator = 0;
+        Float64 downbeat = 0;
+        Boolean playing = false;
+        Boolean changed = false;
+        Boolean cycling = true;
+        Float64 sample = 0;
+        Float64 cycleStart = 0;
+        Float64 cycleEnd = 0;
+        if (CallHostBeatAndTempo(&beat, &tempo) != noErr ||
+            CallHostMusicalTimeLocation(&toNextBeat, &numerator, &denominator, &downbeat) != noErr ||
+            CallHostTransportState(&playing, &changed, &sample, &cycling, &cycleStart, &cycleEnd) != noErr)
+            misuse(name, "a host callback failed in a render");
+        if (tempo <= 0 || numerator <= 0 || denominator == 0 || cycling)
+            misuse(name, "a host callback gave a tempo, meter or cycle no host should");
+
+        const auto result = Checked::render(flags, time, frames);
+        auto& out = Output(0).GetBufferList();
+        if (out.mNumberBuffers >= 2)
+        {
+            std::fill_n(static_cast<float*>(out.mBuffers[0].mData), frames, static_cast<float>(tempo / 1000.0));
+            std::fill_n(static_cast<float*>(out.mBuffers[1].mData), frames, static_cast<float>(beat));
+        }
+        return result;
+    }
+
+private:
+    Float64 expected = -1;
+};
+
+// Takes 48 and 96 kHz only, writing its rate / 100,000 to every channel.
+class Rate final : public Checked
+{
+public:
+    explicit Rate(AudioComponentInstance instance) : Checked(instance, "Rate") {}
+
+    bool ValidFormat(AudioUnitScope scope, AudioUnitElement element, const AudioStreamBasicDescription& format) override
+    {
+        return (format.mSampleRate == 48000.0 || format.mSampleRate == 96000.0) &&
+               Checked::ValidFormat(scope, element, format);
+    }
+
+protected:
+    OSStatus process(AudioUnitRenderActionFlags&, const AudioBufferList&, AudioBufferList& out, UInt32 frames) override
+    {
+        const auto rate = static_cast<float>(Output(0).GetStreamFormat().mSampleRate / 100000.0);
+        for (UInt32 c = 0; c < out.mNumberBuffers; ++c)
+            std::fill_n(static_cast<float*>(out.mBuffers[c].mData), frames, rate);
+        return noErr;
+    }
+};
+
+// Fails every render shorter than its largest block, as units that need every block the same size do.
+class FixedBlocks final : public Checked
+{
+public:
+    explicit FixedBlocks(AudioComponentInstance instance) : Checked(instance, "FixedBlocks") {}
+
+protected:
+    OSStatus render(AudioUnitRenderActionFlags& flags, const AudioTimeStamp& time, UInt32 frames) override
+    {
+        if (frames != GetMaxFramesPerSlice())
+            return kAudio_ParamError;
+        return Checked::render(flags, time, frames);
+    }
+};
+
+// Its latency goes from 10 to 20 ms at its fiftieth render, which it says then, and is never to be asked for while it
+// renders.
+class Late final : public Checked
+{
+public:
+    explicit Late(AudioComponentInstance instance) : Checked(instance, "Late") {}
+
+    Float64 GetLatency() override
+    {
+        if (rendering)
+            misuse(name, "asked for its latency while rendering");
+        return renders < 50 ? 0.010 : 0.020;
+    }
+
+protected:
+    OSStatus render(AudioUnitRenderActionFlags& flags, const AudioTimeStamp& time, UInt32 frames) override
+    {
+        if (++renders == 50)
+            PropertyChanged(kAudioUnitProperty_Latency, kAudioUnitScope_Global, 0);
+        return Checked::render(flags, time, frames);
+    }
+
+private:
+    std::atomic<int> renders{0};
+};
+
 }
 
 AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Pass)
@@ -395,3 +540,7 @@ AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Swap)
 AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Echo)
 AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Ten)
 AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Grow)
+AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Time)
+AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Rate)
+AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, FixedBlocks)
+AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Late)

@@ -8,9 +8,12 @@
 
 #include <AudioToolbox/AudioToolbox.h>
 #include <CoreFoundation/CoreFoundation.h>
+#include <mach/mach_time.h>
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <climits>
 #include <cmath>
 #include <cstring>
 
@@ -118,11 +121,16 @@ AudioStreamBasicDescription floatFormat(double rate, UInt32 channels)
 class AudioUnitPlugin final : public PluginFormatInstance
 {
 public:
-    explicit AudioUnitPlugin(AudioUnit made) : unit(made) {}
+    AudioUnitPlugin(AudioUnit made, PluginFormatClient& told) : unit(made), client(told)
+    {
+        AudioUnitAddPropertyListener(unit, kAudioUnitProperty_Latency, &AudioUnitPlugin::propertyChanged, this);
+    }
 
     ~AudioUnitPlugin() override
     {
-        // In order: anything it holds of audio cleared, uninitialized, disposed, on the main thread.
+        // In order: its listener gone, anything it holds of audio cleared, uninitialized, disposed, on the main thread.
+        AudioUnitRemovePropertyListenerWithUserData(unit, kAudioUnitProperty_Latency, &AudioUnitPlugin::propertyChanged,
+                                                    this);
         AudioUnitReset(unit, kAudioUnitScope_Global, 0);
         if (initialized)
             AudioUnitUninitialize(unit);
@@ -134,8 +142,7 @@ public:
         if (busCount(kAudioUnitScope_Input) > 0)
             setFormat(kAudioUnitScope_Input, 0, static_cast<UInt32>(wanted.inputs));
         setFormat(kAudioUnitScope_Output, 0, static_cast<UInt32>(wanted.outputs));
-        layout = {busCount(kAudioUnitScope_Input) > 0 ? static_cast<int>(channels(kAudioUnitScope_Input, 0)) : 0,
-                  static_cast<int>(channels(kAudioUnitScope_Output, 0))};
+        layout = currentLayout();
         return layout;
     }
 
@@ -169,13 +176,18 @@ public:
                 }
             }
 
-        // Its input from the host on every input bus, the main one's from the block and the rest silence.
+        // Its input from the host on every input bus, the main one's from the block and the rest silence; and the
+        // host's callbacks, set again before every initialize, as a unit may forget them as it is uninitialized.
         for (UInt32 bus = 0; bus < busCount(kAudioUnitScope_Input); ++bus)
         {
             AURenderCallbackStruct callback{&AudioUnitPlugin::input, this};
             AudioUnitSetProperty(unit, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, bus, &callback,
                                  sizeof callback);
         }
+        HostCallbackInfo callbacks{this, &AudioUnitPlugin::beatAndTempo, &AudioUnitPlugin::musicalTime,
+                                   &AudioUnitPlugin::transport, &AudioUnitPlugin::transport2};
+        AudioUnitSetProperty(unit, kAudioUnitProperty_HostCallbacks, kAudioUnitScope_Global, 0, &callbacks,
+                             sizeof callbacks);
         UInt32 offline = setup.offline ? 1 : 0;
         AudioUnitSetProperty(unit, kAudioUnitProperty_OfflineRender, kAudioUnitScope_Global, 0, &offline,
                              sizeof offline);
@@ -188,10 +200,7 @@ public:
         initialized = true;
 
         // Its buses as it was initialized with them, which it may have changed.
-        const PluginLayout now{
-            busCount(kAudioUnitScope_Input) > 0 ? static_cast<int>(channels(kAudioUnitScope_Input, 0)) : 0,
-            static_cast<int>(channels(kAudioUnitScope_Output, 0))};
-        if (now != layout)
+        if (currentLayout() != layout)
         {
             AudioUnitUninitialize(unit);
             initialized = false;
@@ -204,6 +213,9 @@ public:
         list.assign(offsetof(AudioBufferList, mBuffers) +
                         sizeof(AudioBuffer) * std::max<std::size_t>(1, outputs.size()),
                     std::byte{});
+        heldIn.assign(static_cast<std::size_t>(std::max(0, layout.inputs)), std::vector<float>(maximumFrames));
+        heldOut.assign(static_cast<std::size_t>(layout.outputs), std::vector<float>(maximumFrames));
+        held = 0;
         sampleTime = 0;
         failures = 0;
         return true;
@@ -216,7 +228,12 @@ public:
         initialized = false;
     }
 
-    int latency() override { return framesOf(property(kAudioUnitProperty_Latency)); }
+    // A unit fed full blocks through a buffer is that buffer's length later too.
+    int latency() override
+    {
+        return framesOf(property(kAudioUnitProperty_Latency)) + (fixedBlocks ? static_cast<int>(maximumFrames) : 0);
+    }
+
     int tail() override { return framesOf(property(kAudioUnitProperty_TailTime)); }
 
     void reset() override { AudioUnitReset(unit, kAudioUnitScope_Global, 0); }
@@ -230,61 +247,29 @@ public:
     {
         if (gone != nullptr)
             return false;
+        if (fixedBlocks)
+            return processHeld(block);
 
-        auto* buffers = reinterpret_cast<AudioBufferList*>(list.data());
         for (int done = 0; done < block.frames;)
         {
             const auto frames = std::min<UInt32>(maximumFrames, static_cast<UInt32>(block.frames - done));
-            playing = &block;
-            from = done;
-            pulled = 0;
+            const auto status =
+                render({block.inputs, block.inputChannels, done, block.frames}, frames, block.time, done);
 
-            AudioTimeStamp time{};
-            time.mSampleTime = sampleTime;
-            time.mFlags = kAudioTimeStampSampleTimeValid;
-
-            buffers->mNumberBuffers = static_cast<UInt32>(outputs.size());
-            for (std::size_t c = 0; c < outputs.size(); ++c)
-                buffers->mBuffers[c] = {1, frames * static_cast<UInt32>(sizeof(float)), outputs[c].data()};
-
-            AudioUnitRenderActionFlags flags = 0;
-            const auto status = AudioUnitRender(unit, &flags, &time, 0, frames, buffers);
-            playing = nullptr;
-
-            if (status == kAudioComponentErr_InstanceInvalidated || status == kAudioComponentErr_InstanceTimedOut)
+            // A unit that fails a short block needs every block the same size: from now on it is fed full blocks
+            // through a buffer, whose length its latency counts, and is prepared again for it. This block passes.
+            if (status == kAudio_ParamError && frames < maximumFrames)
             {
-                gone = "The system says its instance is gone.";
+                fixedBlocks = true;
+                client.notice(PluginNotice::latency);
+                for (int c = 0; c < block.outputChannels; ++c)
+                    passDry(block.inputs, block.inputChannels, c, done, block.outputs[c] + done,
+                            static_cast<UInt32>(block.frames - done));
+                return true;
+            }
+            if (!take(status, frames, block.inputs, block.inputChannels, done, block.outputs, block.outputChannels,
+                      done))
                 return false;
-            }
-            for (int c = 0; c < block.outputChannels; ++c)
-            {
-                auto* to = block.outputs[c] + done;
-                if (status != noErr)
-                {
-                    // A failed render is never heard: the block passes as it came.
-                    if (c < block.inputChannels)
-                        std::copy_n(block.inputs[c] + done, frames, to);
-                    else
-                        std::fill_n(to, frames, 0.0f);
-                    continue;
-                }
-
-                // Wherever it put each channel, and silence for one it left unwritten, whatever it says of silence.
-                const auto& written = buffers->mBuffers[static_cast<std::size_t>(c)];
-                const auto count = static_cast<std::size_t>(c) < buffers->mNumberBuffers && written.mData != nullptr
-                                       ? std::min<UInt32>(frames, written.mDataByteSize / sizeof(float))
-                                       : 0;
-                std::copy_n(static_cast<const float*>(written.mData), count, to);
-                std::fill(to + count, to + frames, 0.0f);
-            }
-            if (status != noErr && ++failures >= 3)
-            {
-                gone = "It failed three blocks in a row.";
-                return false;
-            }
-            if (status == noErr)
-                failures = 0;
-            sampleTime += frames;
             done += static_cast<int>(frames);
         }
         return true;
@@ -309,10 +294,21 @@ public:
     }
 
 private:
+    // Where a render's input comes from: channels of samples, from a frame of them on, so many in all.
+    struct Source
+    {
+        const float* const* channels = nullptr;
+        int count = 0;
+        int from = 0;
+        int frames = 0;
+    };
+
     AudioUnit unit;
+    PluginFormatClient& client;
     bool initialized = false;
     const char* gone = nullptr;
     int failures = 0;
+    bool fixedBlocks = false;
     double rate = 48000.0;
     UInt32 maximumFrames = 0;
     PluginLayout layout{};
@@ -321,10 +317,152 @@ private:
     std::vector<float> silence;
     std::vector<std::byte> list;
 
-    // The block being rendered, the frame of it this render begins at, and how much of it the unit has pulled.
-    const PluginBlock* playing = nullptr;
-    int from = 0;
+    // For a unit fed full blocks: the input gathered for its next one, the output of its last, and how far along both
+    // are.
+    std::vector<std::vector<float>> heldIn;
+    std::vector<std::vector<float>> heldOut;
+    UInt32 held = 0;
+
+    // During a render, on the audio thread: its input, how much of it the unit has pulled, and where the program is in
+    // time, which the host's callbacks answer from and refuse outside a render.
+    Source source;
     UInt32 pulled = 0;
+    const PluginTime* renderTime = nullptr;
+    int renderOffset = 0;
+    bool toldPlaying = false;
+
+    PluginLayout currentLayout() const
+    {
+        return {busCount(kAudioUnitScope_Input) > 0 ? static_cast<int>(channels(kAudioUnitScope_Input, 0)) : 0,
+                static_cast<int>(channels(kAudioUnitScope_Output, 0))};
+    }
+
+    // Renders frames into its own buffers, at the time given, its sample time running on by exactly the frames.
+    OSStatus render(Source from, UInt32 frames, const PluginTime* time, int offset)
+    {
+        source = from;
+        pulled = 0;
+        renderTime = time;
+        renderOffset = offset;
+
+        AudioTimeStamp stamp{};
+        stamp.mSampleTime = sampleTime;
+        stamp.mFlags = kAudioTimeStampSampleTimeValid;
+        if (time != nullptr && time->systemNanoseconds > 0)
+        {
+            // Host time in the system's ticks, which stop while the computer sleeps, where the steady clock the program
+            // gives its time on doesn't: counted back from the ticks now by how long ago the time was.
+            static const auto base = [] {
+                mach_timebase_info_data_t info{};
+                mach_timebase_info(&info);
+                return info;
+            }();
+            const auto ticksNow = mach_absolute_time();
+            const auto steadyNow = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                       std::chrono::steady_clock::now().time_since_epoch())
+                                       .count();
+            const auto ago = static_cast<long double>(steadyNow - time->systemNanoseconds) - offset * 1e9L / rate;
+            stamp.mHostTime = static_cast<UInt64>(static_cast<long double>(ticksNow) - ago * base.denom / base.numer);
+            stamp.mFlags |= kAudioTimeStampHostTimeValid;
+        }
+
+        auto* buffers = reinterpret_cast<AudioBufferList*>(list.data());
+        buffers->mNumberBuffers = static_cast<UInt32>(outputs.size());
+        for (std::size_t c = 0; c < outputs.size(); ++c)
+            buffers->mBuffers[c] = {1, frames * static_cast<UInt32>(sizeof(float)), outputs[c].data()};
+
+        AudioUnitRenderActionFlags flags = 0;
+        const auto status = AudioUnitRender(unit, &flags, &stamp, 0, frames, buffers);
+        source = {};
+        renderTime = nullptr;
+
+        // Its frames are used up whether or not it rendered them; a unit given the same time again may give back what
+        // it gave the last time, as Apple's SDK does.
+        sampleTime += frames;
+        return status;
+    }
+
+    // Takes what a render gave into the destination: wherever the unit put each channel, silence for one it left
+    // unwritten, whatever it said of silence; a failed render never heard, the input passing as it came. False once
+    // the unit can't be called again.
+    bool take(OSStatus status, UInt32 frames, const float* const* inputs, int inputCount, int inputFrom,
+              float* const* destination, int destinationCount, int destinationFrom)
+    {
+        if (status == kAudioComponentErr_InstanceInvalidated || status == kAudioComponentErr_InstanceTimedOut)
+        {
+            gone = "The system says its instance is gone.";
+            return false;
+        }
+        const auto* buffers = reinterpret_cast<const AudioBufferList*>(list.data());
+        for (int c = 0; c < destinationCount; ++c)
+        {
+            auto* to = destination[c] + destinationFrom;
+            if (status != noErr)
+            {
+                passDry(inputs, inputCount, c, inputFrom, to, frames);
+                continue;
+            }
+            const auto& written = buffers->mBuffers[static_cast<std::size_t>(c)];
+            const auto count = static_cast<std::size_t>(c) < buffers->mNumberBuffers && written.mData != nullptr
+                                   ? std::min<UInt32>(frames, written.mDataByteSize / sizeof(float))
+                                   : 0;
+            std::copy_n(static_cast<const float*>(written.mData), count, to);
+            std::fill(to + count, to + frames, 0.0f);
+        }
+        if (status == noErr)
+            failures = 0;
+        else if (++failures >= 3)
+        {
+            gone = "It failed three blocks in a row.";
+            return false;
+        }
+        return true;
+    }
+
+    static void passDry(const float* const* inputs, int inputCount, int channel, int from, float* to, UInt32 frames)
+    {
+        if (channel < inputCount)
+            std::copy_n(inputs[channel] + from, frames, to);
+        else
+            std::fill_n(to, frames, 0.0f);
+    }
+
+    // A unit fed full blocks: the block's input gathered into the next full one and its output given from the last,
+    // rendering each time one is full.
+    bool processHeld(PluginBlock& block)
+    {
+        std::vector<const float*> in(heldIn.size());
+        std::vector<float*> out(heldOut.size());
+        for (std::size_t c = 0; c < heldIn.size(); ++c)
+            in[c] = heldIn[c].data();
+        for (std::size_t c = 0; c < heldOut.size(); ++c)
+            out[c] = heldOut[c].data();
+
+        for (int done = 0; done < block.frames;)
+        {
+            const auto frames = std::min<UInt32>(maximumFrames - held, static_cast<UInt32>(block.frames - done));
+            for (std::size_t c = 0; c < heldIn.size(); ++c)
+                passDry(block.inputs, block.inputChannels, static_cast<int>(c), done, heldIn[c].data() + held, frames);
+            for (int c = 0; c < block.outputChannels; ++c)
+                if (static_cast<std::size_t>(c) < heldOut.size())
+                    std::copy_n(heldOut[static_cast<std::size_t>(c)].data() + held, frames, block.outputs[c] + done);
+                else
+                    std::fill_n(block.outputs[c] + done, frames, 0.0f);
+            held += frames;
+            done += static_cast<int>(frames);
+
+            if (held == maximumFrames)
+            {
+                const auto status = render({in.data(), static_cast<int>(in.size()), 0, static_cast<int>(maximumFrames)},
+                                           maximumFrames, block.time, done);
+                held = 0;
+                if (!take(status, maximumFrames, in.data(), static_cast<int>(in.size()), 0, out.data(),
+                          static_cast<int>(out.size()), 0))
+                    return false;
+            }
+        }
+        return true;
+    }
 
     UInt32 busCount(AudioUnitScope scope) const
     {
@@ -368,10 +506,10 @@ private:
                           AudioBufferList* into)
     {
         auto& self = *static_cast<AudioUnitPlugin*>(context);
-        const auto* block = self.playing;
-        const auto at = static_cast<UInt32>(self.from) + self.pulled;
-        const auto available = block != nullptr && bus == 0 && at < static_cast<UInt32>(block->frames)
-                                   ? std::min(frames, static_cast<UInt32>(block->frames) - at)
+        const auto& from = self.source;
+        const auto at = static_cast<UInt32>(from.from) + self.pulled;
+        const auto available = from.channels != nullptr && bus == 0 && at < static_cast<UInt32>(from.frames)
+                                   ? std::min(frames, static_cast<UInt32>(from.frames) - at)
                                    : 0;
         for (UInt32 c = 0; c < into->mNumberBuffers; ++c)
         {
@@ -386,15 +524,110 @@ private:
             }
             auto* to = static_cast<float*>(buffer.mData);
             const auto room = std::min<UInt32>(frames, buffer.mDataByteSize / sizeof(float));
-            const auto copied =
-                block != nullptr && static_cast<int>(c) < block->inputChannels ? std::min(available, room) : 0;
+            const auto copied = static_cast<int>(c) < from.count ? std::min(available, room) : 0;
             if (copied > 0)
-                std::copy_n(block->inputs[c] + at, copied, to);
+                std::copy_n(from.channels[c] + at, copied, to);
             std::fill(to + copied, to + room, 0.0f);
         }
         if (bus == 0)
             self.pulled += frames;
         return noErr;
+    }
+
+    static void propertyChanged(void* context, AudioUnit, AudioUnitPropertyID id, AudioUnitScope, AudioUnitElement)
+    {
+        if (id == kAudioUnitProperty_Latency)
+            static_cast<AudioUnitPlugin*>(context)->client.notice(PluginNotice::latency);
+    }
+
+    // The host's callbacks, answered from where the program is in time for the render under way, and refused outside
+    // one: 120 beats a minute in 4/4 where the program has no tempo, and never a cycle.
+    struct Musical
+    {
+        double tempo = 120;
+        double beat = 0;
+        int numerator = 4;
+        int denominator = 4;
+        double frame = 0;
+    };
+
+    std::optional<Musical> musical() const
+    {
+        if (renderTime == nullptr)
+            return std::nullopt;
+        Musical now;
+        now.tempo = renderTime->tempo > 0 ? renderTime->tempo : 120.0;
+        now.numerator = renderTime->numerator > 0 ? renderTime->numerator : 4;
+        now.denominator = renderTime->denominator > 0 ? renderTime->denominator : 4;
+        now.frame = static_cast<double>(std::max<std::int64_t>(0, renderTime->position + renderOffset));
+        now.beat = now.frame / rate * now.tempo / 60.0;
+        return now;
+    }
+
+    static OSStatus beatAndTempo(void* context, Float64* beat, Float64* tempo)
+    {
+        const auto now = static_cast<const AudioUnitPlugin*>(context)->musical();
+        if (!now)
+            return kAudioUnitErr_CannotDoInCurrentContext;
+        if (beat != nullptr)
+            *beat = now->beat;
+        if (tempo != nullptr)
+            *tempo = now->tempo;
+        return noErr;
+    }
+
+    static OSStatus musicalTime(void* context, UInt32* toNextBeat, Float32* numerator, UInt32* denominator,
+                                Float64* downbeat)
+    {
+        const auto& self = *static_cast<const AudioUnitPlugin*>(context);
+        const auto now = self.musical();
+        if (!now)
+            return kAudioUnitErr_CannotDoInCurrentContext;
+        if (toNextBeat != nullptr)
+            *toNextBeat =
+                static_cast<UInt32>(std::lround((std::ceil(now->beat) - now->beat) * 60.0 / now->tempo * self.rate));
+        if (numerator != nullptr)
+            *numerator = static_cast<Float32>(now->numerator);
+        if (denominator != nullptr)
+            *denominator = static_cast<UInt32>(now->denominator);
+        if (downbeat != nullptr)
+        {
+            const auto perBar = now->numerator * 4.0 / now->denominator;
+            *downbeat = std::floor(now->beat / perBar) * perBar;
+        }
+        return noErr;
+    }
+
+    static OSStatus transport2(void* context, Boolean* playing, Boolean* recording, Boolean* changed, Float64* sample,
+                               Boolean* cycling, Float64* cycleStart, Float64* cycleEnd)
+    {
+        auto& self = *static_cast<AudioUnitPlugin*>(context);
+        const auto now = self.musical();
+        if (!now)
+            return kAudioUnitErr_CannotDoInCurrentContext;
+        const bool isPlaying = self.renderTime->playing;
+        if (playing != nullptr)
+            *playing = isPlaying;
+        if (recording != nullptr)
+            *recording = self.renderTime->recording;
+        if (changed != nullptr)
+            *changed = isPlaying != self.toldPlaying;
+        self.toldPlaying = isPlaying;
+        if (sample != nullptr)
+            *sample = now->frame;
+        if (cycling != nullptr)
+            *cycling = false;
+        if (cycleStart != nullptr)
+            *cycleStart = 0;
+        if (cycleEnd != nullptr)
+            *cycleEnd = 0;
+        return noErr;
+    }
+
+    static OSStatus transport(void* context, Boolean* playing, Boolean* changed, Float64* sample, Boolean* cycling,
+                              Float64* cycleStart, Float64* cycleEnd)
+    {
+        return transport2(context, playing, nullptr, changed, sample, cycling, cycleStart, cycleEnd);
     }
 };
 
@@ -514,7 +747,7 @@ std::vector<PluginDescription> AudioUnitFormat::pluginsIn(const std::filesystem:
     return plugins;
 }
 
-void AudioUnitFormat::make(const PluginDescription& plugin, PluginFormatClient&,
+void AudioUnitFormat::make(const PluginDescription& plugin, PluginFormatClient& client,
                            std::function<void(std::unique_ptr<PluginFormatInstance>, PluginError)> done)
 {
     const auto description = descriptionOf(plugin.identity);
@@ -527,12 +760,13 @@ void AudioUnitFormat::make(const PluginDescription& plugin, PluginFormatClient&,
 
     // Made without blocking the main thread, its completion handed to the main thread whatever thread it comes on.
     auto post = shared->options.post;
+    auto* const told = &client;
     AudioComponentInstantiate(component, 0, ^(AudioComponentInstance instance, OSStatus status) {
-      post([instance, status, done] {
+      post([instance, status, done, told] {
           if (status != noErr || instance == nullptr)
               done(nullptr, {reason("It couldn't be made", status), "make", status});
           else
-              done(std::make_unique<AudioUnitPlugin>(instance), {});
+              done(std::make_unique<AudioUnitPlugin>(instance, *told), {});
       });
     });
 }

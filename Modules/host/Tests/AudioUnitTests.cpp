@@ -5,6 +5,7 @@
 
 #include "TestMainThread.h"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <AudioToolbox/AudioToolbox.h>
@@ -12,6 +13,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
@@ -170,7 +172,7 @@ TEST_CASE("An Audio Unit's component and units are read from its bundle without 
     PluginError error;
     const auto plugins = rig.format.pluginsIn(units, error);
     CHECK_FALSE(error);
-    REQUIRE(plugins.size() == 9);
+    REQUIRE(plugins.size() == 13);
     CHECK(plugins[0].identity == PluginIdentity::audioUnit(code("aufx"), code("Pass"), code("SyTs")));
     CHECK(plugins[0].location == units);
     CHECK(plugins[0].maker == "SymbolEngine Tests");
@@ -318,5 +320,97 @@ TEST_CASE("A unit that changes its buses as it is initialized is refused, saying
     CHECK(plugin->problem().message == "It changed its buses as it was initialized.");
     plugin.reset();
     rig.main.settle();
+    CHECK(misuses().empty());
+}
+
+// Plays a block through a plugin on an audio thread of the test's own with where the program is in time for it, giving
+// what came out.
+std::vector<std::vector<float>> playAt(Plugin& plugin, int frames, const PluginTime& time)
+{
+    std::vector<std::vector<float>> out(2, std::vector<float>(static_cast<std::size_t>(frames), 0.25f));
+    std::thread([&] {
+        float* channels[] = {out[0].data(), out[1].data()};
+        plugin.process(channels, 2, frames, nullptr, 0, &time);
+    }).join();
+    return out;
+}
+
+std::int64_t nanosecondsNow()
+{
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+TEST_CASE("The host's callbacks give the program's tempo, meter and transport in a render and nothing outside one, "
+          "and time stamps run on")
+{
+    Rig rig;
+    auto plugin = rig.made("Time");
+
+    // With no tempo of the program's, 120 beats a minute.
+    auto out = play(*plugin, 256, 4);
+    CHECK(out[0][0] == Catch::Approx(0.12f));
+
+    // The program's own tempo and place: a second in at 90 beats a minute is beat 1.5.
+    PluginTime time{true, false, false, 48000, nanosecondsNow(), 90.0, 3, 4};
+    out = playAt(*plugin, 256, time);
+    CHECK(out[0][0] == Catch::Approx(0.09f));
+    CHECK(out[1][0] == Catch::Approx(1.5f));
+
+    // Prepared again, its callbacks are set again before it is initialized.
+    REQUIRE(plugin->prepare({48000.0, 512, false}));
+    time.position += 256;
+    time.systemNanoseconds = nanosecondsNow();
+    out = playAt(*plugin, 256, time);
+    CHECK(out[0][0] == Catch::Approx(0.09f));
+    REQUIRE(plugin->reset());
+    plugin.reset();
+    rig.main.settle();
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("A unit that won't take the program's rate is refused at it, saying so, and one it takes is set")
+{
+    Rig rig;
+    auto plugin = rig.host.make(rig.format, rig.describe("Rate"));
+    REQUIRE(rig.main.turnUntil([&] { return plugin->state() != Plugin::State::making; }));
+    CHECK_FALSE(plugin->prepare({44100.0, 512, false}));
+    CHECK(plugin->problem().message == "It doesn't take 44100 Hz.");
+
+    auto taking = rig.made("Rate", {96000.0, 512, false});
+    const auto out = play(*taking, 128, 1);
+    CHECK(out[0][0] == Catch::Approx(0.96f));
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("A unit that needs every block the same size is fed full blocks through a buffer, the delay reported as "
+          "latency")
+{
+    Rig rig;
+    auto plugin = rig.made("Fixd");
+    CHECK(plugin->latency() == 0);
+
+    // A short block shows it needs full ones; it is prepared again with the buffer's delay as its latency.
+    play(*plugin, 100, 1);
+    REQUIRE(rig.main.turnUntil([&] { return plugin->latency() == 512; }, 5s));
+
+    // From then on, what goes in comes out 512 frames later, whatever size the blocks are.
+    const auto out = play(*plugin, 100, 20);
+    for (std::size_t i = 512; i < out[0].size(); ++i)
+        if (out[0][i] != static_cast<float>(i - 511))
+        {
+            FAIL_CHECK("frame " << i << " is " << out[0][i]);
+            break;
+        }
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("A unit's change of latency is followed when it says so, never asked for while it renders")
+{
+    Rig rig;
+    auto plugin = rig.made("Late");
+    CHECK(plugin->latency() == 480);
+    play(*plugin, 128, 60);
+    REQUIRE(rig.main.turnUntil([&] { return plugin->latency() == 960; }, 5s));
     CHECK(misuses().empty());
 }
