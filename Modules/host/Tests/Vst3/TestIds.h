@@ -19,6 +19,7 @@ constexpr const char* many = SYMBOLENGINE_TEST_HEX("0A");
 constexpr const char* timed = SYMBOLENGINE_TEST_HEX("0C");
 constexpr const char* faulting = SYMBOLENGINE_TEST_HEX("0D");
 constexpr const char* instrument = SYMBOLENGINE_TEST_HEX("0E");
+constexpr const char* editor = SYMBOLENGINE_TEST_HEX("10");
 
 // The gain plugins' parameters, listed in this order, which isn't their IDs' order.
 constexpr unsigned gainParameter = 100, hiddenParameter = 7, meterParameter = 3000000, bypassParameter = 1,
@@ -42,4 +43,31 @@ constexpr unsigned faultInProcess = 500, faultOnMain = 501, throwInProcess = 502
 
 // The many plugin's parameters, 1 to this.
 constexpr unsigned manyParameters = 1000;
+
+// The editor plugin's parameters. Its view's behavior, set before its view is made, as one of these at a step of
+// viewMode's, its value the step over editorModes: well behaved and resizable, never under 200 by 100; fixed, with a
+// size constraint answering another size than its own; asking for its own size again from inside its resize; asking
+// from inside its resize for a height half its width; fixed, yet asking to be resized; answering every size it is
+// asked to take with one a pixel larger; and asking from inside its resize to be a pixel wider, every time.
+enum EditorMode
+{
+    wellBehaved,
+    fixedSize,
+    asksSameSize,
+    keepsAspect,
+    fixedButAsks,
+    onePixelMore,
+    keepsGrowing,
+    editorModes
+};
+constexpr unsigned viewMode = 600;
+
+// Set while its view is open: the size the view is to ask for, at 2,000 pixels or points to 1; then askResize at 0.5
+// to ask on the main thread or at 1 to ask from a thread of its own. requestEditor asks the host to open its editor.
+constexpr unsigned askWidth = 601, askHeight = 602, askResize = 603, requestEditor = 604;
+constexpr double editorPixels = 2000.0;
+
+// The editor plugin's text for queryParameter says what its views saw, as "made=1 live=1 attached=1 removed=0
+// sized=2 size=600x400 own=600x400 constraints=0 scales=0 offMain=0 nudges=1 offscreenMoved=0", where sized counts its
+// resizes, size is the last it was told and own is its own native view's.
 }

@@ -1,6 +1,7 @@
 #include "symbolengine/host/Vst3Format.h"
 
 #include "Vst3Module.h"
+#include "Vst3View.h"
 
 #include "PluginFiles.h"
 
@@ -13,6 +14,7 @@
 #include "pluginterfaces/base/ibstream.h"
 #include "pluginterfaces/base/ipluginbase.h"
 #include "pluginterfaces/base/smartpointer.h"
+#include "pluginterfaces/gui/iplugview.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
@@ -152,7 +154,18 @@ public:
         return live();
     }
 
-    tresult PLUGIN_API requestOpenEditor(FIDString) override { return kResultFalse; }
+    // Its editor, asked for: told to the program, which opens it or brings it in front.
+    tresult PLUGIN_API requestOpenEditor(FIDString name) override
+    {
+        auto* const listener = client.load();
+
+        if (listener == nullptr || (name != nullptr && std::strcmp(name, ViewType::kEditor) != 0))
+            return kResultFalse;
+
+        listener->notice(PluginNotice::editor);
+        return kResultTrue;
+    }
+
     tresult PLUGIN_API startGroupEdit() override { return kNotImplemented; }
     tresult PLUGIN_API finishGroupEdit() override { return kNotImplemented; }
 
@@ -669,6 +682,235 @@ tresult PLUGIN_API ConnectionProxy::notify(IMessage* message)
 namespace
 {
 
+// The system's views a plugin's editor is put in: a Mac's.
+#if defined(__APPLE__)
+const FIDString platformType = kPlatformTypeNSView;
+#else
+const FIDString platformType = nullptr;
+#endif
+
+// The smallest size an editor is given, raising one that asks for less.
+constexpr int smallestWidth = 100, smallestHeight = 50;
+
+class Vst3Editor;
+
+#if defined(__GNUC__)
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wnon-virtual-dtor"
+#endif
+
+// What a plugin's view asks of the host: to be resized, which is done on the main thread, one asked from another thread
+// handed over to it, and nothing once the editor is closing.
+class PlugFrame final : public IPlugFrame, Counted
+{
+public:
+    PlugFrame(Vst3Editor* owner, std::shared_ptr<Vst3Format::Shared> format) : editor(owner), shared(std::move(format))
+    {
+    }
+
+    tresult PLUGIN_API resizeView(IPlugView* view, ViewRect* newSize) override;
+
+    // On the main thread, as the editor closes.
+    void undo() { editor = nullptr; }
+
+    tresult PLUGIN_API queryInterface(const TUID wanted, void** object) override
+    {
+        if (FUnknownPrivate::iidEqual(wanted, FUnknown::iid) || FUnknownPrivate::iidEqual(wanted, IPlugFrame::iid))
+        {
+            *object = static_cast<IPlugFrame*>(this);
+            addRef();
+            return kResultOk;
+        }
+
+        *object = nullptr;
+        return kNoInterface;
+    }
+
+    uint32 PLUGIN_API addRef() override { return addOne(); }
+    uint32 PLUGIN_API release() override { return releaseOne(this); }
+
+private:
+    Vst3Editor* editor;
+    std::shared_ptr<Vst3Format::Shared> shared;
+};
+
+#if defined(__GNUC__)
+    #pragma GCC diagnostic pop
+#endif
+
+// A plugin's view in the program's, opened and closed in the order Steinberg's documentation of a view's life gives:
+// made, its kind of view checked, given its frame, sized and the program's view sized to it, put in it; and taken out
+// while the program's view is whole, its frame cleared, let go of. A resize it asks for resizes the program's view and
+// is told to it once, in the same call; one it asks for again from inside being told, as some views do, is the next
+// size told, up to a few in one call, so it never loops.
+class Vst3Editor final : public PluginFormatEditor
+{
+public:
+    Vst3Editor(IPtr<IPlugView> made, void* parentView, PluginEditorFrame& holder,
+               std::shared_ptr<Vst3Format::Shared> format)
+        : view(std::move(made)), parent(parentView), frame(holder), shared(std::move(format))
+    {
+    }
+
+    ~Vst3Editor() override
+    {
+        if (plugFrame)
+            plugFrame->undo();
+
+        if (attached)
+            view->removed();
+
+        if (framed)
+            view->setFrame(nullptr);
+
+        view = nullptr;
+    }
+
+    bool open(PluginError& error)
+    {
+        plugFrame = owned(new PlugFrame(this, shared));
+        view->setFrame(plugFrame);
+        framed = true;
+
+        ViewRect rect{};
+        const auto own = view->getSize(&rect) == kResultTrue ? PluginEditorSize{rect.getWidth(), rect.getHeight()}
+                                                             : PluginEditorSize{};
+        current = raised(own);
+        frame.place(current);
+
+        if (view->attached(parent, platformType) != kResultTrue)
+        {
+            error = {"Its editor couldn't be put in its window.", "attached", 0};
+            return false;
+        }
+
+        attached = true;
+        canResize = view->canResize() == kResultTrue;
+
+        // Some views say their real size only once they are in a window.
+        if (view->getSize(&rect) == kResultTrue)
+            if (const auto now = raised({rect.getWidth(), rect.getHeight()}); now != current)
+            {
+                current = now;
+                frame.place(current);
+            }
+
+        vst3View::sizeOwnView(parent, current.width, current.height);
+        return true;
+    }
+
+    PluginEditorSize size() override { return current; }
+
+    bool resizable() override { return canResize; }
+
+    PluginEditorSize constrain(PluginEditorSize dragged) override
+    {
+        ViewRect rect(0, 0, dragged.width, dragged.height);
+
+        if (view->checkSizeConstraint(&rect) != kResultTrue)
+            return raised(dragged);
+
+        return raised({rect.getWidth(), rect.getHeight()});
+    }
+
+    void resized(PluginEditorSize size) override
+    {
+        if (size != current)
+            tell(size, false);
+    }
+
+    // A resize the view asked for, on the main thread.
+    tresult asked(IPlugView* from, const ViewRect& rect)
+    {
+        if (from != view.get())
+            return kInvalidArgument;
+
+        const auto size = raised({rect.getWidth(), rect.getHeight()});
+
+        if (telling)
+        {
+            if (size != told)
+                wanted = size;
+
+            return kResultTrue;
+        }
+
+        if (size != current)
+            tell(size, true);
+
+        return kResultTrue;
+    }
+
+private:
+    // A size raised to the smallest, or to the view's own size where that is larger.
+    PluginEditorSize raised(PluginEditorSize size)
+    {
+        if (size.width >= smallestWidth && size.height >= smallestHeight)
+            return size;
+
+        if (ViewRect own{};
+            view->getSize(&own) == kResultTrue && own.getWidth() >= smallestWidth && own.getHeight() >= smallestHeight)
+            return {own.getWidth(), own.getHeight()};
+
+        return {std::max(size.width, smallestWidth), std::max(size.height, smallestHeight)};
+    }
+
+    // The program's view resized, if it isn't already, and the size told to the view, then each size it asks for
+    // while being told, at most three in all.
+    void tell(PluginEditorSize size, bool place)
+    {
+        for (int round = 0; round < 3; ++round)
+        {
+            current = size;
+
+            if (place)
+                frame.place(size);
+
+            vst3View::sizeOwnView(parent, size.width, size.height);
+            ViewRect rect(0, 0, size.width, size.height);
+            telling = true;
+            told = size;
+            wanted.reset();
+            view->onSize(&rect);
+            telling = false;
+
+            if (!wanted.has_value() || *wanted == size)
+                return;
+
+            size = *wanted;
+            place = true;
+        }
+    }
+
+    IPtr<IPlugView> view;
+    void* parent;
+    PluginEditorFrame& frame;
+    std::shared_ptr<Vst3Format::Shared> shared;
+    IPtr<PlugFrame> plugFrame;
+    bool framed = false, attached = false, canResize = false, telling = false;
+    PluginEditorSize current{}, told{};
+    std::optional<PluginEditorSize> wanted;
+};
+
+tresult PLUGIN_API PlugFrame::resizeView(IPlugView* view, ViewRect* newSize)
+{
+    if (view == nullptr || newSize == nullptr)
+        return kInvalidArgument;
+
+    if (shared->options.onMainThread())
+        return editor != nullptr ? editor->asked(view, *newSize) : kResultFalse;
+
+    // Asked from another thread: done on the main thread, if the editor is still open then.
+    IPtr<PlugFrame> self(this);
+    IPtr<IPlugView> from(view);
+    const auto rect = *newSize;
+    shared->options.post([self, from, rect] {
+        if (self->editor != nullptr)
+            self->editor->asked(from, rect);
+    });
+    return kResultTrue;
+}
+
 class Vst3Plugin final : public PluginFormatInstance
 {
 public:
@@ -1120,6 +1362,46 @@ public:
         }
 
         return true;
+    }
+
+    bool hasEditor() override
+    {
+        if (platformType == nullptr || !controller)
+            return false;
+
+        // Asked of a view made and let go of without being put anywhere.
+        const auto probe = owned(controller->createView(ViewType::kEditor));
+        return probe && probe->isPlatformTypeSupported(platformType) == kResultTrue;
+    }
+
+    std::unique_ptr<PluginFormatEditor> openEditor(void* parent, PluginEditorFrame& frame, PluginError& error) override
+    {
+        if (platformType == nullptr)
+        {
+            error = {"Plugins' editors aren't shown on this system yet.", "openEditor", 0};
+            return nullptr;
+        }
+
+        auto view = controller ? owned(controller->createView(ViewType::kEditor)) : IPtr<IPlugView>();
+
+        if (!view)
+        {
+            error = {"It has no editor.", "createView", 0};
+            return nullptr;
+        }
+
+        if (view->isPlatformTypeSupported(platformType) != kResultTrue)
+        {
+            error = {"Its editor can't be shown on this system.", "isPlatformTypeSupported", 0};
+            return nullptr;
+        }
+
+        auto editor = std::make_unique<Vst3Editor>(std::move(view), parent, frame, shared);
+
+        if (!editor->open(error))
+            return nullptr;
+
+        return editor;
     }
 
 private:

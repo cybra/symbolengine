@@ -56,6 +56,10 @@ public:
         /** How many turns of the main thread making it takes before it says it is made; 0 says so before make returns. */
         int turnsToMake = 0;
 
+        /** Whether it has an editor, which opens at this size, placing its view through the frame first. */
+        bool editor = false;
+        PluginEditorSize editorSize{400, 300};
+
         /** Runs inside every call into the plugin, with the call's name and the thread it is on, where a test makes it
             misbehave: send notices, turn the run loop, wait on a lock, change the locale, throw. */
         std::function<void(std::string_view call)> inside;

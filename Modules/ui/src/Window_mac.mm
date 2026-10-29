@@ -63,12 +63,33 @@ struct Window::Impl
     // Shared with the close button's call, which comes after the click and so maybe after the window has gone.
     std::shared_ptr<bool> alive = std::make_shared<bool>(true);
 
+    static Impl* of(id delegate)
+    {
+        return static_cast<Impl*>([static_cast<NSValue*>(objc_getAssociatedObject(delegate, &implKey)) pointerValue]);
+    }
+
     // The delegate's class, made at run time under a name of its own, so two programs' copies of SymbolEngine in one
-    // process, as plugins in a host, never share one. It answers only the close button, which it leaves to the program.
+    // process, as plugins in a host, never share one. It answers the close button, which it leaves to the program, and
+    // the user's drag of an edge, which the program may hold to sizes of its own.
     static Class delegateClass()
     {
         static Class made = [] {
             auto c = choc::objc::createDelegateClass("NSObject", "SymbolEngineWindowDelegate_");
+            class_addMethod(c, @selector(windowWillResize:toSize:),
+                            (IMP) + [](id self, SEL, NSWindow* window, NSSize frameSize) -> NSSize {
+                                auto* impl = of(self);
+                                if (impl == nullptr || impl->owner->onResizing == nullptr)
+                                    return frameSize;
+
+                                const auto dragged = NSMakeRect(0, 0, frameSize.width, frameSize.height);
+                                const auto content = [window contentRectForFrameRect:dragged];
+                                const auto taken = impl->held(impl->owner->onResizing(
+                                    {static_cast<int>(std::lround(content.size.width)),
+                                     static_cast<int>(std::lround(content.size.height))}));
+                                const auto kept = NSMakeRect(0, 0, taken.width, taken.height);
+                                return [window frameRectForContentRect:kept].size;
+                            },
+                            "{CGSize=dd}@:@{CGSize=dd}");
             class_addMethod(c, @selector(windowShouldClose:),
                             (IMP) + [](id self, SEL, id) -> BOOL {
                                 auto* impl = static_cast<Impl*>(
@@ -290,6 +311,18 @@ bool Window::isMinimized() const
 void Window::setAlwaysOnTop(bool onTop)
 {
     impl->window.level = onTop ? NSFloatingWindowLevel : NSNormalWindowLevel;
+}
+
+void Window::setResizable(bool resizable)
+{
+    auto* window = impl->window;
+    window.styleMask = resizable ? window.styleMask | NSWindowStyleMaskResizable
+                                 : window.styleMask & ~NSWindowStyleMaskResizable;
+}
+
+bool Window::isResizable() const
+{
+    return (impl->window.styleMask & NSWindowStyleMaskResizable) != 0;
 }
 
 void Window::setSeeThrough(bool seeThrough)

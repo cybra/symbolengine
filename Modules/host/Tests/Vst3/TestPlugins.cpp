@@ -2,6 +2,7 @@
 // Steinberg's host checker does, and writes what was wrong to the file SYMBOLENGINE_TEST_VST3_LOG names; most also
 // misbehave one way, as plugins do.
 
+#include "TestEditor.h"
 #include "TestIds.h"
 
 // First, before anything that includes the controller's interface: it renames the controller's state calls while it
@@ -812,5 +813,7 @@ DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x08), PClassInfo::kMa
            "Throwing", 0, "Fx", "1.0.0", kVstVersionString, Throwing::make)
 DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x0E), PClassInfo::kManyInstances, kVstAudioEffectClass,
            "Instrument", 0, "Instrument|Synth", "2.1.0", kVstVersionString, Gain::make)
+DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x10), PClassInfo::kManyInstances, kVstAudioEffectClass,
+           "Editor", 0, "Fx", "1.0.0", kVstVersionString, makeTestEditor)
 
 END_FACTORY

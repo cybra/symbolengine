@@ -458,6 +458,13 @@ TEST_CASE("A worker scans a VST3 module of many plugins, every effect made, play
     CHECK(named(testIds::instrument)->kind == PluginKind::instrument);
     CHECK(named(testIds::instrument)->layouts.empty());
     CHECK(named(testIds::gainController) == scan.plugins.end());
+
+    // Which have an editor that can be shown on this system, asked without one being opened.
+    CHECK_FALSE(named(testIds::gain)->editor);
+#if defined(__APPLE__)
+    REQUIRE(named(testIds::editor) != scan.plugins.end());
+    CHECK(named(testIds::editor)->editor);
+#endif
 }
 
 #if defined(__APPLE__)

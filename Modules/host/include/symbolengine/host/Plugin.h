@@ -40,6 +40,10 @@ enum class PluginChange
     /** It asks to be made again, which is for the program to do. */
     reload,
 
+    /** It asks for its editor to be opened, or brought in front of the others if it is open, which is for the program
+        to do. */
+    editor,
+
     /** A call into it failed or threw: it is no longer called, the audio passes it by, and problem() says why. */
     failed,
 
@@ -180,6 +184,10 @@ public:
     /** Runs the function on the main thread once no call into the plugin is under way: at once if none is. */
     void whenFree(std::function<void()> then);
 
+    /** Whether it has an editor of its own that can be opened on this system, asked of it the first time, without
+        opening one, and kept: false on Linux, where editors aren't hosted yet. */
+    bool hasEditor();
+
     /** Plays a block through it in place on the audio thread, as many channels as the program has, the plugin's
         layout fitted to them. While it is held off the audio for a call that can't overlap its processing, as while
         it is prepared, given a state, reset or taken down, the block is silent, never heard unprocessed; before it is
@@ -197,9 +205,53 @@ public:
 
 private:
     friend class PluginHost;
+    friend class PluginEditor;
     explicit Plugin(std::shared_ptr<Inner> inner);
 
     std::shared_ptr<Inner> inner;
+};
+
+/** A plugin's editor, open in a native view of the program's, which keeps its plugin while it is open. Made and used
+    on the main thread. Destroying it closes the editor in its format's order while the view it is in is still whole,
+    and lets go of the plugin a turn of the run loop later, so the plugin finishes what the editor started first.
+    Destroyed while a call into the plugin is under way, as one a plugin's own dialog lets run, it closes the editor
+    once the call returns, so the view it is in has to stay whole until then: Plugin::whenFree says when. */
+class PluginEditor
+{
+public:
+    /** Opens the plugin's editor in the native view, an NSView on a Mac or an HWND on Windows, already in its window,
+        which the frame sizes to the editor before the editor is put in it, and again whenever the plugin asks. Nothing,
+        with the error set, if the plugin has no editor, one of its editors is open, a call into it is under way or its
+        editor can't be opened. */
+    static std::unique_ptr<PluginEditor> open(std::shared_ptr<Plugin> plugin, void* view, PluginEditorFrame& frame,
+                                              PluginError& error);
+
+    ~PluginEditor();
+
+    PluginEditor(const PluginEditor&) = delete;
+    PluginEditor& operator=(const PluginEditor&) = delete;
+
+    /** Its size, as it last said it or was told. */
+    PluginEditorSize size() const;
+
+    /** Whether the user may resize it, as it said when it opened. */
+    bool resizable() const;
+
+    /** The size nearest the one given that it takes, for a window the user is dragging to that size: the size it has
+        for one that can't be resized. */
+    PluginEditorSize constrain(PluginEditorSize wanted);
+
+    /** Tells it the view it is in has been resized to the size, as by the user's drag. */
+    void resized(PluginEditorSize size);
+
+    const std::shared_ptr<Plugin>& plugin() const { return held; }
+
+private:
+    PluginEditor(std::shared_ptr<Plugin> plugin, std::unique_ptr<PluginFormatEditor> editor);
+
+    std::shared_ptr<Plugin> held;
+    std::unique_ptr<PluginFormatEditor> editor;
+    bool canResize = false;
 };
 
 }

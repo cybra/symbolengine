@@ -600,7 +600,8 @@ TEST_CASE("A VST3 module's plugins are listed as each declares itself, without m
         ids.push_back(plugin.identity.id);
     CHECK(ids == std::vector<std::string>{testIds::gain, testIds::arranged, testIds::mono, testIds::noOutput,
                                           testIds::latency, testIds::many, testIds::faulting, testIds::timed,
-                                          testIds::skipsEmpty, testIds::throwing, testIds::instrument});
+                                          testIds::skipsEmpty, testIds::throwing, testIds::instrument,
+                                          testIds::editor});
     REQUIRE(plugins.size() == ids.size());
     CHECK(plugins[0].identity.format == "VST3");
     CHECK(plugins[0].location == module);
@@ -610,9 +611,9 @@ TEST_CASE("A VST3 module's plugins are listed as each declares itself, without m
     CHECK(plugins[0].kind == PluginKind::effect);
     CHECK(plugins[0].sdk.starts_with("VST 3."));
     CHECK(plugins[0].layouts.empty());
-    CHECK(plugins.back().name == "Instrument");
-    CHECK(plugins.back().version == "2.1.0");
-    CHECK(plugins.back().kind == PluginKind::instrument);
+    CHECK(plugins[10].name == "Instrument");
+    CHECK(plugins[10].version == "2.1.0");
+    CHECK(plugins[10].kind == PluginKind::instrument);
     CHECK(misuses().empty());
 
     // A file that isn't a VST3 module says why.

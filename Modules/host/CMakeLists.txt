@@ -2,8 +2,8 @@
 find_package(Threads REQUIRED)
 
 # Steinberg's VST3 SDK, MIT licensed: its interfaces, and the few of its hosting classes the host uses as they are,
-# its host context, messages, parameter queues and event lists. Its sources build into the module with their own
-# warnings left as Steinberg has them.
+# its host context, messages, parameter queues and event lists, and the identities of its editors' interfaces. Its
+# sources build into the module with their own warnings left as Steinberg has them.
 include(SymbolEngineVst3Sdk)
 symbolengine_fetch_vst3_sdk()
 set(sdk ${SYMBOLENGINE_VST3_SDK_ROOT})
@@ -12,6 +12,7 @@ set(sdk_sources
     ${sdk}/pluginterfaces/base/coreiids.cpp
     ${sdk}/pluginterfaces/base/funknown.cpp
     ${sdk}/pluginterfaces/base/ustring.cpp
+    ${sdk}/public.sdk/source/common/commoniids.cpp
     ${sdk}/public.sdk/source/common/commonstringconvert.cpp
     ${sdk}/public.sdk/source/vst/hosting/eventlist.cpp
     ${sdk}/public.sdk/source/vst/hosting/hostclasses.cpp
@@ -37,18 +38,27 @@ set(libraries Threads::Threads)
 
 if(APPLE)
     list(APPEND sources src/AudioUnitFormat.mm src/ProcessState_mac.mm src/ScanWorkerCrash_posix.cpp
-                        src/ScanWorkerLoop_mac.mm src/Vst3Module_mac.cpp)
+                        src/ScanWorkerLoop_mac.mm src/Vst3Module_mac.cpp src/Vst3View_mac.mm)
     list(APPEND libraries "-framework AppKit" "-framework AudioToolbox" "-framework CoreAudio" "-framework CoreFoundation"
                           "-framework CoreGraphics")
 elseif(WIN32)
-    list(APPEND sources src/ScanWorkerCrash_windows.cpp src/ScanWorkerLoop_windows.cpp src/Vst3Module_windows.cpp)
+    list(APPEND sources src/ScanWorkerCrash_windows.cpp src/ScanWorkerLoop_windows.cpp src/Vst3Module_windows.cpp
+                        src/Vst3View_other.cpp)
     list(APPEND libraries ole32 user32 version)
 else()
-    list(APPEND sources src/ScanWorkerCrash_posix.cpp src/ScanWorkerLoop_other.cpp src/Vst3Module_linux.cpp)
+    list(APPEND sources src/ScanWorkerCrash_posix.cpp src/ScanWorkerLoop_other.cpp src/Vst3Module_linux.cpp
+                        src/Vst3View_other.cpp)
     list(APPEND libraries ${CMAKE_DL_LIBS})
 endif()
 
-symbolengine_add_module(host SOURCES ${sources} DEPENDS core LIBRARIES ${libraries})
+# A plugin's own window, built where the ui module's windows are.
+set(dependencies core)
+if(TARGET symbolengine_ui AND APPLE)
+    list(APPEND sources src/PluginWindow_mac.mm)
+    list(APPEND dependencies ui)
+endif()
+
+symbolengine_add_module(host SOURCES ${sources} DEPENDS ${dependencies} LIBRARIES ${libraries})
 target_include_directories(symbolengine_host SYSTEM PRIVATE ${sdk})
 
 if(SYMBOLENGINE_TESTS)
@@ -63,15 +73,21 @@ if(SYMBOLENGINE_TESTS)
     endif()
     symbolengine_set_warnings(symbolengine_host_scan_worker)
 
-    set(test_sources Tests/Allocations.cpp Tests/ParameterTests.cpp Tests/PluginLifeTests.cpp Tests/PluginListTests.cpp
-                     Tests/ScanTests.cpp Tests/ScanWorkerTests.cpp Tests/TimeTests.cpp Tests/Vst3Tests.cpp
-                     Tests/WalkTests.cpp)
+    set(test_sources Tests/Allocations.cpp Tests/EditorTests.cpp Tests/ParameterTests.cpp Tests/PluginLifeTests.cpp
+                     Tests/PluginListTests.cpp Tests/ScanTests.cpp Tests/ScanWorkerTests.cpp Tests/TimeTests.cpp
+                     Tests/Vst3Tests.cpp Tests/WalkTests.cpp)
     if(APPLE)
         add_subdirectory(Tests/AudioUnits)
         list(APPEND test_sources Tests/AudioUnitTests.cpp Tests/ScanWorkerTests_mac.mm)
     endif()
+    if(TARGET symbolengine_ui AND APPLE)
+        list(APPEND test_sources Tests/EditorTests_mac.mm)
+    endif()
     symbolengine_add_tests(host SOURCES ${test_sources})
     target_include_directories(symbolengine_host_tests PRIVATE ${PROJECT_SOURCE_DIR}/Modules/core/Tests)
+    if(TARGET symbolengine_ui AND APPLE)
+        target_compile_definitions(symbolengine_host_tests PRIVATE SYMBOLENGINE_PLUGIN_WINDOWS=1)
+    endif()
     if(APPLE)
         target_link_libraries(symbolengine_host_tests PRIVATE "-framework AppKit" "-framework AudioToolbox")
         target_compile_definitions(symbolengine_host_tests PRIVATE

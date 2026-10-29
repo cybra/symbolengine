@@ -5,6 +5,8 @@
 
 #if defined(__APPLE__)
     #include <choc/platform/choc_ObjectiveCHelpers.h>
+
+    #include <CoreGraphics/CoreGraphics.h>
 #else
     #ifndef WIN32_LEAN_AND_MEAN
         #define WIN32_LEAN_AND_MEAN
@@ -19,9 +21,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 using namespace symbolengine;
 
@@ -80,6 +84,49 @@ bool canMaximize(ui::Window& window)
     return zoom != nullptr && choc::objc::call<BOOL>(zoom, "isEnabled");
 #else
     return (GetWindowLongPtrW(static_cast<HWND>(window.nativeHandle()), GWL_STYLE) & WS_MAXIMIZEBOX) != 0;
+#endif
+}
+
+// Whether the system lets the user resize it by its edges.
+bool userCanResize(ui::Window& window)
+{
+#if defined(__APPLE__)
+    const auto mask = choc::objc::call<unsigned long>(static_cast<id>(window.nativeHandle()), "styleMask");
+    return (mask & (1ul << 3)) != 0;   // NSWindowStyleMaskResizable
+#else
+    return (GetWindowLongPtrW(static_cast<HWND>(window.nativeHandle()), GWL_STYLE) & WS_THICKFRAME) != 0;
+#endif
+}
+
+// The user dragging the window's bottom right corner toward a size, as size() measures it: the system asks the window
+// what size it takes, as it does at each step of a drag, and this gives the answer, as size() would measure it.
+ui::Size dragTo(ui::Window& window, ui::Size size)
+{
+#if defined(__APPLE__)
+    const auto handle = static_cast<id>(window.nativeHandle());
+    const auto frame =
+        choc::objc::call<CGRect>(handle, "frameRectForContentRect:", CGRectMake(0, 0, size.width, size.height));
+    const auto delegate = choc::objc::call<id>(handle, "delegate");
+    auto taken = frame.size;
+    if (delegate != nullptr &&
+        choc::objc::call<BOOL>(delegate, "respondsToSelector:", sel_registerName("windowWillResize:toSize:")))
+        taken = choc::objc::call<CGSize>(delegate, "windowWillResize:toSize:", handle, frame.size);
+    const auto content =
+        choc::objc::call<CGRect>(handle, "contentRectForFrameRect:", CGRectMake(0, 0, taken.width, taken.height));
+    return {static_cast<int>(std::lround(content.size.width)), static_cast<int>(std::lround(content.size.height))};
+#else
+    const auto handle = static_cast<HWND>(window.nativeHandle());
+    RECT outer{}, inner{};
+    GetWindowRect(handle, &outer);
+    GetClientRect(handle, &inner);
+    const double scale = GetDpiForWindow(handle) / 96.0;
+    const int edgesWide = (outer.right - outer.left) - inner.right;
+    const int edgesHigh = (outer.bottom - outer.top) - inner.bottom;
+    RECT dragged{outer.left, outer.top, outer.left + edgesWide + static_cast<int>(std::lround(size.width * scale)),
+                 outer.top + edgesHigh + static_cast<int>(std::lround(size.height * scale))};
+    SendMessageW(handle, WM_SIZING, WMSZ_BOTTOMRIGHT, reinterpret_cast<LPARAM>(&dragged));
+    return {static_cast<int>(std::lround((dragged.right - dragged.left - edgesWide) / scale)),
+            static_cast<int>(std::lround((dragged.bottom - dragged.top - edgesHigh) / scale))};
 #endif
 }
 
@@ -165,6 +212,35 @@ TEST_CASE("A window has a maximize button only if asked for")
     ui::Window maximizable({.size = {300, 200}, .maximizable = true});
     CHECK(!canMaximize(plain));
     CHECK(canMaximize(maximizable));
+}
+
+TEST_CASE("A window the user drags takes the size the program gives it, and can be made fixed and resizable again")
+{
+    choc::messageloop::initialise();
+
+    ui::Window window({.size = {400, 300}, .minimumSize = {100, 100}});
+    CHECK(window.isResizable());
+    CHECK(userCanResize(window));
+    CHECK(dragTo(window, {500, 380}) == ui::Size{500, 380});
+
+    // Held to whole hundreds, as a program holding something with sizes of its own might.
+    std::vector<ui::Size> asked;
+    window.onResizing = [&](ui::Size wanted) {
+        asked.push_back(wanted);
+        return ui::Size{wanted.width / 100 * 100, wanted.height / 100 * 100};
+    };
+    CHECK(dragTo(window, {530, 390}) == ui::Size{500, 300});
+    REQUIRE(asked.size() == 1);
+    CHECK(asked[0] == ui::Size{530, 390});
+
+    window.setResizable(false);
+    CHECK(!window.isResizable());
+    CHECK(!userCanResize(window));
+    CHECK(window.size() == ui::Size{400, 300});
+
+    window.setResizable(true);
+    CHECK(window.isResizable());
+    CHECK(userCanResize(window));
 }
 
 TEST_CASE("The close button leaves the window to the program, which may let go of it then")

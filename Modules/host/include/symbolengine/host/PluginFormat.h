@@ -248,6 +248,9 @@ enum class PluginNotice : std::uint32_t
     /** It asks to be reset from the main thread, as an Audio Unit playing in real time does at a discontinuity, since
         it can't be reset on the audio thread. */
     reset = 1u << 6,
+
+    /** It asks for its editor to be opened, or brought in front of the others if it is open. */
+    editor = 1u << 7,
 };
 
 constexpr PluginNotice operator|(PluginNotice a, PluginNotice b)
@@ -271,6 +274,47 @@ public:
     virtual void edit(const PluginEdit& edit) noexcept = 0;
 
     virtual ~PluginFormatClient() = default;
+};
+
+/** The size of a plugin's editor: in points on a Mac and in pixels on Windows, as the formats measure them. */
+struct PluginEditorSize
+{
+    int width = 0;
+    int height = 0;
+
+    bool operator==(const PluginEditorSize&) const = default;
+};
+
+/** The native view a plugin's editor is open in, as the program holds it, which sizes itself and the window holding it
+    as the plugin asks. Called on the main thread. */
+class PluginEditorFrame
+{
+public:
+    /** Sizes the view the editor is in to the size, and the window holding it to fit. */
+    virtual void place(PluginEditorSize size) = 0;
+
+    virtual ~PluginEditorFrame() = default;
+};
+
+/** A plugin's editor open in a native view of the program's, as its format holds it, used by the host module alone.
+    Every call is made on the main thread. Destroying it closes the editor in its format's order while the view it is in
+    is still whole. */
+class PluginFormatEditor
+{
+public:
+    virtual ~PluginFormatEditor() = default;
+
+    /** Its size now. */
+    virtual PluginEditorSize size() = 0;
+
+    /** Whether the user may resize it. */
+    virtual bool resizable() = 0;
+
+    /** The size nearest the one given that it takes, for a window the user is dragging to that size. */
+    virtual PluginEditorSize constrain(PluginEditorSize wanted) = 0;
+
+    /** Tells it the view it is in has been resized to the size, as by the user's drag. */
+    virtual void resized(PluginEditorSize size) = 0;
 };
 
 /** One plugin as its format holds it, used by the host module alone. Every call is made on the main thread, one at a
@@ -326,6 +370,21 @@ public:
     /** Its state for the use, or nothing with the error set; and giving it back, while it is inactive or active. */
     virtual std::optional<std::string> state(PluginStateUse use, PluginError& error) = 0;
     virtual bool setState(std::string_view state, PluginStateUse use, PluginError& error) = 0;
+
+    /** Whether it has an editor that can be opened on this system, asked without opening one: false where the
+        format's editors aren't hosted here. */
+    virtual bool hasEditor() { return false; }
+
+    /** Opens its editor in the native view, an NSView on a Mac or an HWND on Windows, already in its window, which
+        the frame sizes to the editor before the editor is put in it; or nothing, with the error set. At most one is
+        open at a time. */
+    virtual std::unique_ptr<PluginFormatEditor> openEditor(void* view, PluginEditorFrame& frame, PluginError& error)
+    {
+        static_cast<void>(view);
+        static_cast<void>(frame);
+        error = {"It has no editor.", "openEditor", 0};
+        return nullptr;
+    }
 };
 
 /** One plugin format: VST3, Audio Units, CLAP, or the fake one tests use. */

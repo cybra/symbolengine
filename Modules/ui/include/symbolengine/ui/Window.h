@@ -87,6 +87,10 @@ public:
     /** Keeps it above every other program's windows, or lets it go behind them again. */
     void setAlwaysOnTop(bool onTop);
 
+    /** Lets the user resize it by its edges, or stops them. */
+    void setResizable(bool resizable);
+    bool isResizable() const;
+
     /** Leaves it see-through while it shows, or makes it opaque again, as for a page still drawing its first frame. */
     void setSeeThrough(bool seeThrough);
 
@@ -141,6 +145,11 @@ public:
 
     /** It was moved or resized, by the user or the program. */
     std::function<void()> onMovedOrResized;
+
+    /** While the user drags its edge: given the size it is being dragged to, as size() measures it, gives the size it
+        takes instead, as a window holding something with sizes of its own does. Without it, it takes the size dragged
+        to. */
+    std::function<Size(Size)> onResizing;
 
 private:
     struct Impl;

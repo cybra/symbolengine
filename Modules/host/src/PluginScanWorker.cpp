@@ -310,6 +310,9 @@ private:
             return following();
         }
 
+        // Whether it has an editor that can be shown here, asked without one being opened.
+        description.editor = plugin->hasEditor();
+
         say("setting up " + position(), &plugins[next]);
         if (!plugin->prepare(current.setup))
         {

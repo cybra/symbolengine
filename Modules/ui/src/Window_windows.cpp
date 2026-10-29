@@ -94,6 +94,7 @@ struct Window::Impl
     HWND content = nullptr;
     HBRUSH background = nullptr;
     DWORD style = 0;
+    bool maximizable = false;
     Size minimum{};
     Bounds restored{};
     Appearance appearance = Appearance::system;
@@ -206,6 +207,34 @@ struct Window::Impl
                     owner.onMovedOrResized();
                 break;
 
+            // The user dragging an edge: the size the program gives taken instead, the edge dragged moving and the
+            // one opposite staying.
+            case WM_SIZING:
+                if (owner.onResizing)
+                {
+                    auto* dragged = reinterpret_cast<RECT*>(lParam);
+                    const auto dpi = impl->dpi();
+                    const auto edges = impl->frameFor({0, 0, 0, 0}, dpi);
+                    const int edgesWide = edges.right - edges.left, edgesHigh = edges.bottom - edges.top;
+                    const auto taken = owner.onResizing({unscaled(dragged->right - dragged->left - edgesWide, dpi),
+                                                         unscaled(dragged->bottom - dragged->top - edgesHigh, dpi)});
+                    const int width = scaled(std::max(taken.width, impl->minimum.width), dpi) + edgesWide;
+                    const int height = scaled(std::max(taken.height, impl->minimum.height), dpi) + edgesHigh;
+
+                    if (wParam == WMSZ_LEFT || wParam == WMSZ_TOPLEFT || wParam == WMSZ_BOTTOMLEFT)
+                        dragged->left = dragged->right - width;
+                    else
+                        dragged->right = dragged->left + width;
+
+                    if (wParam == WMSZ_TOP || wParam == WMSZ_TOPLEFT || wParam == WMSZ_TOPRIGHT)
+                        dragged->top = dragged->bottom - height;
+                    else
+                        dragged->bottom = dragged->top + height;
+
+                    return TRUE;
+                }
+                break;
+
             case WM_GETMINMAXINFO:
             {
                 const auto dpi = impl->dpi();
@@ -274,6 +303,7 @@ Window::Window(Options options) : impl(std::make_unique<Impl>())
     auto& w = *impl;
     w.owner = this;
     w.minimum = options.minimumSize;
+    w.maximizable = options.maximizable;
     w.style = windowStyle(options.resizable, options.maximizable);
     w.background = CreateSolidBrush(RGB((options.background >> 16) & 0xFF, (options.background >> 8) & 0xFF,
                                         options.background & 0xFF));
@@ -357,6 +387,25 @@ bool Window::isMinimized() const
 void Window::setAlwaysOnTop(bool onTop)
 {
     SetWindowPos(impl->window, onTop ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
+void Window::setResizable(bool resizable)
+{
+    auto& w = *impl;
+    const auto client = w.clientOnScreen();
+    w.style = windowStyle(resizable, w.maximizable);
+
+    // The frame changes thickness, so the window is sized again around the same client area.
+    const auto kept = GetWindowLongPtrW(w.window, GWL_STYLE) & ~static_cast<LONG_PTR>(WS_THICKFRAME | WS_MAXIMIZEBOX);
+    SetWindowLongPtrW(w.window, GWL_STYLE, kept | static_cast<LONG_PTR>(w.style & (WS_THICKFRAME | WS_MAXIMIZEBOX)));
+    const auto frame = w.frameFor(client, w.dpi());
+    SetWindowPos(w.window, nullptr, frame.left, frame.top, frame.right - frame.left, frame.bottom - frame.top,
+                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+}
+
+bool Window::isResizable() const
+{
+    return (impl->style & WS_THICKFRAME) != 0;
 }
 
 void Window::setSeeThrough(bool seeThrough)

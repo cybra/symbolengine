@@ -189,6 +189,10 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     std::atomic<const char*> audioReason{nullptr};
     std::atomic<std::uint32_t> audioFault{0};
 
+    // Whether it has an editor, once asked, and whether one of its editors is open, the main thread's.
+    std::optional<bool> editorAnswer;
+    bool editorOpen = false;
+
     // Notices, recorded from any thread and acted on from the main thread.
     std::atomic<std::uint32_t> pending{0};
     std::atomic<bool> noticeScheduled{false};
@@ -786,6 +790,9 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
 
         if (has(what, PluginNotice::reload))
             tell(PluginChange::reload);
+
+        if (has(what, PluginNotice::editor))
+            tell(PluginChange::editor);
     }
 
     // Taken down in order on the main thread: processing stopped, reset, deactivated, taken apart.
@@ -1360,6 +1367,139 @@ void Plugin::process(float* const* channels, int channelCount, int frames, const
     ++held.blocksPlayed;
     insideProcess = false;
     held.inProcess = false;
+}
+
+bool Plugin::hasEditor()
+{
+    auto& held = *inner;
+
+    if (held.editorAnswer.has_value())
+        return *held.editorAnswer;
+
+    if (!held.usable("hasEditor"))
+        return false;
+
+    bool has = false;
+
+    if (!held.call("hasEditor", [&] { has = held.instance->hasEditor(); }))
+        return false;
+
+    held.editorAnswer = has;
+    return has;
+}
+
+std::unique_ptr<PluginEditor> PluginEditor::open(std::shared_ptr<Plugin> plugin, void* view, PluginEditorFrame& frame,
+                                                 PluginError& error)
+{
+    error = {};
+
+    if (plugin == nullptr)
+    {
+        error = {"There is no plugin.", "openEditor", 0};
+        return nullptr;
+    }
+
+    auto& inner = *plugin->inner;
+
+    if (!inner.usable("openEditor"))
+    {
+        error = inner.state == Plugin::State::failed ? inner.problem
+                : inner.busy > 0                     ? PluginError{"A call into it is under way.", "openEditor", 0}
+                                                     : PluginError{"It can't be called now.", "openEditor", 0};
+        return nullptr;
+    }
+
+    if (inner.editorOpen)
+    {
+        error = {"Its editor is open already.", "openEditor", 0};
+        return nullptr;
+    }
+
+    std::unique_ptr<PluginFormatEditor> made;
+    PluginError failed;
+
+    if (!inner.call("openEditor", [&] { made = inner.instance->openEditor(view, frame, failed); }))
+    {
+        error = inner.problem;
+        return nullptr;
+    }
+
+    if (made == nullptr)
+    {
+        error = failed ? failed : PluginError{"Its editor couldn't be opened.", "openEditor", 0};
+        return nullptr;
+    }
+
+    inner.editorOpen = true;
+    inner.editorAnswer = true;
+    std::unique_ptr<PluginEditor> opened(new PluginEditor(std::move(plugin), std::move(made)));
+    inner.call("resizable", [&] { opened->canResize = opened->editor->resizable(); });
+    return opened;
+}
+
+PluginEditor::PluginEditor(std::shared_ptr<Plugin> plugin, std::unique_ptr<PluginFormatEditor> made)
+    : held(std::move(plugin)), editor(std::move(made))
+{
+}
+
+PluginEditor::~PluginEditor()
+{
+    const auto inner = held->inner;
+
+    if (!inner->host->onMainThread())
+        inner->host->misuse("an editor was closed on a thread other than the main thread");
+
+    // The editor closed, or, from a plugin that crashed, never called again and kept; then the plugin let go of a turn
+    // of the run loop later, so whatever the editor's closing started finishes first.
+    auto kept = std::make_shared<std::unique_ptr<PluginFormatEditor>>(std::move(editor));
+    auto close = [inner, kept, plugin = std::move(held)]() mutable {
+        if (inner->crashed)
+            static_cast<void>(kept->release());
+        else
+            inner->call("closeEditor", [&] { kept->reset(); });
+
+        inner->editorOpen = false;
+        inner->host->post([plugin = std::move(plugin)] {});
+    };
+
+    // During a call into the plugin, once it returns.
+    if (inner->busy > 0)
+        inner->waiting.push_back(std::move(close));
+    else
+        close();
+}
+
+PluginEditorSize PluginEditor::size() const
+{
+    return editor->size();
+}
+
+bool PluginEditor::resizable() const
+{
+    return canResize;
+}
+
+PluginEditorSize PluginEditor::constrain(PluginEditorSize wanted)
+{
+    auto& inner = *held->inner;
+
+    if (!canResize || inner.busy > 0 || inner.state == Plugin::State::failed)
+        return editor->size();
+
+    auto taken = wanted;
+
+    if (!inner.call("constrain", [&] { taken = editor->constrain(wanted); }))
+        return editor->size();
+
+    return taken;
+}
+
+void PluginEditor::resized(PluginEditorSize size)
+{
+    auto& inner = *held->inner;
+
+    if (inner.state != Plugin::State::failed)
+        inner.call("resized", [&] { editor->resized(size); });
 }
 
 }

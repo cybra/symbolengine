@@ -29,7 +29,8 @@ else()
     list(APPEND plugin_sdk_sources ${sdk}/public.sdk/source/main/linuxmain.cpp)
 endif()
 
-add_library(symbolengine_test_vst3 MODULE TestPlugins.cpp ${plugin_sdk_sources})
+add_library(symbolengine_test_vst3 MODULE TestPlugins.cpp TestEditor.cpp
+            $<IF:$<BOOL:${APPLE}>,TestEditor_mac.mm,TestEditor_other.cpp> ${plugin_sdk_sources})
 target_include_directories(symbolengine_test_vst3 SYSTEM PRIVATE ${sdk})
 # The single-component plugins' source leaves the edit controller's to be built on its own, for the two-part ones.
 target_compile_definitions(symbolengine_test_vst3 PRIVATE $<IF:$<CONFIG:Debug>,DEVELOPMENT=1,RELEASE=1>
@@ -41,7 +42,8 @@ target_link_libraries(symbolengine_test_vst3 PRIVATE Threads::Threads)
 set(name "SymbolEngine Test")
 
 if(APPLE)
-    target_link_libraries(symbolengine_test_vst3 PRIVATE "-framework CoreFoundation" "-framework Foundation")
+    target_link_libraries(symbolengine_test_vst3 PRIVATE "-framework AppKit" "-framework CoreFoundation"
+                                                         "-framework Foundation")
     set_target_properties(symbolengine_test_vst3 PROPERTIES
         BUNDLE TRUE
         BUNDLE_EXTENSION vst3

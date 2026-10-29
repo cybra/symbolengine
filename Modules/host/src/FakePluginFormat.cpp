@@ -81,6 +81,9 @@ public:
         if (active)
             misuse("taken apart while active");
 
+        if (editorOpen)
+            misuse("taken apart with its editor open");
+
         {
             const std::lock_guard held(shared->lock);
             shared->allOnMain = shared->allOnMain && shared->onMainThread();
@@ -343,6 +346,51 @@ public:
         return true;
     }
 
+    bool hasEditor() override
+    {
+        const Main call(*this, "hasEditor", false);
+        return script.editor;
+    }
+
+    std::unique_ptr<PluginFormatEditor> openEditor(void*, PluginEditorFrame& frame, PluginError& error) override;
+
+    // An editor of the fake's: its calls recorded and checked as the plugin's own, one open at a time.
+    class Editor final : public PluginFormatEditor
+    {
+    public:
+        explicit Editor(FakePlugin& plugin) : fake(plugin), current(plugin.script.editorSize) {}
+
+        ~Editor() override
+        {
+            const Main call(fake, "closeEditor", false);
+            fake.editorOpen = false;
+        }
+
+        PluginEditorSize size() override { return current; }
+
+        bool resizable() override
+        {
+            const Main call(fake, "resizable", false);
+            return true;
+        }
+
+        PluginEditorSize constrain(PluginEditorSize wanted) override
+        {
+            const Main call(fake, "constrain", false);
+            return wanted;
+        }
+
+        void resized(PluginEditorSize size) override
+        {
+            const Main call(fake, "resized", false);
+            current = size;
+        }
+
+    private:
+        FakePlugin& fake;
+        PluginEditorSize current;
+    };
+
 private:
     // A call on the main thread: checked for its thread and for overlapping another call into the plugin, and, for
     // one that changes how it processes, for overlapping processing.
@@ -464,7 +512,26 @@ private:
     std::size_t delayAt = 0;
     std::map<std::uint32_t, double> heard, shown;
     std::mutex shownLock;
+    bool editorOpen = false;
 };
+
+std::unique_ptr<PluginFormatEditor> FakePlugin::openEditor(void*, PluginEditorFrame& frame, PluginError& error)
+{
+    const Main call(*this, "openEditor", false);
+
+    if (!script.editor)
+    {
+        error = {"The fake plugin has no editor.", "openEditor", 0};
+        return nullptr;
+    }
+
+    if (editorOpen)
+        misuse("a second editor opened while one was open");
+
+    editorOpen = true;
+    frame.place(script.editorSize);
+    return std::make_unique<Editor>(*this);
+}
 
 }
 
