@@ -296,6 +296,11 @@ public:
 
     virtual std::string name() const = 0;
 
+    /** The plugins a file of the format holds, each as it declares itself, without making any, in the order the file
+        gives them; called on the main thread, loading the file's code where the format has to, so a scan calls it in
+        a worker. Nothing, with the error set, if the file can't be read or its code won't load. */
+    virtual std::vector<PluginDescription> pluginsIn(const std::filesystem::path& file, PluginError& error) = 0;
+
     /** Makes a plugin on the main thread, its notices told to the client from then on. done is called once on the main
         thread with the plugin or an error, before make returns or after turns of the run loop, as a format that makes
         plugins asynchronously does. */

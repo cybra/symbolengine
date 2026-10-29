@@ -74,6 +74,10 @@ public:
     /** The identity of a fake plugin with this id, as the host is to be given it. */
     static PluginDescription describe(const std::string& id);
 
+    /** What each file holds for pluginsIn, as the function says, or the error it sets; without one, no file can be
+        read. */
+    void files(std::function<std::vector<PluginDescription>(const std::filesystem::path&, PluginError&)> holds);
+
     /** Every call made into plugins with this id, in order, by name. */
     std::vector<std::string> calls(const std::string& id) const;
 
@@ -87,6 +91,7 @@ public:
     bool allTakenApartOnMainThread() const;
 
     std::string name() const override;
+    std::vector<PluginDescription> pluginsIn(const std::filesystem::path& file, PluginError& error) override;
     void make(const PluginDescription& plugin, PluginFormatClient& client,
               std::function<void(std::unique_ptr<PluginFormatInstance>, PluginError)> done) override;
 

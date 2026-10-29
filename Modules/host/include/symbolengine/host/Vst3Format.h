@@ -41,6 +41,11 @@ public:
                                       std::string name = {});
 
     std::string name() const override;
+
+    /** The module's effect classes, in its factory's order: each class's name, maker, version, SDK and kind, an
+        instrument where its subcategories say so. Its code is loaded to read them, and stays loaded. */
+    std::vector<PluginDescription> pluginsIn(const std::filesystem::path& file, PluginError& error) override;
+
     void make(const PluginDescription& plugin, PluginFormatClient& client,
               std::function<void(std::unique_ptr<PluginFormatInstance>, PluginError)> done) override;
 

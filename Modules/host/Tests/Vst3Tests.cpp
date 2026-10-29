@@ -586,3 +586,37 @@ TEST_CASE("A VST3 plugin that crashes on the main thread on Windows is switched 
 }
 
 #endif
+
+TEST_CASE("A VST3 module's plugins are listed as each declares itself, without making any")
+{
+    Rig rig;
+    PluginError error;
+    const auto plugins = rig.format.pluginsIn(module, error);
+    CHECK_FALSE(error);
+
+    // Its effect classes in the factory's order, never its controllers.
+    std::vector<std::string> ids;
+    for (const auto& plugin : plugins)
+        ids.push_back(plugin.identity.id);
+    CHECK(ids == std::vector<std::string>{testIds::gain, testIds::arranged, testIds::mono, testIds::noOutput,
+                                          testIds::latency, testIds::many, testIds::faulting, testIds::timed,
+                                          testIds::skipsEmpty, testIds::throwing, testIds::instrument});
+    REQUIRE(plugins.size() == ids.size());
+    CHECK(plugins[0].identity.format == "VST3");
+    CHECK(plugins[0].location == module);
+    CHECK(plugins[0].name == "Gain");
+    CHECK(plugins[0].maker == "SymbolEngine");
+    CHECK(plugins[0].version == "1.0.0");
+    CHECK(plugins[0].kind == PluginKind::effect);
+    CHECK(plugins[0].sdk.starts_with("VST 3."));
+    CHECK(plugins[0].layouts.empty());
+    CHECK(plugins.back().name == "Instrument");
+    CHECK(plugins.back().version == "2.1.0");
+    CHECK(plugins.back().kind == PluginKind::instrument);
+    CHECK(misuses().empty());
+
+    // A file that isn't a VST3 module says why.
+    const auto none = rig.format.pluginsIn(module.parent_path() / "No such module.vst3", error);
+    CHECK(none.empty());
+    CHECK(error);
+}

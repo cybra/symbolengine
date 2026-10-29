@@ -26,6 +26,7 @@ set(sources
     src/Plugin.cpp
     src/PluginFormat.cpp
     src/PluginList.cpp
+    src/PluginScanWorker.cpp
     src/ProcessState.cpp
     src/Vst3Format.cpp
     src/Vst3Module.cpp
@@ -33,12 +34,13 @@ set(sources
 set(libraries Threads::Threads)
 
 if(APPLE)
-    list(APPEND sources src/ProcessState_mac.mm src/Vst3Module_mac.cpp)
+    list(APPEND sources src/ProcessState_mac.mm src/ScanWorkerLoop_mac.mm src/Vst3Module_mac.cpp)
     list(APPEND libraries "-framework AppKit" "-framework CoreFoundation")
 elseif(WIN32)
-    list(APPEND sources src/Vst3Module_windows.cpp)
+    list(APPEND sources src/ScanWorkerLoop_windows.cpp src/Vst3Module_windows.cpp)
+    list(APPEND libraries ole32 user32)
 else()
-    list(APPEND sources src/Vst3Module_linux.cpp)
+    list(APPEND sources src/ScanWorkerLoop_other.cpp src/Vst3Module_linux.cpp)
     list(APPEND libraries ${CMAKE_DL_LIBS})
 endif()
 
@@ -47,12 +49,27 @@ target_include_directories(symbolengine_host SYSTEM PRIVATE ${sdk})
 
 if(SYMBOLENGINE_TESTS)
     add_subdirectory(Tests/Vst3)
-    symbolengine_add_tests(host SOURCES Tests/Allocations.cpp Tests/ParameterTests.cpp Tests/PluginLifeTests.cpp
-                                    Tests/PluginListTests.cpp Tests/TimeTests.cpp Tests/Vst3Tests.cpp)
+
+    # The program the scan worker tests start as a worker, and as a program with a worker of its own.
+    add_executable(symbolengine_host_scan_worker Tests/ScanWorker.cpp)
+    target_link_libraries(symbolengine_host_scan_worker PRIVATE SymbolEngine::host)
+    symbolengine_set_warnings(symbolengine_host_scan_worker)
+
+    set(test_sources Tests/Allocations.cpp Tests/ParameterTests.cpp Tests/PluginLifeTests.cpp Tests/PluginListTests.cpp
+                     Tests/ScanWorkerTests.cpp Tests/TimeTests.cpp Tests/Vst3Tests.cpp)
+    if(APPLE)
+        list(APPEND test_sources Tests/ScanWorkerTests_mac.mm)
+    endif()
+    symbolengine_add_tests(host SOURCES ${test_sources})
     target_include_directories(symbolengine_host_tests PRIVATE ${PROJECT_SOURCE_DIR}/Modules/core/Tests)
+    if(APPLE)
+        target_link_libraries(symbolengine_host_tests PRIVATE "-framework AppKit")
+    endif()
     target_compile_definitions(symbolengine_host_tests PRIVATE
+        "SYMBOLENGINE_SCAN_WORKER=\"$<TARGET_FILE:symbolengine_host_scan_worker>\""
         "SYMBOLENGINE_TEST_VST3=\"$<TARGET_GENEX_EVAL:symbolengine_test_vst3,$<TARGET_PROPERTY:symbolengine_test_vst3,SYMBOLENGINE_BUNDLE>>\""
         "SYMBOLENGINE_TEST_VST3_LOG=\"${CMAKE_CURRENT_BINARY_DIR}/test-vst3-log.txt\""
         "SYMBOLENGINE_MODULE_LIFE=\"$<TARGET_FILE:symbolengine_host_module_life>\"")
-    add_dependencies(symbolengine_host_tests symbolengine_test_vst3 symbolengine_host_module_life)
+    add_dependencies(symbolengine_host_tests symbolengine_test_vst3 symbolengine_host_module_life
+                     symbolengine_host_scan_worker)
 endif()

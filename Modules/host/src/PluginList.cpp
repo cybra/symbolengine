@@ -1,5 +1,7 @@
 #include "symbolengine/host/PluginList.h"
 
+#include "PluginJson.h"
+
 #include <symbolengine/core/Files.h>
 #include <symbolengine/core/Json.h>
 #include <symbolengine/core/Paths.h>
@@ -8,7 +10,6 @@
 #include <symbolengine/core/Value.h>
 
 #include <algorithm>
-#include <cstdlib>
 #include <map>
 #include <set>
 #include <utility>
@@ -19,7 +20,7 @@ namespace symbolengine
 namespace
 {
 
-using Clock = std::chrono::system_clock;
+using namespace pluginJson;
 
 // The list file's format. A later version that only adds fields keeps the number; one that changes what a field means
 // moves entries over from the formats before it as it reads them.
@@ -27,16 +28,14 @@ constexpr std::int64_t currentFormat = 1;
 
 // How far apart two readings of when the computer started may be and still be the same start, in milliseconds:
 // Windows' reading moves with adjustments to the clock.
-constexpr std::int64_t sameStart = 10'000;
+constexpr std::uint64_t sameStart = 10'000;
 
-std::int64_t millisecondsOf(Clock::time_point time)
+// Whether two readings of when the computer started are of different starts, whatever a damaged file says of one.
+bool differentStarts(std::int64_t a, std::int64_t b)
 {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(time.time_since_epoch()).count();
-}
-
-Clock::time_point fromMilliseconds(std::int64_t count)
-{
-    return Clock::time_point(std::chrono::duration_cast<Clock::duration>(std::chrono::milliseconds(count)));
+    const auto apart = a > b ? static_cast<std::uint64_t>(a) - static_cast<std::uint64_t>(b)
+                             : static_cast<std::uint64_t>(b) - static_cast<std::uint64_t>(a);
+    return apart > sameStart;
 }
 
 // The key a file is kept by, so the same path written with either separator on Windows is the same file.
@@ -62,81 +61,6 @@ bool inside(const std::filesystem::path& path, std::filesystem::path folder)
     return part != normal.end();
 }
 
-template <typename Enum>
-struct Named
-{
-    Enum value;
-    std::string_view name;
-};
-
-constexpr Named<PluginFile::Outcome> outcomes[] = {
-    {PluginFile::Outcome::found, "found"},
-    {PluginFile::Outcome::nothing, "nothing"},
-    {PluginFile::Outcome::otherArchitecture, "otherArchitecture"},
-    {PluginFile::Outcome::changedAfterSigning, "changedAfterSigning"},
-    {PluginFile::Outcome::notNotarized, "notNotarized"},
-    {PluginFile::Outcome::setAside, "setAside"},
-};
-
-constexpr Named<PluginFailure::Kind> failureKinds[] = {
-    {PluginFailure::Kind::crashed, "crashed"},
-    {PluginFailure::Kind::timedOut, "timedOut"},
-    {PluginFailure::Kind::noAnswer, "noAnswer"},
-};
-
-constexpr Named<PluginKind> pluginKinds[] = {
-    {PluginKind::effect, "effect"},
-    {PluginKind::instrument, "instrument"},
-    {PluginKind::other, "other"},
-};
-
-template <typename Enum, std::size_t count>
-std::string nameOf(Enum value, const Named<Enum> (&names)[count])
-{
-    for (const auto& named : names)
-        if (named.value == value)
-            return std::string(named.name);
-    return std::string(names[0].name);
-}
-
-template <typename Enum, std::size_t count>
-Enum valueOf(const Value& value, const Named<Enum> (&names)[count])
-{
-    const auto& name = value.asString();
-    for (const auto& named : names)
-        if (named.name == name)
-            return named.value;
-    throw TypeError("it says \"" + name + "\", which this version doesn't know");
-}
-
-// Reading an entry's members: one that must be there, and those that may be missing, each of the kind it must be, or
-// TypeError says why the entry can't be read.
-const Value& required(const Object& object, std::string_view name)
-{
-    const auto* value = object.find(name);
-    if (value == nullptr)
-        throw TypeError("it has no " + std::string(name));
-    return *value;
-}
-
-std::string textOr(const Object& object, std::string_view name)
-{
-    const auto* value = object.find(name);
-    return value != nullptr ? value->asString() : std::string();
-}
-
-std::int64_t numberOr(const Object& object, std::string_view name)
-{
-    const auto* value = object.find(name);
-    return value != nullptr ? value->asInt() : 0;
-}
-
-bool flagOr(const Object& object, std::string_view name, bool fallback)
-{
-    const auto* value = object.find(name);
-    return value != nullptr ? value->asBool() : fallback;
-}
-
 Object writeStamp(const PluginStamp& stamp)
 {
     return Object{{"size", stamp.size},
@@ -150,77 +74,6 @@ PluginStamp readStamp(const Value& value)
     const auto& object = value.asObject();
     return {required(object, "size").asInt(), required(object, "modified").asInt(), textOr(object, "version"),
             numberOr(object, "manifestModified")};
-}
-
-Object writeFailure(const PluginFailure& failure)
-{
-    return Object{{"kind", nameOf(failure.kind, failureKinds)},
-                  {"step", failure.step},
-                  {"code", failure.code},
-                  {"detail", failure.detail},
-                  {"date", millisecondsOf(failure.date)},
-                  {"programVersion", failure.programVersion},
-                  {"architecture", failure.architecture}};
-}
-
-PluginFailure readFailure(const Value& value)
-{
-    const auto& object = value.asObject();
-    PluginFailure failure;
-    failure.kind = valueOf(required(object, "kind"), failureKinds);
-    failure.step = textOr(object, "step");
-    failure.code = numberOr(object, "code");
-    failure.detail = textOr(object, "detail");
-    failure.date = fromMilliseconds(numberOr(object, "date"));
-    failure.programVersion = textOr(object, "programVersion");
-    failure.architecture = textOr(object, "architecture");
-    return failure;
-}
-
-// A plugin, its format and location being its file's.
-Object writePlugin(const PluginDescription& plugin)
-{
-    Array layouts;
-    for (const auto& layout : plugin.layouts)
-        layouts.push_back(Array{layout.inputs, layout.outputs});
-    return Object{{"id", plugin.identity.id},
-                  {"name", plugin.name},
-                  {"maker", plugin.maker},
-                  {"version", plugin.version},
-                  {"kind", nameOf(plugin.kind, pluginKinds)},
-                  {"layouts", std::move(layouts)},
-                  {"editor", plugin.editor},
-                  {"sdk", plugin.sdk}};
-}
-
-PluginDescription readPlugin(const Value& value, const std::string& format, const std::filesystem::path& location)
-{
-    const auto& object = value.asObject();
-    PluginDescription plugin;
-    plugin.identity = {format, required(object, "id").asString()};
-    if (plugin.identity.id.empty())
-        throw TypeError("a plugin in it has no identity");
-    plugin.location = location;
-    plugin.name = textOr(object, "name");
-    plugin.maker = textOr(object, "maker");
-    plugin.version = textOr(object, "version");
-    if (const auto* kind = object.find("kind"))
-        plugin.kind = valueOf(*kind, pluginKinds);
-    if (const auto* layouts = object.find("layouts"))
-        for (const auto& layout : layouts->asArray())
-        {
-            const auto& channels = layout.asArray();
-            if (channels.size() != 2)
-                throw TypeError("a layout of a plugin in it isn't two numbers");
-            const auto inputs = channels[0].asInt();
-            const auto outputs = channels[1].asInt();
-            if (inputs < 0 || outputs < 0 || inputs > 1024 || outputs > 1024)
-                throw TypeError("a layout of a plugin in it has a number of channels no plugin has");
-            plugin.layouts.push_back({static_cast<int>(inputs), static_cast<int>(outputs)});
-        }
-    plugin.editor = flagOr(object, "editor", false);
-    plugin.sdk = textOr(object, "sdk");
-    return plugin;
 }
 
 // A file the list holds: what a scan found in it, when the computer had started when it was recorded, and the entry
@@ -604,7 +457,7 @@ bool PluginList::needsScan(const std::filesystem::path& path, const PluginStamp&
     if (record.file.again || !record.file.complete || record.file.stamp != stamp)
         return true;
     return record.file.outcome == PluginFile::Outcome::changedAfterSigning &&
-           std::abs(inner->computerStarted() - record.computerStarted) > sameStart;
+           differentStarts(inner->computerStarted(), record.computerStarted);
 }
 
 void PluginList::record(PluginFile file)
@@ -645,7 +498,7 @@ void PluginList::record(PluginFile file)
     const auto key = keyOf(record.file.path);
     if (const auto before = list.records.find(key);
         before != list.records.end() && before->second.file == record.file &&
-        std::abs(before->second.computerStarted - record.computerStarted) <= sameStart)
+        !differentStarts(before->second.computerStarted, record.computerStarted))
         return;
     list.records.insert_or_assign(key, std::move(record));
     list.changed = true;

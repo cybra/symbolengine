@@ -2,6 +2,8 @@
 
 #include "Vst3Module.h"
 
+#include <symbolengine/core/Text.h>
+
 #include "pluginterfaces/base/ibstream.h"
 #include "pluginterfaces/base/ipluginbase.h"
 #include "pluginterfaces/base/smartpointer.h"
@@ -1286,6 +1288,66 @@ PluginDescription Vst3Format::describe(const std::filesystem::path& module, cons
 std::string Vst3Format::name() const
 {
     return "VST3";
+}
+
+namespace
+{
+
+// Text from one of the factory's fixed-size fields, which needn't end in a zero.
+template <std::size_t size>
+std::string fieldText(const char8 (&field)[size])
+{
+    return std::string(field, strnlen(field, size));
+}
+
+}
+
+std::vector<PluginDescription> Vst3Format::pluginsIn(const std::filesystem::path& file, PluginError& error)
+{
+    error = {};
+    const auto module = shared->module(file, error);
+    if (module == nullptr)
+        return {};
+
+    auto* factory = module->factory();
+    std::string vendor;
+    if (PFactoryInfo info; factory->getFactoryInfo(&info) == kResultOk)
+        vendor = fieldText(info.vendor);
+    FUnknownPtr<IPluginFactory2> second(factory);
+    FUnknownPtr<IPluginFactory3> third(factory);
+
+    std::vector<PluginDescription> plugins;
+    for (int32 index = 0; index < factory->countClasses(); ++index)
+    {
+        PClassInfo info;
+        if (factory->getClassInfo(index, &info) != kResultOk || fieldText(info.category) != kVstAudioEffectClass)
+            continue;
+
+        char8 id[33] = {};
+        FUID(info.cid).toString(id);
+        PluginDescription plugin;
+        plugin.identity = {"VST3", id};
+        plugin.location = file;
+        plugin.name = fieldText(info.name);
+        plugin.maker = vendor;
+
+        if (PClassInfo2 more; second && second->getClassInfo2(index, &more) == kResultOk)
+        {
+            if (const auto maker = fieldText(more.vendor); !maker.empty())
+                plugin.maker = maker;
+            plugin.version = fieldText(more.version);
+            plugin.sdk = fieldText(more.sdkVersion);
+            const auto categories = fieldText(more.subCategories);
+            for (const auto category : symbolengine::text::split(categories, "|"))
+                if (category == PlugType::kInstrument)
+                    plugin.kind = PluginKind::instrument;
+        }
+        if (PClassInfoW wide; third && third->getClassInfoUnicode(index, &wide) == kResultOk)
+            if (auto name = StringConvert::convert(wide.name); !name.empty())
+                plugin.name = std::move(name);
+        plugins.push_back(std::move(plugin));
+    }
+    return plugins;
 }
 
 void Vst3Format::make(const PluginDescription& plugin, PluginFormatClient& client,

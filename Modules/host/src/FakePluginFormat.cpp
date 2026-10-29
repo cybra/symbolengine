@@ -1,5 +1,7 @@
 #include "symbolengine/host/FakePluginFormat.h"
 
+#include <symbolengine/core/Paths.h>
+
 #include <algorithm>
 #include <atomic>
 #include <map>
@@ -19,6 +21,7 @@ struct FakePluginFormat::Shared
     std::function<void(std::function<void()>)> post;
 
     mutable std::mutex lock;
+    std::function<std::vector<PluginDescription>(const std::filesystem::path&, PluginError&)> files;
     std::map<std::string, Script> scripts;
     std::map<std::string, std::vector<std::string>> calls;
     std::vector<std::string> misuses;
@@ -531,6 +534,36 @@ bool FakePluginFormat::allTakenApartOnMainThread() const
 std::string FakePluginFormat::name() const
 {
     return "Fake";
+}
+
+void FakePluginFormat::files(
+    std::function<std::vector<PluginDescription>(const std::filesystem::path&, PluginError&)> holds)
+{
+    const std::lock_guard held(shared->lock);
+    shared->files = std::move(holds);
+}
+
+std::vector<PluginDescription> FakePluginFormat::pluginsIn(const std::filesystem::path& file, PluginError& error)
+{
+    error = {};
+    if (!shared->onMainThread())
+        shared->misuse(paths::toUtf8(file), "its plugins listed off the main thread");
+
+    decltype(shared->files) holds;
+    {
+        const std::lock_guard held(shared->lock);
+        holds = shared->files;
+    }
+    if (holds == nullptr)
+    {
+        error = {"The fake format can't read files.", "read", 0};
+        return {};
+    }
+
+    auto plugins = holds(file, error);
+    for (auto& plugin : plugins)
+        plugin.location = file;
+    return plugins;
 }
 
 void FakePluginFormat::make(const PluginDescription& plugin, PluginFormatClient& client,

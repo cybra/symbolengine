@@ -18,6 +18,7 @@ constexpr const char* skipsEmpty = SYMBOLENGINE_TEST_HEX("09");
 constexpr const char* many = SYMBOLENGINE_TEST_HEX("0A");
 constexpr const char* timed = SYMBOLENGINE_TEST_HEX("0C");
 constexpr const char* faulting = SYMBOLENGINE_TEST_HEX("0D");
+constexpr const char* instrument = SYMBOLENGINE_TEST_HEX("0E");
 
 // The gain plugins' parameters, listed in this order, which isn't their IDs' order.
 constexpr unsigned gainParameter = 100, hiddenParameter = 7, meterParameter = 3000000, bypassParameter = 1,

@@ -810,5 +810,7 @@ DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x09), PClassInfo::kMa
            "Skips empty", 0, "Fx", "1.0.0", kVstVersionString, SkipsEmpty::make)
 DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x08), PClassInfo::kManyInstances, kVstAudioEffectClass,
            "Throwing", 0, "Fx", "1.0.0", kVstVersionString, Throwing::make)
+DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x0E), PClassInfo::kManyInstances, kVstAudioEffectClass,
+           "Instrument", 0, "Instrument|Synth", "2.1.0", kVstVersionString, Gain::make)
 
 END_FACTORY

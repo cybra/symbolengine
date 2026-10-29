@@ -13,6 +13,7 @@
 #include <clocale>
 #include <cstdint>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <random>
 #include <set>
@@ -756,6 +757,38 @@ TEST_CASE("An entry that can't be read is taken from the backup, and its file ne
     list->record(found(rig.place("VST3/Zebra.vst3"), stamp(1), {effect(std::string(32, 'E'), "Zebra")}));
     list->save();
     CHECK(files::read(rig.backup) == backup);
+}
+
+TEST_CASE("Numbers past what a time can hold, as a damaged file can say, are read without harm")
+{
+    Rig rig;
+    {
+        auto list = rig.open();
+        auto file = setAside(rig.place("VST3/Crash.vst3"), stamp(1), PluginFailure::Kind::crashed, "loading", 11);
+        file.outcome = PluginFile::Outcome::changedAfterSigning;
+        list->record(file);
+        list->record(found(rig.place("VST3/Gain.vst3"), stamp(1), {effect(gainId, "Gain")}));
+        list->save();
+    }
+    auto text = files::read(rig.file);
+    const auto most = std::to_string(std::numeric_limits<std::int64_t>::max());
+    const auto least = std::to_string(std::numeric_limits<std::int64_t>::min());
+    for (const auto& [name, value] : std::vector<std::pair<std::string, std::string>>{
+             {"\"date\":", most}, {"\"computerStarted\":", least}, {"\"firstSeen\":", least}})
+    {
+        const auto at = text.find(name);
+        REQUIRE(at != std::string::npos);
+        const auto end = text.find_first_of(",}", at);
+        text.replace(at + name.size(), end - at - name.size(), value);
+    }
+    files::writeSafely(rig.file, text);
+
+    auto list = rig.open();
+    REQUIRE(list->files().size() == 2);
+    CHECK(list->needsScan(rig.place("VST3/Crash.vst3"), stamp(1)));
+    CHECK(list->file(rig.place("VST3/Crash.vst3"))->failure->date > rig.time);
+    REQUIRE(list->find({"VST3", gainId}));
+    CHECK(list->find({"VST3", gainId})->firstSeen < rig.time);
 }
 
 TEST_CASE("Fields the list doesn't know are kept in the entries it doesn't change")

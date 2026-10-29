@@ -44,6 +44,10 @@ struct PluginFailure
 
         /** Its worker ended without answering, however it ended. */
         noAnswer,
+
+        /** A step failed and the plugin, its code or the system said why, as when its code won't load or it can't be
+            made or set up. */
+        refused,
     };
 
     Kind kind = Kind::crashed;
