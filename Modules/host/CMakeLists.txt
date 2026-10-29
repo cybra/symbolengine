@@ -36,9 +36,10 @@ set(sources
 set(libraries Threads::Threads)
 
 if(APPLE)
-    list(APPEND sources src/ProcessState_mac.mm src/ScanWorkerCrash_posix.cpp src/ScanWorkerLoop_mac.mm
-                        src/Vst3Module_mac.cpp)
-    list(APPEND libraries "-framework AppKit" "-framework CoreFoundation" "-framework CoreGraphics")
+    list(APPEND sources src/AudioUnitFormat.mm src/ProcessState_mac.mm src/ScanWorkerCrash_posix.cpp
+                        src/ScanWorkerLoop_mac.mm src/Vst3Module_mac.cpp)
+    list(APPEND libraries "-framework AppKit" "-framework AudioToolbox" "-framework CoreAudio" "-framework CoreFoundation"
+                          "-framework CoreGraphics")
 elseif(WIN32)
     list(APPEND sources src/ScanWorkerCrash_windows.cpp src/ScanWorkerLoop_windows.cpp src/Vst3Module_windows.cpp)
     list(APPEND libraries ole32 user32 version)
@@ -62,12 +63,17 @@ if(SYMBOLENGINE_TESTS)
                      Tests/ScanTests.cpp Tests/ScanWorkerTests.cpp Tests/TimeTests.cpp Tests/Vst3Tests.cpp
                      Tests/WalkTests.cpp)
     if(APPLE)
-        list(APPEND test_sources Tests/ScanWorkerTests_mac.mm)
+        add_subdirectory(Tests/AudioUnits)
+        list(APPEND test_sources Tests/AudioUnitTests.cpp Tests/ScanWorkerTests_mac.mm)
     endif()
     symbolengine_add_tests(host SOURCES ${test_sources})
     target_include_directories(symbolengine_host_tests PRIVATE ${PROJECT_SOURCE_DIR}/Modules/core/Tests)
     if(APPLE)
-        target_link_libraries(symbolengine_host_tests PRIVATE "-framework AppKit")
+        target_link_libraries(symbolengine_host_tests PRIVATE "-framework AppKit" "-framework AudioToolbox")
+        target_compile_definitions(symbolengine_host_tests PRIVATE
+            "SYMBOLENGINE_TEST_AUDIO_UNITS=\"$<TARGET_BUNDLE_DIR:symbolengine_test_audio_units>\""
+            "SYMBOLENGINE_TEST_AU_LOG=\"${CMAKE_CURRENT_BINARY_DIR}/test-au-log.txt\"")
+        add_dependencies(symbolengine_host_tests symbolengine_test_audio_units)
     endif()
     target_compile_definitions(symbolengine_host_tests PRIVATE
         "SYMBOLENGINE_SCAN_WORKER=\"$<TARGET_FILE:symbolengine_host_scan_worker>\""

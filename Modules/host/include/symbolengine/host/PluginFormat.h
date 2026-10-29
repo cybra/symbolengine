@@ -301,6 +301,11 @@ public:
         putting the values its processing reports in the block's room for them. */
     virtual bool process(PluginBlock& block) = 0;
 
+    /** Why it can never be called again, once its format knows, as for an Audio Unit whose instance the system says is
+        gone, which the host then fails with this reason; nothing while it can. Read on the audio thread after a block
+        it failed, so it is text that lasts, never made there. */
+    virtual const char* stopped() const { return nullptr; }
+
     /** Hands it parameters' new values while it is active and not processing, so its processing has them as it would
         after a block, as before its state is taken. */
     virtual void flush(const PluginParameterChange* changes, int count) = 0;

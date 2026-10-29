@@ -1,5 +1,6 @@
 #pragma once
 
+#include "host/AudioUnitFormat.h"
 #include "host/FakePluginFormat.h"
 #include "host/Plugin.h"
 #include "host/PluginFormat.h"

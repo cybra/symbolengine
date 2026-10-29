@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <key>CFBundleExecutable</key><string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
+    <key>CFBundleIdentifier</key><string>dev.symbolengine.test.units</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>CFBundleName</key><string>SymbolEngine Test Units</string>
+    <key>CFBundlePackageType</key><string>BNDL</string>
+    <key>CFBundleShortVersionString</key><string>1.2.3</string>
+    <key>CFBundleVersion</key><string>1.2.3</string>
+    <key>AudioComponents</key>
+    <array>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>Pass</string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: Pass</string>
+            <key>description</key><string>SymbolEngine's test unit Pass</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>PassFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>Fail</string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: Fail</string>
+            <key>description</key><string>SymbolEngine's test unit Fail</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>FailFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>Dead</string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: Dead</string>
+            <key>description</key><string>SymbolEngine's test unit Dead</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>DeadFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>Smal</string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: Small</string>
+            <key>description</key><string>SymbolEngine's test unit Small</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>SmallFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>Pull</string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: Pull</string>
+            <key>description</key><string>SymbolEngine's test unit Pull</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>PullFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>Swap</string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: Swap</string>
+            <key>description</key><string>SymbolEngine's test unit Swap</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>SwapFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>Echo</string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: Echo</string>
+            <key>description</key><string>SymbolEngine's test unit Echo</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>EchoFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>Ten </string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: Ten</string>
+            <key>description</key><string>SymbolEngine's test unit Ten</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>TenFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>Grow</string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: Grow</string>
+            <key>description</key><string>SymbolEngine's test unit Grow</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>GrowFactory</string>
+        </dict>
+    </array>
+</dict>
+</plist>

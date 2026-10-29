@@ -171,6 +171,7 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     // thread, with the fault if it crashed, for the main thread to say.
     std::atomic<bool> crashed{false};
     std::atomic<const char*> audioFailure{nullptr};
+    std::atomic<const char*> audioReason{nullptr};
     std::atomic<std::uint32_t> audioFault{0};
 
     // Notices, recorded from any thread and acted on from the main thread.
@@ -317,12 +318,19 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
         {
         }
 
+        audioFail(step, fault, nullptr);
+        return false;
+    }
+
+    // Takes the plugin out of the audio from the audio thread, for the main thread to say why.
+    void audioFail(const char* step, std::uint32_t fault, const char* why) noexcept
+    {
         accepting = false;
         audioFault = fault;
+        audioReason = why;
         audioFailure = step;
         pending.fetch_or(audioFailed);
         host->audioNotices = true;
-        return false;
     }
 
     void fail(const char* step, std::string message)
@@ -675,6 +683,8 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
         {
             if (audioFault != 0)
                 crash(step, audioFault);
+            else if (const auto* const why = audioReason.load())
+                fail(step, why);
             else
                 fail(step, "It failed with its own error while processing audio.");
         }
@@ -1247,6 +1257,14 @@ void Plugin::process(float* const* channels, int channelCount, int frames, const
         bool fine = false;
         going = held.audioCall("process", [&] { fine = plugin->process(block); });
         held.framesPlayed += count;
+
+        // A plugin its format knows can never work again is taken out of the audio.
+        if (going && !fine)
+            if (const auto* const why = plugin->stopped())
+            {
+                held.audioFail("process", 0, why);
+                going = false;
+            }
 
         for (int r = 0; r < std::min(block.reportedCount, block.reportedRoom); ++r)
             if (auto* const slot = known != nullptr ? known->find(block.reported[r].id) : nullptr)

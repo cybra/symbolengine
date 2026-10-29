@@ -169,7 +169,7 @@ std::string declaredVersion([[maybe_unused]] const std::filesystem::path& bundle
             std::array<char, 256> text{};
             if (value != nullptr && CFGetTypeID(value) == CFStringGetTypeID() &&
                 CFStringGetCString(static_cast<CFStringRef>(value), text.data(), text.size(), kCFStringEncodingUTF8) &&
-                text[0] != '\0')
+                text[0] != '\0' && version != text.data())
                 version += (version.empty() ? "" : " ") + std::string(text.data());
         }
     CFRelease(read);

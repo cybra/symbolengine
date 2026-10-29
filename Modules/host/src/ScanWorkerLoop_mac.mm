@@ -45,8 +45,8 @@ bool showsWindow()
 {
     // Core Graphics' list of windows on screen, which, unlike AppKit, any thread may read.
     bool shows = false;
-    const auto windows = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
-                                                    kCGNullWindowID);
+    constexpr auto onScreen = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
+    const auto windows = CGWindowListCopyWindowInfo(onScreen, kCGNullWindowID);
     if (windows == nullptr)
         return false;
     // Normal, floating and modal windows, as a plugin's question may be any of them, and nothing at the Dock's level
@@ -64,7 +64,8 @@ bool showsWindow()
         const auto alphaValue = static_cast<CFNumberRef>(CFDictionaryGetValue(window, kCGWindowAlpha));
         if (ownerValue != nullptr && layerValue != nullptr && alphaValue != nullptr &&
             CFNumberGetValue(ownerValue, kCFNumberLongLongType, &owner) &&
-            CFNumberGetValue(layerValue, kCFNumberIntType, &layer) && CFNumberGetValue(alphaValue, kCFNumberDoubleType, &alpha))
+            CFNumberGetValue(layerValue, kCFNumberIntType, &layer) &&
+            CFNumberGetValue(alphaValue, kCFNumberDoubleType, &alpha))
             shows = owner == self && layer >= 0 && layer < dock && alpha > 0;
     }
     CFRelease(windows);
