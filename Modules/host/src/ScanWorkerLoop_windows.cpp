@@ -81,14 +81,14 @@ HWND visibleWindow()
 {
     HWND found = nullptr;
     EnumWindows(
-        [](HWND window, LPARAM into) -> BOOL {
+        [](HWND candidate, LPARAM into) -> BOOL {
             DWORD owner = 0;
-            GetWindowThreadProcessId(window, &owner);
+            GetWindowThreadProcessId(candidate, &owner);
             RECT area{};
-            if (owner != GetCurrentProcessId() || !IsWindowVisible(window) || !GetWindowRect(window, &area) ||
+            if (owner != GetCurrentProcessId() || !IsWindowVisible(candidate) || !GetWindowRect(candidate, &area) ||
                 area.right <= area.left || area.bottom <= area.top)
                 return TRUE;
-            *reinterpret_cast<HWND*>(into) = window;
+            *reinterpret_cast<HWND*>(into) = candidate;
             return FALSE;
         },
         reinterpret_cast<LPARAM>(&found));

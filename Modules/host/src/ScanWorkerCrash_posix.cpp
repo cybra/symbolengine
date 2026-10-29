@@ -82,7 +82,7 @@ void begin(const std::filesystem::path& note)
 
     struct sigaction action{};
     action.sa_sigaction = handle;
-    action.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESETHAND;
+    action.sa_flags = static_cast<int>(SA_SIGINFO | SA_ONSTACK | SA_RESETHAND);
     sigemptyset(&action.sa_mask);
     for (const auto& crash : crashes)
         sigaction(crash.signal, &action, nullptr);
