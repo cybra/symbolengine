@@ -15,6 +15,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <semaphore>
 #include <thread>
 #include <type_traits>
 #include <vector>
@@ -60,10 +61,20 @@ struct PluginHost::Shared : std::enable_shared_from_this<PluginHost::Shared>
     std::deque<std::pair<std::weak_ptr<Plugin::Inner>, PluginFormat*>> queue;
     bool making = false;
 
-    // Plugins with notices sent from the audio thread, which a thread of the host's own hands to the main thread.
+    // Plugins with notices sent from the audio thread, which a thread of the host's own hands to the main thread: it
+    // looks every 10 ms, and is woken at once for a reset, which can't wait for its look.
     std::vector<std::weak_ptr<Plugin::Inner>> plugins;
     std::atomic<bool> audioNotices{false}, stopping{false};
     std::thread watcher;
+    std::binary_semaphore wake{0};
+    std::atomic<bool> woken{false};
+
+    // From the audio thread: one signal, which never waits, until the watcher has woken.
+    void wakeWatcher() noexcept
+    {
+        if (!woken.exchange(true))
+            wake.release();
+    }
 
     void misuse(const std::string& what) const
     {
@@ -189,6 +200,10 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
         if (insideProcess)
         {
             host->audioNotices = true;
+
+            if (has(what, PluginNotice::reset))
+                host->wakeWatcher();
+
             return;
         }
 
@@ -893,7 +908,16 @@ PluginHost::PluginHost(Options options) : shared(std::make_shared<Shared>())
     shared->watcher = std::thread([weak = std::weak_ptr(shared)] {
         for (;;)
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            {
+                const auto host = weak.lock();
+
+                if (host == nullptr)
+                    return;
+
+                if (host->wake.try_acquire_for(std::chrono::milliseconds(10)))
+                    host->woken = false;
+            }
+
             const auto host = weak.lock();
 
             if (host == nullptr || host->stopping)
@@ -908,6 +932,7 @@ PluginHost::PluginHost(Options options) : shared(std::make_shared<Shared>())
 PluginHost::~PluginHost()
 {
     shared->stopping = true;
+    shared->wakeWatcher();
 
     if (shared->watcher.joinable())
         shared->watcher.join();

@@ -784,3 +784,41 @@ TEST_CASE("A hold that leaves a plugin off the audio, as when its state is taken
     CHECK(playOnes(*noticed) == 1.0f);
     rig.checkNoMisuse();
 }
+
+TEST_CASE("A reset a plugin asks for from inside its processing comes from the main thread at once, never waiting "
+          "for the host's next look at what plugins said there")
+{
+    Rig rig;
+    const auto now = [] { return std::chrono::steady_clock::now(); };
+    std::atomic<bool> ask{false};
+    std::atomic<bool> reset{false};
+    FakePluginFormat::Script asking;
+    asking.inside = [&](std::string_view call) {
+        if (call == "process" && ask.exchange(false))
+            rig.fake.notify("asking", PluginNotice::reset);
+        if (call == "reset")
+            reset = true;
+    };
+    rig.fake.script("asking", asking);
+    auto plugin = rig.made("asking");
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+
+    // The host looks every 10 ms, so waiting for its look would take 5 ms in the middle.
+    std::vector<std::chrono::steady_clock::duration> waits;
+    for (int i = 0; i < 21; ++i)
+    {
+        reset = false;
+        ask = true;
+        const auto asked = now();
+        std::thread([&] {
+            std::vector<float> left(64, 1.0f), right(64, 1.0f);
+            float* channels[] = {left.data(), right.data()};
+            plugin->process(channels, 2, 64);
+        }).join();
+        REQUIRE(rig.main.turnUntil([&] { return reset.load(); }, 2s));
+        waits.push_back(now() - asked);
+    }
+    std::sort(waits.begin(), waits.end());
+    CHECK(waits[10] < 2ms);
+    rig.checkNoMisuse();
+}
