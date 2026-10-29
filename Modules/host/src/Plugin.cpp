@@ -1,5 +1,6 @@
 #include "symbolengine/host/Plugin.h"
 
+#include "Guard.h"
 #include "ProcessState.h"
 
 #include "symbolengine/core/LockFreeFifo.h"
@@ -15,6 +16,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 namespace symbolengine
@@ -29,7 +31,14 @@ thread_local bool insideProcess = false;
 
 // Bits of a plugin's pending notices the host keeps for itself: its own edits waiting, and values from the audio thread
 // waiting to be shown.
-constexpr std::uint32_t editsWaiting = 1u << 30, valuesWaiting = 1u << 31;
+constexpr std::uint32_t audioFailed = 1u << 29, editsWaiting = 1u << 30, valuesWaiting = 1u << 31;
+
+// Runs a call held by address, for guarded().
+template <typename Call>
+void run(void* call)
+{
+    (*static_cast<Call*>(call))();
+}
 
 std::int64_t ticksNow() noexcept
 {
@@ -158,6 +167,12 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     std::atomic<std::uint64_t> blocksPlayed{0};
     std::int64_t framesPlayed = 0;
 
+    // Whether it crashed, after which nothing calls it again, not even to take it down; and what failed on the audio
+    // thread, with the fault if it crashed, for the main thread to say.
+    std::atomic<bool> crashed{false};
+    std::atomic<const char*> audioFailure{nullptr};
+    std::atomic<std::uint32_t> audioFault{0};
+
     // Notices, recorded from any thread and acted on from the main thread.
     std::atomic<std::uint32_t> pending{0};
     std::atomic<bool> noticeScheduled{false};
@@ -228,8 +243,8 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     }
 
     // A call into the plugin on the main thread: marked busy while it runs, so what would overlap it waits; what it
-    // changes of the whole process put back; and an exception from it failing the plugin instead of reaching the
-    // program.
+    // changes of the whole process put back; and an exception from it, or on Windows a crash, failing the plugin
+    // instead of reaching the program.
     template <typename Call>
     bool call(const char* step, Call&& body)
     {
@@ -239,7 +254,13 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
 
         try
         {
-            body();
+            std::uint32_t fault = 0;
+
+            if (!guarded(&run<std::remove_reference_t<Call>>, &body, fault))
+            {
+                crash(step, fault);
+                fine = false;
+            }
         }
         catch (const std::exception& error)
         {
@@ -268,6 +289,40 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
         }
 
         return fine;
+    }
+
+    void crash(const char* step, std::uint32_t fault)
+    {
+        crashed = true;
+        fail(step, "It crashed, so it was switched off.");
+        problem.code = fault;
+        tell(PluginChange::crashed);
+    }
+
+    // A call into the plugin on the audio thread: an exception from it, or on Windows a crash, takes the plugin out of
+    // the audio from the next block, and the main thread says so.
+    template <typename Call>
+    bool audioCall(const char* step, Call&& body) noexcept
+    {
+        std::uint32_t fault = 0;
+
+        try
+        {
+            if (guarded(&run<std::remove_reference_t<Call>>, &body, fault))
+                return true;
+
+            crashed = true;
+        }
+        catch (...)
+        {
+        }
+
+        accepting = false;
+        audioFault = fault;
+        audioFailure = step;
+        pending.fetch_or(audioFailed);
+        host->audioNotices = true;
+        return false;
     }
 
     void fail(const char* step, std::string message)
@@ -616,6 +671,14 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
         const auto raw = pending.exchange(0);
         const auto what = static_cast<PluginNotice>(raw);
 
+        if (const auto* const step = audioFailure.exchange(nullptr); step != nullptr && state != State::failed)
+        {
+            if (audioFault != 0)
+                crash(step, audioFault);
+            else
+                fail(step, "It failed with its own error while processing audio.");
+        }
+
         if ((raw & valuesWaiting) != 0)
             showAudioValues();
 
@@ -684,9 +747,10 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
         if (instance == nullptr)
             return;
 
-        if (state == State::failed && inProcess)
+        if ((state == State::failed && inProcess) || crashed)
         {
-            // Still inside a process call it never returned from: its memory is kept, never freed under that call.
+            // Still inside a process call it never returned from, or crashed: its memory is kept, never freed under
+            // that call, and nothing calls it again.
             static_cast<void>(instance.release());
             return;
         }
@@ -1097,13 +1161,15 @@ void Plugin::process(float* const* channels, int channelCount, int frames, const
     const auto modes = floatingPointModes();
 
     // A discontinuity clears what the plugin holds of the audio before it.
+    bool going = true;
+
     if (!held.processing.exchange(true))
-        plugin->startProcessing();
+        going = held.audioCall("startProcessing", [plugin] { plugin->startProcessing(); });
     else if (time != nullptr && time->discontinuity)
-    {
-        plugin->stopProcessing();
-        plugin->startProcessing();
-    }
+        going = held.audioCall("process", [plugin] {
+            plugin->stopProcessing();
+            plugin->startProcessing();
+        });
 
     const int ins = static_cast<int>(held.inputs.size());
     const int outs = static_cast<int>(held.outputs.size());
@@ -1112,7 +1178,7 @@ void Plugin::process(float* const* channels, int channelCount, int frames, const
     bool valuesKept = false;
     int next = 0;
 
-    for (int offset = 0; offset < frames; offset += most)
+    for (int offset = 0; going && offset < frames; offset += most)
     {
         const int count = std::min(most, frames - offset);
 
@@ -1173,7 +1239,8 @@ void Plugin::process(float* const* channels, int channelCount, int frames, const
                           static_cast<int>(held.reportedRoom.size()),
                           0,
                           &blockTime};
-        const bool fine = plugin->process(block);
+        bool fine = false;
+        going = held.audioCall("process", [&] { fine = plugin->process(block); });
         held.framesPlayed += count;
 
         for (int r = 0; r < std::min(block.reportedCount, block.reportedRoom); ++r)

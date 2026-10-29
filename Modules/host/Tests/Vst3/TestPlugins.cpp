@@ -568,6 +568,67 @@ protected:
     void addBuses() override { addAudioInput(STR16("Input"), SpeakerArr::kStereo); }
 };
 
+// One object with both parts that crashes, writing through a null pointer, or throws, when told to by a parameter, its
+// audio passing through until then.
+class Faulting : public SingleComponentEffect
+{
+public:
+    static FUnknown* make(void*) { return static_cast<IAudioProcessor*>(new Faulting); }
+
+    tresult PLUGIN_API initialize(FUnknown* context) override
+    {
+        const auto result = SingleComponentEffect::initialize(context);
+        addAudioInput(STR16("Input"), SpeakerArr::kStereo);
+        addAudioOutput(STR16("Output"), SpeakerArr::kStereo);
+        parameters.addParameter(STR16("Fault in process"), nullptr, 1, 0.0, 0, testIds::faultInProcess);
+        parameters.addParameter(STR16("Fault on main"), nullptr, 1, 0.0, 0, testIds::faultOnMain);
+        parameters.addParameter(STR16("Throw in process"), nullptr, 1, 0.0, 0, testIds::throwInProcess);
+        return result;
+    }
+
+    tresult PLUGIN_API setParamNormalized(ParamID id, ParamValue value) override
+    {
+        if (id == testIds::faultOnMain && value > 0.5)
+            crash();
+
+        return SingleComponentEffect::setParamNormalized(id, value);
+    }
+
+    tresult PLUGIN_API process(ProcessData& data) override
+    {
+        if (data.inputParameterChanges != nullptr)
+            for (int32 q = 0; q < data.inputParameterChanges->getParameterCount(); ++q)
+                if (auto* changes = data.inputParameterChanges->getParameterData(q);
+                    changes != nullptr && changes->getPointCount() > 0)
+                {
+                    int32 offset = 0;
+                    ParamValue value = 0.0;
+                    changes->getPoint(changes->getPointCount() - 1, offset, value);
+
+                    if (value > 0.5 && changes->getParameterId() == testIds::faultInProcess)
+                        crash();
+
+                    if (value > 0.5 && changes->getParameterId() == testIds::throwInProcess)
+                        throw std::runtime_error("told to throw while processing");
+                }
+
+        const int32 channels = data.numOutputs > 0 && data.numInputs > 0 ? data.outputs[0].numChannels : 0;
+
+        for (int32 c = 0; c < channels; ++c)
+            for (int32 i = 0; i < data.numSamples; ++i)
+                data.outputs[0].channelBuffers32[c][i] = 0.25f * data.inputs[0].channelBuffers32[c][i];
+
+        return kResultOk;
+    }
+
+private:
+    static void crash()
+    {
+        volatile int* volatile nowhere = nullptr;
+        *nowhere = 1;
+    }
+};
+
 // One object with both parts that asks for the context it needs, and keeps what it was given, which the text of the
 // query parameter says.
 class Timed : public SingleComponentEffect
@@ -741,6 +802,8 @@ DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x0A), PClassInfo::kMa
            "Many", 0, "Fx", "1.0.0", kVstVersionString, Many::make)
 DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x0B), PClassInfo::kManyInstances,
            kVstComponentControllerClass, "Many Controller", 0, "", "1.0.0", kVstVersionString, ManyController::make)
+DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x0D), PClassInfo::kManyInstances, kVstAudioEffectClass,
+           "Faulting", 0, "Fx", "1.0.0", kVstVersionString, Faulting::make)
 DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x0C), PClassInfo::kManyInstances, kVstAudioEffectClass,
            "Timed", 0, "Fx", "1.0.0", kVstVersionString, Timed::make)
 DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x09), PClassInfo::kManyInstances, kVstAudioEffectClass,

@@ -17,6 +17,7 @@ constexpr const char* throwing = SYMBOLENGINE_TEST_HEX("08");
 constexpr const char* skipsEmpty = SYMBOLENGINE_TEST_HEX("09");
 constexpr const char* many = SYMBOLENGINE_TEST_HEX("0A");
 constexpr const char* timed = SYMBOLENGINE_TEST_HEX("0C");
+constexpr const char* faulting = SYMBOLENGINE_TEST_HEX("0D");
 
 // The gain plugins' parameters, listed in this order, which isn't their IDs' order.
 constexpr unsigned gainParameter = 100, hiddenParameter = 7, meterParameter = 3000000, bypassParameter = 1,
@@ -33,6 +34,10 @@ constexpr unsigned editParameter = 200, dirtyParameter = 201, echoParameter = 30
 // timed plugin's says what it was last given, as
 // "position=0 playing=0 tempo=120.0 signature=4/4 music=0.000 bar=0.000 stops=0", stops counting its processing stopped.
 constexpr unsigned queryParameter = 4000;
+
+// The faulting plugin's parameters, set to 1 to make it write through a null pointer in its next process call or as it
+// is shown the value, or throw from its next process call.
+constexpr unsigned faultInProcess = 500, faultOnMain = 501, throwInProcess = 502;
 
 // The many plugin's parameters, 1 to this.
 constexpr unsigned manyParameters = 1000;

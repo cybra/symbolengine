@@ -523,3 +523,66 @@ TEST_CASE("A VST3 plugin's system time rises in every call, though the program's
 
     CHECK(misuses().empty());
 }
+
+TEST_CASE(
+    "A VST3 plugin that throws from its processing is switched off, its audio passing by, and the program goes on")
+{
+    Rig rig;
+    auto plugin = rig.made(testIds::faulting);
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+    CHECK(through(*plugin, 64) == std::vector<float>{0.25f, 0.5f});
+
+    REQUIRE(plugin->setParameter(testIds::throwInProcess, 1.0));
+    CHECK(through(*plugin, 64) == std::vector<float>{1.0f, 2.0f});
+    REQUIRE(rig.main.turnUntil([&] { return rig.heard(PluginChange::failed); }));
+    rig.main.settle();
+
+    CHECK(plugin->state() == Plugin::State::failed);
+    CHECK(plugin->problem().step == "process");
+    CHECK_FALSE(rig.heard(PluginChange::crashed));
+    CHECK(through(*plugin, 64) == std::vector<float>{1.0f, 2.0f});
+}
+
+#if defined(_MSC_VER)
+
+TEST_CASE("A VST3 plugin that crashes in its processing on Windows is switched off and never called again, and the "
+          "program is told it crashed")
+{
+    Rig rig;
+    auto plugin = rig.made(testIds::faulting);
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+
+    REQUIRE(plugin->setParameter(testIds::faultInProcess, 1.0));
+    CHECK(through(*plugin, 64) == std::vector<float>{1.0f, 2.0f});
+    REQUIRE(rig.main.turnUntil([&] { return rig.heard(PluginChange::crashed); }));
+    rig.main.settle();
+
+    CHECK(plugin->state() == Plugin::State::failed);
+    CHECK(plugin->problem().step == "process");
+    CHECK(plugin->problem().code != 0);
+    CHECK(through(*plugin, 64) == std::vector<float>{1.0f, 2.0f});
+
+    // Taken down without a call into it.
+    plugin.reset();
+    rig.main.settle();
+}
+
+TEST_CASE("A VST3 plugin that crashes on the main thread on Windows is switched off, and the program is told which "
+          "call")
+{
+    Rig rig;
+    auto plugin = rig.made(testIds::faulting);
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+
+    CHECK_FALSE(plugin->setParameter(testIds::faultOnMain, 1.0));
+    rig.main.settle();
+
+    CHECK(rig.heard(PluginChange::crashed));
+    CHECK(plugin->state() == Plugin::State::failed);
+    CHECK(plugin->problem().step == "setParameter");
+    CHECK(through(*plugin, 64) == std::vector<float>{1.0f, 2.0f});
+    plugin.reset();
+    rig.main.settle();
+}
+
+#endif

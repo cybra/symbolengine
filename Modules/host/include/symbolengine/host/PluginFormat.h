@@ -233,13 +233,14 @@ public:
     /** Clears what it holds of audio already played, keeping its settings; while active and not processing. */
     virtual void reset() = 0;
 
-    /** Around a run of process calls, on the audio thread, or on the main thread once no audio thread is calling. */
-    virtual void startProcessing() noexcept = 0;
-    virtual void stopProcessing() noexcept = 0;
+    /** Around a run of process calls, on the audio thread, or on the main thread once no audio thread is calling. Like
+        process, these let an exception from the plugin's own code through, which the host catches. */
+    virtual void startProcessing() = 0;
+    virtual void stopProcessing() = 0;
 
     /** Processes a block on the audio thread, giving false if it failed, after which its output isn't heard, and
         putting the values its processing reports in the block's room for them. */
-    virtual bool process(PluginBlock& block) noexcept = 0;
+    virtual bool process(PluginBlock& block) = 0;
 
     /** Hands it parameters' new values while it is active and not processing, so its processing has them as it would
         after a block, as before its state is taken. */

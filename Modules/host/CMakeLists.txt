@@ -22,6 +22,7 @@ set_source_files_properties(${sdk_sources} PROPERTIES COMPILE_OPTIONS "$<IF:$<CX
 
 set(sources
     src/FakePluginFormat.cpp
+    src/Guard.cpp
     src/Plugin.cpp
     src/ProcessState.cpp
     src/Vst3Format.cpp

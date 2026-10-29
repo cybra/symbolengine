@@ -165,7 +165,7 @@ public:
             std::fill(line.begin(), line.end(), 0.0f);
     }
 
-    void startProcessing() noexcept override
+    void startProcessing() override
     {
         const Audio call(*this, "startProcessing");
 
@@ -175,7 +175,7 @@ public:
         processing = true;
     }
 
-    void stopProcessing() noexcept override
+    void stopProcessing() override
     {
         const Audio call(*this, "stopProcessing");
 
@@ -185,7 +185,7 @@ public:
         processing = false;
     }
 
-    bool process(PluginBlock& block) noexcept override
+    bool process(PluginBlock& block) override
     {
         const Audio call(*this, "process");
 
@@ -399,8 +399,17 @@ private:
             if (fake.exclusive > 0)
                 fake.misuse(std::string(name) + " overlapping a call that changes how it processes");
 
-            if (fake.script.inside != nullptr)
-                fake.script.inside(name);
+            // What the script makes it do, which may throw as a plugin's own code can.
+            try
+            {
+                if (fake.script.inside != nullptr)
+                    fake.script.inside(name);
+            }
+            catch (...)
+            {
+                --fake.audioCalls;
+                throw;
+            }
         }
 
         ~Audio() { --fake.audioCalls; }

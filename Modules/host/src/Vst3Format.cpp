@@ -945,11 +945,11 @@ public:
     // VST3's reset is processing stopped and started again, which the host module does around this.
     void reset() override {}
 
-    void startProcessing() noexcept override { processor->setProcessing(true); }
+    void startProcessing() override { processor->setProcessing(true); }
 
-    void stopProcessing() noexcept override { processor->setProcessing(false); }
+    void stopProcessing() override { processor->setProcessing(false); }
 
-    bool process(PluginBlock& block) noexcept override
+    bool process(PluginBlock& block) override
     {
         auto& ins = channelPointers[kInput];
         auto& outs = channelPointers[kOutput];
@@ -1199,7 +1199,7 @@ private:
         }
     }
 
-    bool run(int frames, const PluginTime& time) noexcept
+    bool run(int frames, const PluginTime& time)
     {
         outputChanges.clear();
         inputEvents.clear();

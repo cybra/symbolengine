@@ -648,3 +648,38 @@ TEST_CASE("A plugin that can't be prepared says why, and the audio passes it by"
     CHECK(through(*plugin, 2, 64) == std::vector<float>{1.0f, 2.0f});
     rig.checkNoMisuse();
 }
+
+TEST_CASE("A plugin that throws from its processing is switched off, its audio passing by, and nothing else calls it")
+{
+    Rig rig;
+    std::atomic<int> blocks{0};
+    FakePluginFormat::Script throws;
+    throws.gain = 0.5f;
+    throws.inside = [&blocks](std::string_view call) {
+        if (call == "process" && ++blocks == 2)
+            throw std::runtime_error("the plugin's own exception while processing");
+    };
+    rig.fake.script("throws", throws);
+    Rig::Heard heard;
+    auto plugin = rig.made("throws", &heard);
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+
+    CHECK(through(*plugin, 2, 64) == std::vector<float>{0.5f, 1.0f});
+
+    // Split in two, the second half isn't given to it once the first has failed, and nor is the next block, before the
+    // main thread has heard.
+    CHECK(through(*plugin, 2, 128) == std::vector<float>{1.0f, 2.0f});
+    CHECK(through(*plugin, 2, 64) == std::vector<float>{1.0f, 2.0f});
+    CHECK(blocks == 2);
+    REQUIRE(rig.main.turnUntil([&] { return heard.has(PluginChange::failed); }));
+    rig.main.settle();
+
+    CHECK(plugin->state() == Plugin::State::failed);
+    CHECK(plugin->problem().step == "process");
+    CHECK_FALSE(heard.has(PluginChange::crashed));
+
+    const auto calls = rig.fake.calls("throws").size();
+    CHECK(through(*plugin, 2, 64) == std::vector<float>{1.0f, 2.0f});
+    CHECK(blocks == 2);
+    CHECK(rig.fake.calls("throws").size() == calls);
+}

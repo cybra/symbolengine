@@ -46,6 +46,11 @@ enum class PluginChange
     /** It didn't leave a process call within the limit, so it is left out of the audio and not called again. */
     stuck,
 
+    /** It crashed in a call, on Windows, where the host caught the fault: it is switched off, the audio passing it by,
+        and never called again, and problem() says in which call. The program's process can no longer be trusted, so
+        it saves its document to a new file and asks to be restarted. Elsewhere a crash ends the program. */
+    crashed,
+
     /** A call into it changed what belongs to the whole process, the floating-point mode, the C locale or the working
         folder, which was put back. */
     processState,
