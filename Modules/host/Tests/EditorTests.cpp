@@ -13,6 +13,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
@@ -62,7 +63,7 @@ struct FakeRig
         return plugin;
     }
 
-    long count(const std::string& id, const std::string& call) const
+    std::ptrdiff_t count(const std::string& id, const std::string& call) const
     {
         const auto calls = fake.calls(id);
         return std::count(calls.begin(), calls.end(), call);
