@@ -91,6 +91,11 @@ public:
     bool allTakenApartOnMainThread() const;
 
     std::string name() const override;
+
+    /** No folders of its own; its plugin files end in ".fake" and are stamped by their own size and time. */
+    std::vector<PluginFolder> folders() const override;
+    bool isPluginFile(const std::filesystem::path& path) const override;
+    std::optional<PluginFileFacts> examine(const std::filesystem::path& file, PluginError& error) const override;
     std::vector<PluginDescription> pluginsIn(const std::filesystem::path& file, PluginError& error) override;
     void make(const PluginDescription& plugin, PluginFormatClient& client,
               std::function<void(std::unique_ptr<PluginFormatInstance>, PluginError)> done) override;

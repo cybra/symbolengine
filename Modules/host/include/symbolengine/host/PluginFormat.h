@@ -72,6 +72,37 @@ struct PluginDescription
     bool operator==(const PluginDescription&) const = default;
 };
 
+/** What says a plugin's file has changed since it was scanned: its binary's size and modification time, the binary
+    inside a bundle rather than the bundle, since an installer can replace one and leave the other's time; the version
+    it declares; and the modification time of a manifest that describes it without its code running, such as a VST3's
+    moduleinfo.json, 0 where it has none. Times are in nanoseconds since 1970 on the system clock, and two stamps are
+    only compared for a difference, never for which is newer, so an older build put back counts as a change. */
+struct PluginStamp
+{
+    std::int64_t size = 0;
+    std::int64_t modified = 0;
+    std::string version{};
+    std::int64_t manifestModified = 0;
+
+    bool operator==(const PluginStamp&) const = default;
+};
+
+/** What a format reads of a plugin file without loading its code: its stamp, and the architectures its binaries are
+    built for, as their headers say, such as "arm64" and "x86_64". */
+struct PluginFileFacts
+{
+    PluginStamp stamp{};
+    std::vector<std::string> architectures{};
+};
+
+/** A folder plugins are installed in, and whether it is the user's own rather than the system's, as the user's own
+    plugin folder is, or one the user added. Of two copies of a plugin at one version, the user's is loaded. */
+struct PluginFolder
+{
+    std::filesystem::path path{};
+    bool user = false;
+};
+
 /** Which of two plugin versions is the newer, as a negative number, 0 or a positive number like strcmp's: compared
     piece by piece, the runs of digits as numbers and the rest as text, so "1.10" is newer than "1.9" and "2.0" the
     same as "2.0.0". */
@@ -295,6 +326,16 @@ public:
     virtual ~PluginFormat() = default;
 
     virtual std::string name() const = 0;
+
+    /** The folders this format's plugins are installed in on this system, the system's before the user's. */
+    virtual std::vector<PluginFolder> folders() const = 0;
+
+    /** Whether a path found in a folder is one of this format's plugin files, taken whole and never walked into. */
+    virtual bool isPluginFile(const std::filesystem::path& path) const = 0;
+
+    /** A plugin file's stamp and architectures, read without loading its code, or nothing with the error set when it
+        holds no binary to read. From any thread. */
+    virtual std::optional<PluginFileFacts> examine(const std::filesystem::path& file, PluginError& error) const = 0;
 
     /** The plugins a file of the format holds, each as it declares itself, without making any, in the order the file
         gives them; called on the main thread, loading the file's code where the format has to, so a scan calls it in

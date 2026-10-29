@@ -16,21 +16,6 @@
 namespace symbolengine
 {
 
-/** What says a plugin's file has changed since it was scanned: its binary's size and modification time, the binary
-    inside a bundle rather than the bundle, since an installer can replace one and leave the other's time; the version
-    it declares; and the modification time of a manifest that describes it without its code running, such as a VST3's
-    moduleinfo.json, 0 where it has none. Times are in nanoseconds since 1970 on the system clock, and two stamps are
-    only compared for a difference, never for which is newer, so an older build put back counts as a change. */
-struct PluginStamp
-{
-    std::int64_t size = 0;
-    std::int64_t modified = 0;
-    std::string version{};
-    std::int64_t manifestModified = 0;
-
-    bool operator==(const PluginStamp&) const = default;
-};
-
 /** Why a scan set a plugin aside, so it isn't loaded again until its file changes or the user asks. */
 struct PluginFailure
 {
@@ -108,7 +93,7 @@ struct PluginFile
     std::filesystem::path path{};
     std::string format{};
 
-    /** Whether it lies in a folder the user added, rather than one of its format's own. */
+    /** Whether it lies in the user's own folder, or one the user added, rather than the system's. */
     bool userFolder = false;
 
     PluginStamp stamp{};
@@ -232,6 +217,11 @@ public:
 
     /** Forgets every file, so the next scan scans everything again, keeping when each plugin was first found. */
     void clear();
+
+    /** Whether a scan was under way when the list was last saved, so one the program quit during, or was killed in,
+        carries on at its next start. A scan says so as it begins, and that it isn't once it ends or is stopped. */
+    bool scanUnderway() const;
+    void setScanUnderway(bool underway);
 
     /** Whether anything has changed since the file was read or last saved, or the file read was damaged. */
     bool hasChanges() const;

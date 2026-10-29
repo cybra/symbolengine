@@ -1,9 +1,23 @@
 #include "symbolengine/host/PluginScanner.h"
 
 #include <symbolengine/core/Paths.h>
+#include <symbolengine/core/System.h>
 
+#include <algorithm>
 #include <optional>
+#include <set>
+#include <tuple>
 #include <utility>
+
+#if defined(_WIN32)
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
+    #ifndef NOMINMAX
+        #define NOMINMAX
+    #endif
+    #include <windows.h>
+#endif
 
 namespace symbolengine
 {
@@ -16,6 +30,85 @@ constexpr std::string_view beforeAnything = "starting the scan";
 
 // How many times in a row a worker may fail to start or answer before the scan stops.
 constexpr int startsAllowed = 3;
+
+// A folder no walk enters: a volume's root, a drive's mount point, or the user's home.
+bool forbidden(const std::filesystem::path& folder)
+{
+    auto normal = folder.lexically_normal();
+    if (!normal.has_filename())
+        normal = normal.parent_path();
+    std::error_code error;
+    const auto home = paths::systemFolder(paths::Folder::home, error);
+    if (normal == normal.root_path() || (!error && normal == home.lexically_normal()))
+        return true;
+    const auto parent = paths::toUtf8(normal.parent_path());
+    return parent == "/Volumes" || parent == "/mnt" || parent == "/media" || parent == "/run/media" ||
+           paths::toUtf8(normal.parent_path().parent_path()) == "/media" ||
+           paths::toUtf8(normal.parent_path().parent_path()) == "/run/media";
+}
+
+// Whether a folder that isn't there is missing because its drive isn't connected, rather than because it was never
+// made or was deleted: a Windows drive that isn't there, or a Mac or Linux volume that isn't mounted.
+bool onAbsentDrive(const std::filesystem::path& folder)
+{
+    std::error_code error;
+#if defined(_WIN32)
+    return !std::filesystem::exists(folder.root_path(), error);
+#else
+    auto there = folder.lexically_normal();
+    while (!there.empty() && there != there.root_path() && !std::filesystem::exists(there, error))
+        there = there.parent_path();
+    const auto at = paths::toUtf8(there);
+    const auto above = paths::toUtf8(there.parent_path());
+    return at == "/Volumes" || at == "/mnt" || at == "/media" || at == "/run/media" || above == "/media" ||
+           above == "/run/media";
+#endif
+}
+
+// A folder passed over in a walk: one hidden by its name, or on Windows by its attributes.
+bool hidden(const std::filesystem::path& folder)
+{
+    if (paths::toUtf8(folder.filename()).starts_with("."))
+        return true;
+#if defined(_WIN32)
+    const auto attributes = GetFileAttributesW(folder.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)) != 0;
+#else
+    return false;
+#endif
+}
+
+// The walk of one folder: every plugin file under it once by its real path, bundles taken whole and never entered,
+// each folder entered once, links followed. False if the folder itself can't be read.
+bool walkFolder(const std::filesystem::path& folder, const PluginFormat& format,
+                std::set<std::filesystem::path>& entered, std::vector<std::filesystem::path>& found, bool top)
+{
+    std::error_code error;
+    std::filesystem::directory_iterator entries(folder, error);
+    if (error)
+        return !top;
+    std::vector<std::filesystem::path> inside;
+    for (; entries != std::filesystem::directory_iterator(); entries.increment(error))
+    {
+        if (error)
+            break;
+        inside.push_back(entries->path());
+    }
+    std::sort(inside.begin(), inside.end());
+
+    for (const auto& path : inside)
+    {
+        std::error_code ignored;
+        const auto real = std::filesystem::canonical(path, ignored);
+        if (ignored)
+            continue;
+        if (format.isPluginFile(path))
+            found.push_back(real);
+        else if (std::filesystem::is_directory(real, ignored) && !hidden(path) && entered.insert(real).second)
+            walkFolder(real, format, entered, found, false);
+    }
+    return true;
+}
 
 }
 
@@ -41,6 +134,9 @@ struct PluginScanner::Inner : std::enable_shared_from_this<PluginScanner::Inner>
     int killed = 0;
     int failedStarts = 0;
 
+    // When the list was last saved.
+    std::chrono::steady_clock::time_point saved{};
+
     // The file in hand: what has been found in it so far, whether the request under way began in a worker that had
     // scanned no file before, and whether it was tried again in a fresh worker after failing in a used one.
     PluginFile record;
@@ -49,6 +145,21 @@ struct PluginScanner::Inner : std::enable_shared_from_this<PluginScanner::Inner>
     bool retried = false;
 
     Inner(PluginList& into, Options from) : list(into), options(std::move(from)) {}
+
+    void save()
+    {
+        std::error_code ignored;
+        list.save(ignored);
+        saved = std::chrono::steady_clock::now();
+    }
+
+    // Records a file, saving the list once the time set has passed since it was last saved.
+    void recordFile(const PluginFile& file)
+    {
+        list.record(file);
+        if (std::chrono::steady_clock::now() - saved >= options.saveEvery)
+            save();
+    }
 
     void post(std::function<void(Inner&)> what)
     {
@@ -172,7 +283,7 @@ struct PluginScanner::Inner : std::enable_shared_from_this<PluginScanner::Inner>
         record.outcome = outcome;
         record.failure = why;
         record.complete = true;
-        list.record(record);
+        recordFile(record);
         inHand = false;
         ++workerFiles;
         ++index;
@@ -205,7 +316,7 @@ struct PluginScanner::Inner : std::enable_shared_from_this<PluginScanner::Inner>
         record.outcome = PluginFile::Outcome::setAside;
         record.failure = failure;
         record.complete = true;
-        list.record(record);
+        recordFile(record);
         inHand = false;
         ++index;
         post([](Inner& self) { self.next(); });
@@ -216,23 +327,37 @@ struct PluginScanner::Inner : std::enable_shared_from_this<PluginScanner::Inner>
         scanning = false;
         inHand = false;
         retire();
+        list.setScanUnderway(false);
+        save();
         post([end](Inner& self) {
             if (self.owner != nullptr && self.owner->onFinished)
                 self.owner->onFinished(end);
         });
     }
 
-    // Ends the scan with the file in hand recorded as cut short, so it is scanned again.
+    // Ends the scan with what was found of the file in hand let go and the file recorded as cut short, so it is
+    // scanned again; a scan the program quits during is saved as still under way.
     void stop(bool tell)
     {
         if (!scanning)
             return;
         if (inHand)
-            list.record(record);
+        {
+            auto still = list.file(record.path).value_or(PluginFile{});
+            if (still.path.empty())
+            {
+                still = record;
+                still.plugins.clear();
+                still.setAside.clear();
+            }
+            still.complete = false;
+            list.record(still);
+        }
         if (tell)
             return finish({true, {}});
         scanning = false;
         inHand = false;
+        save();
     }
 };
 
@@ -250,6 +375,111 @@ PluginScanner::~PluginScanner()
         inner->worker->close();
 }
 
+PluginWalk PluginScanner::walk(const std::vector<PluginScanFolder>& folders, PluginList& list)
+{
+    PluginWalk walked;
+    const auto native = system::architecture();
+
+    // Each file found, with the folder it was found in, in the scan's order once sorted.
+    struct Found
+    {
+        int last = 0;
+        std::size_t folder = 0;
+        PluginScanFile file;
+    };
+    std::vector<Found> found;
+    std::set<std::filesystem::path> files;
+
+    for (std::size_t index = 0; index < folders.size(); ++index)
+    {
+        const auto& [format, folder] = folders[index];
+        if (format == nullptr)
+            continue;
+        if (forbidden(folder.path))
+        {
+            walked.refused.push_back(paths::toUtf8(folder.path) +
+                                     " is a volume or a home folder, which a scan never walks.");
+            continue;
+        }
+
+        std::error_code error;
+        if (!std::filesystem::exists(folder.path, error))
+        {
+            const auto where = std::filesystem::weakly_canonical(folder.path, error);
+            if (onAbsentDrive(folder.path))
+                list.folderUnreadable(where);
+            else
+                list.folderRead(where, {});
+            continue;
+        }
+
+        const auto real = std::filesystem::canonical(folder.path, error);
+        std::set<std::filesystem::path> entered{real};
+        std::vector<std::filesystem::path> here;
+        if (error || !walkFolder(real, *format, entered, here, true))
+        {
+            list.folderUnreadable(error ? folder.path : real);
+            continue;
+        }
+        list.folderRead(real, here);
+
+        // Each file once, whichever links and folders led to it.
+        for (const auto& path : here)
+        {
+            if (!files.insert(path).second)
+                continue;
+            PluginScanFile file{format->name(), path, {}, folder.user, {}};
+            PluginError problem;
+            const auto facts = format->examine(path, problem);
+            if (facts)
+            {
+                file.stamp = facts->stamp;
+                file.architectures = facts->architectures;
+            }
+
+            // What can't be read, or isn't built for this program's architecture, is listed as that without a worker.
+            const bool foreign =
+                facts && !file.architectures.empty() &&
+                std::find(file.architectures.begin(), file.architectures.end(), native) == file.architectures.end();
+            if (!facts || foreign)
+            {
+                if (list.needsScan(path, file.stamp))
+                {
+                    PluginFile listed{path,
+                                      file.format,
+                                      folder.user,
+                                      file.stamp,
+                                      file.architectures,
+                                      foreign ? PluginFile::Outcome::otherArchitecture : PluginFile::Outcome::setAside};
+                    if (!facts)
+                        listed.failure =
+                            PluginFailure{PluginFailure::Kind::refused, "reading the file", 0, problem.message};
+                    list.record(listed);
+                }
+                continue;
+            }
+
+            // Those that held many plugins go last, and those set aside before after them.
+            int last = 0;
+            if (const auto before = list.file(path))
+            {
+                if (before->outcome == PluginFile::Outcome::setAside || !before->setAside.empty())
+                    last = 2;
+                else if (before->plugins.size() > 1)
+                    last = 1;
+            }
+            found.push_back({last, index, std::move(file)});
+        }
+    }
+
+    std::stable_sort(found.begin(), found.end(), [](const Found& a, const Found& b) {
+        return std::tie(a.last, a.folder, a.file.path) < std::tie(b.last, b.folder, b.file.path);
+    });
+    for (auto& one : found)
+        walked.files.push_back(std::move(one.file));
+    return walked;
+}
+
 bool PluginScanner::scan(std::vector<PluginScanFile> files)
 {
     if (inner->scanning)
@@ -258,6 +488,8 @@ bool PluginScanner::scan(std::vector<PluginScanFile> files)
     inner->index = 0;
     inner->failedStarts = 0;
     inner->scanning = true;
+    inner->list.setScanUnderway(true);
+    inner->save();
     inner->post([](Inner& self) { self.next(); });
     return true;
 }

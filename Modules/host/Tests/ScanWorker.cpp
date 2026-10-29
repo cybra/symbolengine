@@ -9,7 +9,10 @@
 #include <symbolengine/core/System.h>
 #include <symbolengine/host/FakePluginFormat.h>
 #include <symbolengine/host/PluginScanWorker.h>
+#include <symbolengine/host/PluginScanner.h>
 #include <symbolengine/host/Vst3Format.h>
+
+#include "TestMainThread.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -195,6 +198,33 @@ int main(int argc, char** argv)
             [&fake](const std::filesystem::path& file, PluginError& error) { return fakeFile(fake, file, error); });
         Vst3Format vst3({"SymbolEngine tests", PluginScanWorker::post, PluginScanWorker::onMainThread});
         PluginScanWorker::work({&fake, &vst3});
+    }
+
+    // A program scanning a folder of VST3 bundles into a list saved every so often, saying in its output how many
+    // milliseconds after the scan began each file was recorded, until it ends or is killed.
+    if (argc >= 5 && std::string(argv[1]) == "scan")
+    {
+        TestMainThread main;
+        Vst3Format vst3({"SymbolEngine tests", main.post(), main.isCurrent()});
+        PluginList list({paths::fromUtf8(argv[3]), "1.0", nullptr, nullptr, nullptr});
+        PluginScanner::Options options{{paths::executableFile(), {}, {}, std::chrono::seconds(10), main.post()}};
+        options.saveEvery = std::chrono::milliseconds(std::atoi(argv[4]));
+        PluginScanner scanner(list, options);
+        bool ended = false;
+        scanner.onFinished = [&ended](const PluginScanEnd&) { ended = true; };
+        const auto began = std::chrono::steady_clock::now();
+        scanner.scan(PluginScanner::walk({{&vst3, {paths::fromUtf8(argv[2]), true}}}, list).files);
+        std::size_t recorded = 0;
+        while (!ended)
+        {
+            main.turnUntil([&] { return ended || list.files().size() != recorded; }, std::chrono::seconds(30));
+            for (; recorded < list.files().size(); ++recorded)
+                std::printf("%lld\n", static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                                 std::chrono::steady_clock::now() - began)
+                                                                 .count()));
+            std::fflush(stdout);
+        }
+        return 0;
     }
 
     // A program with a worker of its own, which writes the worker's process ID to a file and then waits to be killed,

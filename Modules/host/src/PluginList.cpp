@@ -157,6 +157,7 @@ struct Seen
 struct Contents
 {
     bool whole = false;
+    bool underway = false;
     std::map<std::string, Record> records;
     std::map<PluginIdentity, Seen> seen;
     Object otherMembers;
@@ -178,6 +179,8 @@ struct PluginList::Inner
 
     // The file's own members this version doesn't know, written back as they were read.
     Object otherMembers;
+
+    bool underway = false;
 
     bool changed = false;
 
@@ -248,8 +251,10 @@ struct PluginList::Inner
                 contents.whole = readEntry(entry, contents) && contents.whole;
             for (const auto& entry : object.find("seen")->asArray())
                 contents.whole = readEntry(entry, contents) && contents.whole;
+            contents.underway = object.find("scanUnderway") != nullptr && object.find("scanUnderway")->boolOr(false);
             for (const auto& member : object)
-                if (member.name() != "format" && member.name() != "files" && member.name() != "seen")
+                if (member.name() != "format" && member.name() != "scanUnderway" && member.name() != "files" &&
+                    member.name() != "seen")
                     contents.otherMembers.set(member.name(), member.value);
             return contents;
         }
@@ -261,6 +266,8 @@ struct PluginList::Inner
             auto entry = text::trim(line);
             if (entry.ends_with(','))
                 entry.remove_suffix(1);
+            if (entry == "\"scanUnderway\": true")
+                contents.underway = true;
             if (entry.size() < 2 || entry.front() != '{' || entry.back() != '}')
                 continue;
             if (const auto value = json::tryParse(entry); value && value->isObject())
@@ -302,11 +309,13 @@ struct PluginList::Inner
         records = std::move(contents.records);
         seen = std::move(contents.seen);
         otherMembers = std::move(contents.otherMembers);
+        underway = contents.underway;
     }
 
     std::string write() const
     {
         std::string text = "{\n\"format\": " + std::to_string(currentFormat) + ",\n";
+        text += std::string("\"scanUnderway\": ") + (underway ? "true" : "false") + ",\n";
         for (const auto& member : otherMembers)
             text += json::write(member.name()) + ": " + json::write(member.value) + ",\n";
 
@@ -539,6 +548,17 @@ void PluginList::tryAgain(const std::filesystem::path& path)
 {
     if (const auto found = inner->records.find(keyOf(path)); found != inner->records.end())
         inner->change(found->second, [](PluginFile& file) { return !std::exchange(file.again, true); });
+}
+
+bool PluginList::scanUnderway() const
+{
+    return inner->underway;
+}
+
+void PluginList::setScanUnderway(bool underway)
+{
+    if (std::exchange(inner->underway, underway) != underway)
+        inner->changed = true;
 }
 
 void PluginList::clear()

@@ -24,6 +24,7 @@ set(sources
     src/FakePluginFormat.cpp
     src/Guard.cpp
     src/Plugin.cpp
+    src/PluginFiles.cpp
     src/PluginFormat.cpp
     src/PluginList.cpp
     src/PluginScanWorker.cpp
@@ -39,7 +40,7 @@ if(APPLE)
     list(APPEND libraries "-framework AppKit" "-framework CoreFoundation")
 elseif(WIN32)
     list(APPEND sources src/ScanWorkerLoop_windows.cpp src/Vst3Module_windows.cpp)
-    list(APPEND libraries ole32 user32)
+    list(APPEND libraries ole32 user32 version)
 else()
     list(APPEND sources src/ScanWorkerLoop_other.cpp src/Vst3Module_linux.cpp)
     list(APPEND libraries ${CMAKE_DL_LIBS})
@@ -57,7 +58,8 @@ if(SYMBOLENGINE_TESTS)
     symbolengine_set_warnings(symbolengine_host_scan_worker)
 
     set(test_sources Tests/Allocations.cpp Tests/ParameterTests.cpp Tests/PluginLifeTests.cpp Tests/PluginListTests.cpp
-                     Tests/ScanTests.cpp Tests/ScanWorkerTests.cpp Tests/TimeTests.cpp Tests/Vst3Tests.cpp)
+                     Tests/ScanTests.cpp Tests/ScanWorkerTests.cpp Tests/TimeTests.cpp Tests/Vst3Tests.cpp
+                     Tests/WalkTests.cpp)
     if(APPLE)
         list(APPEND test_sources Tests/ScanWorkerTests_mac.mm)
     endif()

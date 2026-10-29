@@ -531,6 +531,35 @@ bool FakePluginFormat::allTakenApartOnMainThread() const
     return shared->allOnMain;
 }
 
+std::vector<PluginFolder> FakePluginFormat::folders() const
+{
+    return {};
+}
+
+bool FakePluginFormat::isPluginFile(const std::filesystem::path& path) const
+{
+    std::error_code error;
+    return path.extension() == ".fake" && std::filesystem::is_regular_file(path, error);
+}
+
+std::optional<PluginFileFacts> FakePluginFormat::examine(const std::filesystem::path& file, PluginError& error) const
+{
+    std::error_code readError;
+    PluginFileFacts facts;
+    facts.stamp.size = static_cast<std::int64_t>(std::filesystem::file_size(file, readError));
+    const auto time = std::filesystem::last_write_time(file, readError);
+    if (readError)
+    {
+        error = {readError.message(), "read", 0};
+        return std::nullopt;
+    }
+    facts.stamp.modified =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::file_clock::to_sys(time).time_since_epoch())
+            .count();
+    error = {};
+    return facts;
+}
+
 std::string FakePluginFormat::name() const
 {
     return "Fake";

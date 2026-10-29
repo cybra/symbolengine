@@ -42,6 +42,19 @@ public:
 
     std::string name() const override;
 
+    /** VST3's folders on this system, as Steinberg's documentation names them: on a Mac /Library/Audio/Plug-Ins/VST3
+        and the user's own, on Windows Common Files\VST3 and the user's AppData\Local\Programs\Common\VST3, on
+        Linux /usr/lib/vst3, /usr/local/lib/vst3 and ~/.vst3. */
+    std::vector<PluginFolder> folders() const override;
+
+    /** A ".vst3" bundle, or on Windows the single ".vst3" file of an older plugin. */
+    bool isPluginFile(const std::filesystem::path& path) const override;
+
+    /** The stamp of the binary this system loads from the bundle, its version from its Info.plist on a Mac, its
+        version resource on Windows, or else its moduleinfo.json, whose time is the manifest's; and the architectures
+        of every binary the bundle holds for this system's kind of binary. */
+    std::optional<PluginFileFacts> examine(const std::filesystem::path& file, PluginError& error) const override;
+
     /** The module's effect classes, in its factory's order: each class's name, maker, version, SDK and kind, an
         instrument where its subcategories say so. Its code is loaded to read them, and stays loaded. */
     std::vector<PluginDescription> pluginsIn(const std::filesystem::path& file, PluginError& error) override;

@@ -2,6 +2,12 @@
 
 #include "Vst3Module.h"
 
+#include "PluginFiles.h"
+
+#include <symbolengine/core/Files.h>
+#include <symbolengine/core/Json.h>
+#include <symbolengine/core/Paths.h>
+#include <symbolengine/core/System.h>
 #include <symbolengine/core/Text.h>
 
 #include "pluginterfaces/base/ibstream.h"
@@ -1283,6 +1289,147 @@ PluginDescription Vst3Format::describe(const std::filesystem::path& module, cons
     plugin.location = module;
     plugin.name = name.empty() ? module.stem().string() : std::move(name);
     return plugin;
+}
+
+std::vector<PluginFolder> Vst3Format::folders() const
+{
+    std::vector<PluginFolder> folders;
+    std::error_code error;
+    const auto home = paths::systemFolder(paths::Folder::home, error);
+#if defined(__APPLE__)
+    folders.push_back({"/Library/Audio/Plug-Ins/VST3", false});
+    if (!error)
+        folders.push_back({home / "Library" / "Audio" / "Plug-Ins" / "VST3", true});
+#elif defined(_WIN32)
+    if (const auto common = system::environmentVariable("CommonProgramFiles"))
+        folders.push_back({paths::fromUtf8(*common) / "VST3", false});
+    if (const auto local = paths::systemFolder(paths::Folder::localAppData, error); !error)
+        folders.push_back({local / "Programs" / "Common" / "VST3", true});
+#else
+    folders.push_back({"/usr/lib/vst3", false});
+    folders.push_back({"/usr/local/lib/vst3", false});
+    if (!error)
+        folders.push_back({home / ".vst3", true});
+#endif
+    return folders;
+}
+
+bool Vst3Format::isPluginFile(const std::filesystem::path& path) const
+{
+    if (!symbolengine::text::equalsIgnoringCaseAscii(paths::toUtf8(path.extension()), ".vst3"))
+        return false;
+    std::error_code error;
+#if defined(_WIN32)
+    return std::filesystem::is_directory(path, error) || std::filesystem::is_regular_file(path, error);
+#else
+    return std::filesystem::is_directory(path, error);
+#endif
+}
+
+namespace
+{
+
+// The binary in a bundle's architecture folder for this system, as "x86_64-win" or "aarch64-linux" names it.
+[[maybe_unused]] std::string architectureFolder()
+{
+    const auto architecture = std::string(system::architecture());
+#if defined(_WIN32)
+    return (architecture == "x86" ? "x86" : architecture) + "-win";
+#else
+    return (architecture == "arm64" ? "aarch64" : architecture == "x86" ? "i386" : architecture) + "-linux";
+#endif
+}
+
+}
+
+std::optional<PluginFileFacts> Vst3Format::examine(const std::filesystem::path& file, PluginError& error) const
+{
+    error = {};
+    std::error_code ignored;
+    std::vector<std::filesystem::path> binaries;
+    std::filesystem::path loaded;
+
+    if (std::filesystem::is_directory(file, ignored))
+    {
+#if defined(__APPLE__)
+        // The executable its Info.plist names, else one named as the bundle is, else the one file there.
+        const auto folder = file / "Contents" / "MacOS";
+        auto named = folder / file.stem();
+        const auto plist = files::read(file / "Contents" / "Info.plist", ignored);
+        if (const auto at = plist.find("<key>CFBundleExecutable</key>"); at != std::string::npos)
+            if (const auto open = plist.find("<string>", at), close = plist.find("</string>", at);
+                open != std::string::npos && close != std::string::npos && open < close)
+                named = folder / paths::fromUtf8(plist.substr(open + 8, close - open - 8));
+        if (std::filesystem::is_regular_file(named, ignored))
+            loaded = named;
+        else
+            for (const auto& entry : std::filesystem::directory_iterator(folder, ignored))
+                if (entry.is_regular_file(ignored))
+                    loaded = entry.path();
+        if (!loaded.empty())
+            binaries.push_back(loaded);
+#else
+        // Each architecture folder's binary for this system, named as the bundle is.
+    #if defined(_WIN32)
+        const std::string system = "-win", suffix = ".vst3";
+    #else
+        const std::string system = "-linux", suffix = ".so";
+    #endif
+        for (const auto& entry : std::filesystem::directory_iterator(file / "Contents", ignored))
+        {
+            const auto name = paths::toUtf8(entry.path().filename());
+            if (!entry.is_directory(ignored) || !name.ends_with(system))
+                continue;
+            auto binary = entry.path() / file.stem();
+            binary += suffix;
+            if (!std::filesystem::is_regular_file(binary, ignored))
+                continue;
+            binaries.push_back(binary);
+            if (name == architectureFolder())
+                loaded = binary;
+        }
+#endif
+    }
+    else if (std::filesystem::is_regular_file(file, ignored))
+    {
+        loaded = file;
+        binaries.push_back(file);
+    }
+
+    if (binaries.empty())
+    {
+        error = {"It holds no binary for this system.", "read", 0};
+        return std::nullopt;
+    }
+    if (loaded.empty())
+        loaded = binaries.front();
+
+    PluginFileFacts facts;
+    std::error_code readError;
+    facts.stamp.size = static_cast<std::int64_t>(std::filesystem::file_size(loaded, readError));
+    facts.stamp.modified = pluginFiles::modifiedNanoseconds(loaded, readError);
+    if (readError)
+    {
+        error = {"Its binary can't be read: " + readError.message(), "read", 0};
+        return std::nullopt;
+    }
+    for (const auto& binary : binaries)
+        for (const auto& architecture : pluginFiles::architecturesOf(binary))
+            if (std::find(facts.architectures.begin(), facts.architectures.end(), architecture) ==
+                facts.architectures.end())
+                facts.architectures.push_back(architecture);
+
+    // Its version as it declares it to the system, else as its manifest does, whose time also says it changed.
+    facts.stamp.version = pluginFiles::declaredVersion(file, loaded);
+    const auto manifest = file / "Contents" / "Resources" / "moduleinfo.json";
+    if (std::error_code missing; std::filesystem::is_regular_file(manifest, missing))
+    {
+        facts.stamp.manifestModified = pluginFiles::modifiedNanoseconds(manifest, missing);
+        if (facts.stamp.version.empty())
+            if (const auto info = json::tryParse(files::read(manifest, missing)))
+                facts.stamp.version = (*info)["Version"].stringOr("");
+    }
+    return facts;
 }
 
 std::string Vst3Format::name() const
