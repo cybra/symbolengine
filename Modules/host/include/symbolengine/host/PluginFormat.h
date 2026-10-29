@@ -98,12 +98,30 @@ struct PluginParameterChange
     double value = 0.0;
 };
 
+/** Where the program is in time for a block: whether it plays or records; the position of the block's first frame in
+    its timeline, in frames at the plugin's rate, which holds still while it is stopped; the device's time for that
+    frame in the steady clock's nanoseconds, 0 where it isn't known; and its tempo in beats a minute and its meter,
+    0 where it has none. A discontinuity, as a jump or a new take starts with, clears what the plugin holds of the audio
+    before it. */
+struct PluginTime
+{
+    bool playing = false;
+    bool recording = false;
+    bool discontinuity = false;
+    std::int64_t position = 0;
+    std::int64_t systemNanoseconds = 0;
+    double tempo = 0.0;
+    int numerator = 0;
+    int denominator = 0;
+};
+
 /** The most parameter changes a block carries, which a format makes room for when a plugin is activated. */
 constexpr int maximumBlockChanges = 4096;
 
 /** One block for a plugin's process call: a buffer for each channel of its main buses, as its layout says; the
-    parameters changed for it, in order of their frames, at most maximumBlockChanges; and room for the values its
-    processing reports, as a meter's, the last of each parameter's, where the format says how many it put. */
+    parameters changed for it, in order of their frames, at most maximumBlockChanges; room for the values its
+    processing reports, as a meter's, the last of each parameter's, where the format says how many it put; and where
+    the program is in time, which the host always gives. */
 struct PluginBlock
 {
     const float* const* inputs = nullptr;
@@ -116,6 +134,7 @@ struct PluginBlock
     PluginParameterChange* reported = nullptr;
     int reportedRoom = 0;
     int reportedCount = 0;
+    const PluginTime* time = nullptr;
 };
 
 /** A parameter the plugin moved itself: the begin and end of a gesture in its own window around the values it set,

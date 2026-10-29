@@ -63,6 +63,44 @@ const ModuleTerminator exited([] { life("exited"); });
 
 // What a processor checks of its host: every call but process and setProcessing on the thread it was started on, in
 // the order the SDK's call sequence allows, and every block's buffers as its buses say.
+// What the host checker asks of a process call's context: one in every call, at the rate the plugin was set up at, its
+// system time rising and its count of processed samples running on without a jump.
+struct ContextClock
+{
+    int64 lastSystemTime = 0;
+    int64 nextContinuous = -1;
+};
+
+void checkContext(const char* plugin, const ProcessData& data, const ProcessSetup& setup, ContextClock& clock)
+{
+    if (data.processContext == nullptr)
+    {
+        misuse(plugin, "given no process context");
+        return;
+    }
+
+    const auto& context = *data.processContext;
+
+    if (context.sampleRate != setup.sampleRate)
+        misuse(plugin, "given a context at another rate than it was set up at");
+
+    if ((context.state & ProcessContext::kSystemTimeValid) != 0)
+    {
+        if (context.systemTime <= clock.lastSystemTime)
+            misuse(plugin, "given a system time that didn't rise");
+
+        clock.lastSystemTime = context.systemTime;
+    }
+
+    if ((context.state & ProcessContext::kContTimeValid) != 0)
+    {
+        if (clock.nextContinuous >= 0 && context.continousTimeSamples != clock.nextContinuous)
+            misuse(plugin, "given a count of processed samples that jumped");
+
+        clock.nextContinuous = context.continousTimeSamples + data.numSamples;
+    }
+}
+
 class Checked : public AudioEffect
 {
 public:
@@ -162,6 +200,8 @@ public:
 
         for (int32 i = 0; i < data.numInputs; ++i)
             check(data.inputs[i], audioInputs[static_cast<std::size_t>(i)]);
+
+        checkContext(plugin, data, processSetup, clock);
 
         for (int32 i = 0; i < data.numOutputs; ++i)
             check(data.outputs[i], audioOutputs[static_cast<std::size_t>(i)]);
@@ -303,6 +343,7 @@ protected:
     std::atomic<float> gain{0.5f};
     float peak = 0.0f;
     IParamValueQueue* gainChanges = nullptr;
+    ContextClock clock;
 
     void onMain(const char* call) const
     {
@@ -527,6 +568,104 @@ protected:
     void addBuses() override { addAudioInput(STR16("Input"), SpeakerArr::kStereo); }
 };
 
+// One object with both parts that asks for the context it needs, and keeps what it was given, which the text of the
+// query parameter says.
+class Timed : public SingleComponentEffect
+{
+public:
+    static FUnknown* make(void*) { return static_cast<IAudioProcessor*>(new Timed); }
+
+    static constexpr uint32 needs = kNeedSystemTime | kNeedContinousTimeSamples | kNeedProjectTimeMusic |
+                                    kNeedBarPositionMusic | kNeedTempo | kNeedTimeSignature | kNeedTransportState;
+
+    tresult PLUGIN_API initialize(FUnknown* context) override
+    {
+        const auto result = SingleComponentEffect::initialize(context);
+        addAudioInput(STR16("Input"), SpeakerArr::kStereo);
+        addAudioOutput(STR16("Output"), SpeakerArr::kStereo);
+        return result;
+    }
+
+    uint32 PLUGIN_API getProcessContextRequirements() override
+    {
+        asked = true;
+        return needs;
+    }
+
+    tresult PLUGIN_API setActive(TBool state) override
+    {
+        if (state && !asked)
+            misuse("Timed", "activated before it was asked what context it needs");
+
+        return SingleComponentEffect::setActive(state);
+    }
+
+    tresult PLUGIN_API setProcessing(TBool state) override
+    {
+        if (!state)
+            ++stops;
+
+        return kResultOk;
+    }
+
+    tresult PLUGIN_API process(ProcessData& data) override
+    {
+        checkContext("Timed", data, processSetup, clock);
+
+        if (data.processContext != nullptr)
+        {
+            const auto& context = *data.processContext;
+            const auto valid = [&context](uint32 flag) { return (context.state & flag) != 0; };
+
+            if (!valid(ProcessContext::kTempoValid) || !valid(ProcessContext::kTimeSigValid) ||
+                !valid(ProcessContext::kProjectTimeMusicValid) || !valid(ProcessContext::kBarPositionValid) ||
+                !valid(ProcessContext::kSystemTimeValid) || !valid(ProcessContext::kContTimeValid))
+                misuse("Timed", "not given all the context it asked for");
+
+            position = context.projectTimeSamples;
+            playing = valid(ProcessContext::kPlaying);
+            tempo = context.tempo;
+            numerator = context.timeSigNumerator;
+            denominator = context.timeSigDenominator;
+            music = context.projectTimeMusic;
+            bar = context.barPositionMusic;
+        }
+
+        const int32 channels = data.numOutputs > 0 && data.numInputs > 0 ? data.outputs[0].numChannels : 0;
+
+        for (int32 c = 0; c < channels; ++c)
+            for (int32 i = 0; i < data.numSamples; ++i)
+                data.outputs[0].channelBuffers32[c][i] = data.inputs[0].channelBuffers32[c][i];
+
+        return kResultOk;
+    }
+
+    tresult PLUGIN_API getParamStringByValue(ParamID id, ParamValue value, String128 string) override
+    {
+        if (id != testIds::queryParameter)
+            return SingleComponentEffect::getParamStringByValue(id, value, string);
+
+        char text[128];
+        std::snprintf(text, sizeof text,
+                      "position=%lld playing=%d tempo=%.1f signature=%d/%d music=%.3f bar=%.3f stops=%d",
+                      static_cast<long long>(position.load()), playing.load() ? 1 : 0, tempo.load(), numerator.load(),
+                      denominator.load(), music.load(), bar.load(), stops.load());
+
+        for (std::size_t i = 0; i < sizeof text; ++i)
+            if ((string[i] = static_cast<TChar>(text[i])) == 0)
+                break;
+
+        return kResultOk;
+    }
+
+private:
+    ContextClock clock;
+    std::atomic<bool> asked{false}, playing{false};
+    std::atomic<int64> position{-1};
+    std::atomic<double> tempo{0.0}, music{0.0}, bar{0.0};
+    std::atomic<int> numerator{0}, denominator{0}, stops{0};
+};
+
 // One object with both parts, whose latency is 0 until it is active, 256 once it is, and 512 after its twentieth
 // block, which it says from its process call, on the audio thread, as some plugins do.
 class Latency : public SingleComponentEffect
@@ -602,6 +741,8 @@ DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x0A), PClassInfo::kMa
            "Many", 0, "Fx", "1.0.0", kVstVersionString, Many::make)
 DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x0B), PClassInfo::kManyInstances,
            kVstComponentControllerClass, "Many Controller", 0, "", "1.0.0", kVstVersionString, ManyController::make)
+DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x0C), PClassInfo::kManyInstances, kVstAudioEffectClass,
+           "Timed", 0, "Fx", "1.0.0", kVstVersionString, Timed::make)
 DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x09), PClassInfo::kManyInstances, kVstAudioEffectClass,
            "Skips empty", 0, "Fx", "1.0.0", kVstVersionString, SkipsEmpty::make)
 DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x08), PClassInfo::kManyInstances, kVstAudioEffectClass,

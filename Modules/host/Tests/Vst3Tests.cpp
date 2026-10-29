@@ -433,3 +433,93 @@ TEST_CASE("A thousand parameters automated every block, some many times, reach a
     CHECK(counted == 0);
     CHECK(misuses().empty());
 }
+
+TEST_CASE("A VST3 plugin is asked what context it needs before it is activated, and is given it in every call, 120 "
+          "beats a minute in 4/4 where the program has no tempo")
+{
+    Rig rig;
+    auto plugin = rig.made(testIds::timed);
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+
+    for (int i = 0; i < 3; ++i)
+        through(*plugin, 64);
+
+    const auto text = plugin->parameterText(testIds::queryParameter, 0.0);
+    INFO(text);
+    CHECK(text.find("position=128 playing=0 tempo=120.0 signature=4/4 music=0.005 bar=0.000 stops=0") !=
+          std::string::npos);
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("The program's time reaches a VST3 plugin at each split block's own first frame, its music position "
+          "following its tempo and meter")
+{
+    Rig rig;
+    auto plugin = rig.made(testIds::timed);
+    REQUIRE(plugin->prepare({48000.0, 32, false}));
+    std::vector<float> left(64, 1.0f), right(64, 2.0f);
+    float* channels[] = {left.data(), right.data()};
+    const PluginTime time{true, false, false, 96000, 0, 90.0, 3, 4};
+
+    plugin->process(channels, 2, 64, nullptr, 0, &time);
+
+    const auto text = plugin->parameterText(testIds::queryParameter, 0.0);
+    INFO(text);
+    CHECK(text.find("position=96032 playing=1 tempo=90.0 signature=3/4 music=3.001 bar=3.000") != std::string::npos);
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("A discontinuity in the program's time stops and starts a VST3 plugin's processing before the block, its "
+          "context's counts still running on")
+{
+    Rig rig;
+    auto plugin = rig.made(testIds::timed);
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+    std::vector<float> left(64, 1.0f), right(64, 2.0f);
+    float* channels[] = {left.data(), right.data()};
+    PluginTime time{true, false, false, 0, 0, 0.0, 0, 0};
+    plugin->process(channels, 2, 64, nullptr, 0, &time);
+
+    time.position = 480000;
+    time.discontinuity = true;
+    plugin->process(channels, 2, 64, nullptr, 0, &time);
+
+    const auto text = plugin->parameterText(testIds::queryParameter, 0.0);
+    INFO(text);
+    CHECK(text.find("position=480000 playing=1") != std::string::npos);
+    CHECK(text.find("stops=1") != std::string::npos);
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("A VST3 plugin prepared again at another rate is given a context at that rate, its counts running on")
+{
+    Rig rig;
+    auto plugin = rig.made(testIds::gain);
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+    through(*plugin, 64);
+    REQUIRE(plugin->prepare({44100.0, 64, false}));
+    through(*plugin, 64);
+
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("A VST3 plugin's system time rises in every call, though the program's time and the host's own clock mix")
+{
+    Rig rig;
+    auto plugin = rig.made(testIds::gain);
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+    std::vector<float> left(64, 1.0f), right(64, 2.0f);
+    float* channels[] = {left.data(), right.data()};
+    PluginTime time{true, false, false, 0, 1000, 0.0, 0, 0};
+    plugin->process(channels, 2, 64, nullptr, 0, &time);
+
+    // Its state taken with a value waiting and no device playing, handed over on the main thread by the host's clock.
+    REQUIRE(plugin->setParameter(testIds::gainParameter, 0.25));
+    REQUIRE(plugin->saveState(PluginStateUse::document).has_value());
+
+    time.position = 64;
+    time.systemNanoseconds = 2000;
+    plugin->process(channels, 2, 64, nullptr, 0, &time);
+
+    CHECK(misuses().empty());
+}

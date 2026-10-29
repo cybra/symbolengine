@@ -42,6 +42,9 @@ public:
         /** Values its processing reports every block, by parameter. */
         std::vector<PluginParameterChange> reports;
 
+        /** Shown every block it is given, on the audio thread. */
+        std::function<void(const PluginBlock&)> onBlock;
+
         /** Fails to be made, or to be activated, saying so. */
         bool failToMake = false;
         bool failToActivate = false;

@@ -45,7 +45,7 @@ target_include_directories(symbolengine_host SYSTEM PRIVATE ${sdk})
 if(SYMBOLENGINE_TESTS)
     add_subdirectory(Tests/Vst3)
     symbolengine_add_tests(host SOURCES Tests/Allocations.cpp Tests/ParameterTests.cpp Tests/PluginLifeTests.cpp
-                                    Tests/Vst3Tests.cpp)
+                                    Tests/TimeTests.cpp Tests/Vst3Tests.cpp)
     target_compile_definitions(symbolengine_host_tests PRIVATE
         "SYMBOLENGINE_TEST_VST3=\"$<TARGET_GENEX_EVAL:symbolengine_test_vst3,$<TARGET_PROPERTY:symbolengine_test_vst3,SYMBOLENGINE_BUNDLE>>\""
         "SYMBOLENGINE_TEST_VST3_LOG=\"${CMAKE_CURRENT_BINARY_DIR}/test-vst3-log.txt\""

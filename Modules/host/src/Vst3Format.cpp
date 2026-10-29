@@ -20,6 +20,7 @@
 #include <atomic>
 #include <chrono>
 #include <climits>
+#include <cmath>
 #include <cstring>
 #include <map>
 #include <mutex>
@@ -910,9 +911,21 @@ public:
             }
         }
 
+        // The count of processed samples and the system time run on from any earlier activation, never back.
+        const auto continuous = context.continousTimeSamples;
+        const auto systemTime = context.systemTime;
         context = {};
+        context.continousTimeSamples = continuous;
+        context.systemTime = systemTime;
         context.sampleRate = setup.rate;
-        context.state = ProcessContext::kContTimeValid | ProcessContext::kSystemTimeValid;
+
+        // What context it needs, asked once, before it is first activated; a plugin that can't say is given all the
+        // host has.
+        if (!asked.has_value())
+        {
+            FUnknownPtr<IProcessContextRequirements> requirements(processor);
+            asked = requirements ? requirements->getProcessContextRequirements() : ~uint32{0};
+        }
 
         if (const auto result = component->setActive(true); result != kResultOk)
         {
@@ -951,7 +964,9 @@ public:
                 outs[static_cast<std::size_t>(main[kOutput])][static_cast<std::size_t>(c)] = block.outputs[c];
 
         inputChanges.fill(block.changes, block.changeCount, block.frames);
-        const bool fine = run(block.frames);
+        lastTime = block.time != nullptr ? *block.time : PluginTime{};
+        const bool fine = run(block.frames, lastTime);
+        lastTime.position += block.frames;
 
         // The last value the processor wrote of each parameter.
         block.reportedCount = 0;
@@ -978,7 +993,7 @@ public:
         {
             const auto before = count > 0 ? componentState() : std::string();
             inputChanges.fill(changes, count, 0);
-            run(0);
+            run(0, idleTime());
 
             if (count == 0 || componentState() != before)
                 return;
@@ -1117,12 +1132,74 @@ private:
                     pointer = direction == kInput ? silence.data() : scratchMain.data();
 
         processor->setProcessing(true);
-        run(frames);
+        run(frames, idleTime());
         processor->setProcessing(false);
         std::fill(silence.begin(), silence.end(), 0.0f);
     }
 
-    bool run(int frames) noexcept
+    // Where the program was when nothing plays the plugin: where it last played it, stopped.
+    PluginTime idleTime() const noexcept
+    {
+        auto idle = lastTime;
+        idle.playing = idle.recording = idle.discontinuity = false;
+        idle.systemNanoseconds = 0;
+        return idle;
+    }
+
+    // The context for a call: the set-up's rate, the program's position and transport, the system time rising, and
+    // its tempo and meter, or, where it has none, 120 beats a minute in 4/4 for a plugin that asks for them or for
+    // positions in music.
+    void fillContext(const PluginTime& time) noexcept
+    {
+        const auto wanted = asked.value_or(~uint32{0});
+        context.state = ProcessContext::kContTimeValid | ProcessContext::kSystemTimeValid;
+        context.projectTimeSamples = time.position;
+
+        const auto now = time.systemNanoseconds != 0 ? time.systemNanoseconds
+                                                     : std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                           std::chrono::steady_clock::now().time_since_epoch())
+                                                           .count();
+        context.systemTime = std::max<int64>(now, context.systemTime + 1);
+
+        if (time.playing)
+            context.state |= ProcessContext::kPlaying;
+
+        if (time.recording)
+            context.state |= ProcessContext::kRecording;
+
+        const bool wantsTempo =
+            (wanted & (IProcessContextRequirements::kNeedTempo | IProcessContextRequirements::kNeedProjectTimeMusic |
+                       IProcessContextRequirements::kNeedBarPositionMusic)) != 0;
+        const bool wantsMeter = (wanted & (IProcessContextRequirements::kNeedTimeSignature |
+                                           IProcessContextRequirements::kNeedBarPositionMusic)) != 0;
+        const bool hasMeter = time.numerator > 0 && time.denominator > 0;
+        const double tempo = time.tempo > 0.0 ? time.tempo : wantsTempo ? 120.0 : 0.0;
+        const int numerator = hasMeter ? time.numerator : wantsMeter ? 4 : 0;
+        const int denominator = hasMeter ? time.denominator : wantsMeter ? 4 : 0;
+
+        if (tempo > 0.0)
+        {
+            context.tempo = tempo;
+            context.projectTimeMusic = static_cast<double>(time.position) / context.sampleRate * tempo / 60.0;
+            context.state |= ProcessContext::kTempoValid | ProcessContext::kProjectTimeMusicValid;
+        }
+
+        if (numerator > 0)
+        {
+            context.timeSigNumerator = numerator;
+            context.timeSigDenominator = denominator;
+            context.state |= ProcessContext::kTimeSigValid;
+
+            if (tempo > 0.0)
+            {
+                const double bar = numerator * 4.0 / denominator;
+                context.barPositionMusic = std::floor(context.projectTimeMusic / bar) * bar;
+                context.state |= ProcessContext::kBarPositionValid;
+            }
+        }
+    }
+
+    bool run(int frames, const PluginTime& time) noexcept
     {
         outputChanges.clear();
         inputEvents.clear();
@@ -1142,9 +1219,7 @@ private:
         data.outputEvents = &outputEvents;
         data.processContext = &context;
 
-        context.systemTime =
-            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
-                .count();
+        fillContext(time);
         const bool fine = processor->process(data) == kResultOk;
         context.continousTimeSamples += frames;
         return fine;
@@ -1175,6 +1250,8 @@ private:
     ChangeList inputChanges, outputChanges;
     EventList inputEvents, outputEvents;
     ProcessContext context{};
+    std::optional<uint32> asked;
+    PluginTime lastTime;
 };
 
 }

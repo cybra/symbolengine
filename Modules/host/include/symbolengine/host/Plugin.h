@@ -177,9 +177,11 @@ public:
     void process(float* const* channels, int channelCount, int frames) noexcept;
 
     /** The same, with the program's own changes to its parameters for the block, as its automation gives them, in
-        order of their frames, which the plugin hears at those frames and is shown on the main thread. */
+        order of their frames, which the plugin hears at those frames and is shown on the main thread; and where the
+        program is in time for the block's first frame. Without a time, the plugin is told the program isn't playing,
+        at a position that counts the frames it has played. */
     void process(float* const* channels, int channelCount, int frames, const PluginParameterChange* changes,
-                 int changeCount) noexcept;
+                 int changeCount, const PluginTime* time = nullptr) noexcept;
 
     struct Inner;
 

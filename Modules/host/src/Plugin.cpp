@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
@@ -155,6 +156,7 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
         std::vector<PluginParameterChange>(static_cast<std::size_t>(maximumBlockChanges));
     std::vector<PluginParameterChange> reportedRoom = std::vector<PluginParameterChange>(256);
     std::atomic<std::uint64_t> blocksPlayed{0};
+    std::int64_t framesPlayed = 0;
 
     // Notices, recorded from any thread and acted on from the main thread.
     std::atomic<std::uint32_t> pending{0};
@@ -515,6 +517,7 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
                            std::vector<float>(static_cast<std::size_t>(std::max(1, frames)), 0.0f));
         };
 
+        framesPlayed = 0;
         channels(layout.inputs, inputs, setup.maximumFrames);
         channels(layout.outputs, outputs, setup.maximumFrames);
         inputPointers.clear();
@@ -1072,7 +1075,7 @@ void Plugin::process(float* const* channels, int channelCount, int frames) noexc
 }
 
 void Plugin::process(float* const* channels, int channelCount, int frames, const PluginParameterChange* changes,
-                     int changeCount) noexcept
+                     int changeCount, const PluginTime* time) noexcept
 {
     auto& held = *inner;
 
@@ -1093,8 +1096,14 @@ void Plugin::process(float* const* channels, int channelCount, int frames, const
     auto* plugin = held.audioInstance;
     const auto modes = floatingPointModes();
 
+    // A discontinuity clears what the plugin holds of the audio before it.
     if (!held.processing.exchange(true))
         plugin->startProcessing();
+    else if (time != nullptr && time->discontinuity)
+    {
+        plugin->stopProcessing();
+        plugin->startProcessing();
+    }
 
     const int ins = static_cast<int>(held.inputs.size());
     const int outs = static_cast<int>(held.outputs.size());
@@ -1133,6 +1142,26 @@ void Plugin::process(float* const* channels, int channelCount, int frames, const
             valuesKept = true;
         }
 
+        // The program's time at this block's own first frame; without it, a position counting the frames played.
+        PluginTime blockTime;
+
+        if (time != nullptr)
+        {
+            blockTime = *time;
+            blockTime.position += offset;
+            blockTime.discontinuity = time->discontinuity && offset == 0;
+
+            if (time->systemNanoseconds != 0)
+                blockTime.systemNanoseconds += std::llround(offset * 1e9 / held.setup.rate);
+        }
+        else
+        {
+            blockTime.position = held.framesPlayed;
+            blockTime.systemNanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                              std::chrono::steady_clock::now().time_since_epoch())
+                                              .count();
+        }
+
         PluginBlock block{held.inputPointers.data(),
                           held.outputPointers.data(),
                           ins,
@@ -1141,8 +1170,11 @@ void Plugin::process(float* const* channels, int channelCount, int frames, const
                           held.blockChanges.data(),
                           static_cast<int>(given),
                           held.reportedRoom.data(),
-                          static_cast<int>(held.reportedRoom.size())};
+                          static_cast<int>(held.reportedRoom.size()),
+                          0,
+                          &blockTime};
         const bool fine = plugin->process(block);
+        held.framesPlayed += count;
 
         for (int r = 0; r < std::min(block.reportedCount, block.reportedRoom); ++r)
             if (auto* const slot = known != nullptr ? known->find(block.reported[r].id) : nullptr)

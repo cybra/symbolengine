@@ -198,6 +198,9 @@ public:
         if (block.inputChannels != layout.inputs || block.outputChannels != layout.outputs)
             misuse("given other channels than its layout");
 
+        if (script.onBlock != nullptr)
+            script.onBlock(block);
+
         for (int i = 0, last = 0; i < block.changeCount; ++i)
         {
             if (block.changes[i].offset < last || block.changes[i].offset >= std::max(1, block.frames))

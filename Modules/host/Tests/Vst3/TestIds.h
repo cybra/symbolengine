@@ -16,6 +16,7 @@ constexpr const char* latency = SYMBOLENGINE_TEST_HEX("06");
 constexpr const char* throwing = SYMBOLENGINE_TEST_HEX("08");
 constexpr const char* skipsEmpty = SYMBOLENGINE_TEST_HEX("09");
 constexpr const char* many = SYMBOLENGINE_TEST_HEX("0A");
+constexpr const char* timed = SYMBOLENGINE_TEST_HEX("0C");
 
 // The gain plugins' parameters, listed in this order, which isn't their IDs' order.
 constexpr unsigned gainParameter = 100, hiddenParameter = 7, meterParameter = 3000000, bypassParameter = 1,
@@ -28,7 +29,9 @@ constexpr unsigned editParameter = 200, dirtyParameter = 201, echoParameter = 30
                    unlistedParameter = 999;
 
 // Not a parameter: the gain plugins' text for it says what their controller has, as
-// "gain=0.500000 meter=0.000000 echo=0 rounded=0", where echo and rounded count the values it was given for those.
+// "gain=0.500000 meter=0.000000 echo=0 rounded=0", where echo and rounded count the values it was given for those; the
+// timed plugin's says what it was last given, as
+// "position=0 playing=0 tempo=120.0 signature=4/4 music=0.000 bar=0.000 stops=0", stops counting its processing stopped.
 constexpr unsigned queryParameter = 4000;
 
 // The many plugin's parameters, 1 to this.
