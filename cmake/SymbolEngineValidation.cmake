@@ -17,6 +17,8 @@ include(ExternalProject)
 # a process loads; in a sanitizer build only the loader, built with them too, runs.
 
 option(SYMBOLENGINE_AUVAL "Run auval on Audio Units, which installs them for the user running the tests" OFF)
+option(SYMBOLENGINE_TEST_INTEL_AUDIO_UNITS
+       "Test an Intel-only Audio Unit run through Rosetta, which installs one for the user running the tests" OFF)
 option(SYMBOLENGINE_PLUGINVAL_EDITORS "Let pluginval open plugins' editors, which puts windows on the screen" OFF)
 
 if(CMAKE_CXX_FLAGS MATCHES "-fsanitize")

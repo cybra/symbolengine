@@ -17,3 +17,27 @@ set_target_properties(symbolengine_test_audio_units PROPERTIES
     OUTPUT_NAME "SymbolEngine Test Units"
     MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in
     SYMBOLENGINE_BUNDLE "$<TARGET_BUNDLE_DIR:symbolengine_test_audio_units>")
+
+# The same units built only for Intel under a maker code of their own, for the test of a unit the system runs through
+# Rosetta, which installs them in the user's Components folder while it runs: only on a machine made for the purpose.
+if(SYMBOLENGINE_TEST_INTEL_AUDIO_UNITS)
+    file(READ Info.plist.in plist)
+    string(REPLACE "<string>SyTs</string>" "<string>SyTi</string>" plist "${plist}")
+    string(REPLACE "dev.symbolengine.test.units" "dev.symbolengine.test.units.intel" plist "${plist}")
+    string(REPLACE "<string>SymbolEngine Test Units</string>" "<string>SymbolEngine Intel Test Units</string>" plist
+                   "${plist}")
+    file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/IntelInfo.plist.in "${plist}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS Info.plist.in)
+
+    add_library(symbolengine_test_audio_units_intel MODULE TestUnits.cpp ${sdk_sources})
+    target_include_directories(symbolengine_test_audio_units_intel SYSTEM PRIVATE ${sdk}/include)
+    target_link_libraries(symbolengine_test_audio_units_intel PRIVATE
+        "-framework AudioToolbox" "-framework CoreAudio" "-framework CoreFoundation" "-framework Foundation")
+    symbolengine_set_warnings(symbolengine_test_audio_units_intel)
+    set_target_properties(symbolengine_test_audio_units_intel PROPERTIES
+        BUNDLE TRUE
+        BUNDLE_EXTENSION component
+        OUTPUT_NAME "SymbolEngine Intel Test Units"
+        OSX_ARCHITECTURES x86_64
+        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_BINARY_DIR}/IntelInfo.plist.in)
+endif()

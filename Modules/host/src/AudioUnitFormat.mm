@@ -4,6 +4,7 @@
 
 #include <symbolengine/core/Files.h>
 #include <symbolengine/core/Paths.h>
+#include <symbolengine/core/System.h>
 #include <symbolengine/core/Text.h>
 
 #include <AudioToolbox/AudioToolbox.h>
@@ -1392,17 +1393,28 @@ void AudioUnitFormat::make(const PluginDescription& plugin, PluginFormatClient& 
         return;
     }
 
-    // Made without blocking the main thread, its completion handed to the main thread whatever thread it comes on.
+    // Made without blocking the main thread, its completion handed to the main thread whatever thread it comes on; in
+    // the program's own process, except a unit built only for Intel on Apple Silicon, which the system runs in a
+    // process of its own through Rosetta for as long as macOS has it.
+    PluginError unread;
+    const auto facts = plugin.location.empty() ? std::nullopt : examine(plugin.location, unread);
+    const auto builtFor = [&facts](std::string_view architecture) {
+        return facts && std::find(facts->architectures.begin(), facts->architectures.end(), architecture) !=
+                            facts->architectures.end();
+    };
+    const bool throughRosetta =
+        system::architecture() == "arm64" && builtFor("x86_64") && !builtFor("arm64") && !builtFor("arm64e");
     auto post = shared->options.post;
     auto* const told = &client;
-    AudioComponentInstantiate(component, 0, ^(AudioComponentInstance instance, OSStatus status) {
-      post([instance, status, done, told] {
-          if (status != noErr || instance == nullptr)
-              done(nullptr, {reason("It couldn't be made", status), "make", status});
-          else
-              done(std::make_unique<AudioUnitPlugin>(instance, *told), {});
-      });
-    });
+    AudioComponentInstantiate(component, throughRosetta ? kAudioComponentInstantiation_LoadOutOfProcess : 0,
+                              ^(AudioComponentInstance instance, OSStatus status) {
+                                post([instance, status, done, told] {
+                                    if (status != noErr || instance == nullptr)
+                                        done(nullptr, {reason("It couldn't be made", status), "make", status});
+                                    else
+                                        done(std::make_unique<AudioUnitPlugin>(instance, *told), {});
+                                });
+                              });
 }
 
 }

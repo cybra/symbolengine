@@ -704,3 +704,50 @@ TEST_CASE("The system's notice that its registry of Audio Units changed reaches 
     CHECK(toldGone == 0);
     CHECK(onMain);
 }
+
+#if defined(SYMBOLENGINE_TEST_INTEL_AUDIO_UNITS)
+TEST_CASE("An Audio Unit built only for Intel is run by the system through Rosetta, in a process of its own")
+{
+    if (system::architecture() != "arm64")
+        SKIP("Rosetta runs Intel code on Apple Silicon only.");
+
+    // Installed for the user running the tests, as only an installed unit can be run in another process, and the
+    // system's registrar stopped so it looks again, as is done only on a machine made for the purpose.
+    const std::filesystem::path intel = SYMBOLENGINE_TEST_INTEL_AUDIO_UNITS;
+    const auto components =
+        std::filesystem::path(system::environmentVariable("HOME").value_or("")) / "Library/Audio/Plug-Ins/Components";
+    const auto installed = components / intel.filename();
+    struct Installed
+    {
+        std::filesystem::path path;
+        ~Installed()
+        {
+            std::error_code ignored;
+            std::filesystem::remove_all(path, ignored);
+        }
+    } removed{installed};
+    std::filesystem::create_directories(components);
+    std::filesystem::remove_all(installed);
+    std::filesystem::copy(intel, installed, std::filesystem::copy_options::recursive);
+    std::system("killall -9 AudioComponentRegistrar >/dev/null 2>&1");
+
+    Rig rig;
+    PluginError error;
+    const auto identity = PluginIdentity::audioUnit(code("aufx"), code("Pass"), code("SyTi"));
+    PluginDescription pass;
+    for (const auto& plugin : rig.format.pluginsIn(installed, error))
+        if (plugin.identity == identity)
+            pass = plugin;
+    REQUIRE(pass.identity == identity);
+    REQUIRE(rig.main.turnUntil([&] { return rig.format.registered(pass); }, 120s));
+
+    auto plugin = rig.host.make(rig.format, pass);
+    REQUIRE(rig.main.turnUntil([&] { return plugin->state() != Plugin::State::making; }, 60s));
+    INFO(plugin->problem().message);
+    REQUIRE(plugin->state() == Plugin::State::inactive);
+    REQUIRE(plugin->prepare({48000.0, 512, false}));
+    const auto out = play(*plugin, 256, 8);
+    CHECK(out[0] == numbered(2048));
+    CHECK(out[1] == numbered(2048, 1.0f, -1.0f));
+}
+#endif

@@ -94,7 +94,7 @@ jobs:
           fi
 
           options="-DSYMBOLENGINE_CLAP_VALIDATOR=$clap_validator -DSYMBOLENGINE_PLUGINVAL=$pluginval"
-          if [ "$RUNNER_OS" = "macOS" ]; then options="$options -DSYMBOLENGINE_AUVAL=ON"; fi
+          if [ "$RUNNER_OS" = "macOS" ]; then options="$options -DSYMBOLENGINE_AUVAL=ON -DSYMBOLENGINE_TEST_INTEL_AUDIO_UNITS=ON"; fi
           if [ "$RUNNER_OS" != "Linux" ]; then options="$options -DSYMBOLENGINE_PLUGINVAL_EDITORS=ON"; fi
           echo "VALIDATORS=$options" >> "$GITHUB_ENV"
 

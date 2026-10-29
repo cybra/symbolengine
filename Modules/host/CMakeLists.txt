@@ -78,6 +78,11 @@ if(SYMBOLENGINE_TESTS)
             "SYMBOLENGINE_TEST_AUDIO_UNITS=\"$<TARGET_BUNDLE_DIR:symbolengine_test_audio_units>\""
             "SYMBOLENGINE_TEST_AU_LOG=\"${CMAKE_CURRENT_BINARY_DIR}/test-au-log.txt\"")
         add_dependencies(symbolengine_host_tests symbolengine_test_audio_units)
+        if(SYMBOLENGINE_TEST_INTEL_AUDIO_UNITS)
+            target_compile_definitions(symbolengine_host_tests PRIVATE
+                "SYMBOLENGINE_TEST_INTEL_AUDIO_UNITS=\"$<TARGET_BUNDLE_DIR:symbolengine_test_audio_units_intel>\"")
+            add_dependencies(symbolengine_host_tests symbolengine_test_audio_units_intel)
+        endif()
     endif()
     target_compile_definitions(symbolengine_host_tests PRIVATE
         "SYMBOLENGINE_SCAN_WORKER=\"$<TARGET_FILE:symbolengine_host_scan_worker>\""
