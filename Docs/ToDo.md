@@ -47,7 +47,7 @@
 - [x] Example: a gain, passing every validator on every system.
 - [x] Example: a filter with an editor and a level meter.
 - [ ] Example: a meter.
-- [ ] The fork's Audio Unit wrapper renders a silent block when its render can't take the process lock, and `SetParameter` holds that lock while it queues a value; on GitHub's Mac runner, where the test's thread setting a value is preempted holding it, `SpeakersTest: Audio Unit state` sees one silent block in about 25 while playing. A queue of its own for the values `SetParameter` gives, which the render drains under its lock, takes `SetParameter` off the lock, so a host automating a parameter never silences a block.
+- [ ] The fork's Audio Unit wrapper renders a silent block when its render can't take the process lock, and `SetParameter` holds that lock while it queues a value; `SpeakersTest: Audio Unit state` sees one silent block in about 20 to 25 runs while playing, on GitHub's Mac runner and on a quiet Mac alike, the block that starts as the value is set, after a normal gap, as its failure now says. A queue of its own for the values `SetParameter` gives, which the render drains under its lock, takes `SetParameter` off the lock, so a host automating a parameter never silences a block.
 ## Phase 2: Core, files and the app
 
 - [x] core: values and JSON, XML documents, UTF-8 text, paths and the system's folders, files written safely, settings files, SHA-256, speaker layouts, a lock-free fifo, a guard against denormal numbers, and a resampler.
