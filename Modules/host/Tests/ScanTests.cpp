@@ -352,7 +352,9 @@ TEST_CASE("A worker's crash leaves a note of the file and step it was on, the si
 #if defined(__APPLE__) || defined(_WIN32)
 TEST_CASE("A plugin that asks something as it is made is waited for past the limit, and then found")
 {
-    Rig rig(1000ms);
+    // A limit of 4 s, as a fresh worker's first window can take more than a second on a busy machine, and questions
+    // of 8 s, which a worker not waited for would be ended in the middle of.
+    Rig rig(4000ms);
     // Whether the worker's window was in front at any moment while it asked, as someone using the computer meanwhile
     // can bring another window in front of it again: on a computer in use, a click at the wrong moment can still fail
     // this, which continuous integration's computers, used by no one, never see.
@@ -369,7 +371,7 @@ TEST_CASE("A plugin that asks something as it is made is waited for past the lim
                     2800ms);
             });
     };
-    REQUIRE(rig.scan({"Asks when made 3000 ms", "Asks modally when made 3000 ms", "Good A"}));
+    REQUIRE(rig.scan({"Asks when made 8000 ms", "Asks modally when made 8000 ms", "Good A"}));
     #if defined(__APPLE__)
     // The first question's window above every other application's, whichever is the application in front.
     REQUIRE(front);
@@ -380,14 +382,14 @@ TEST_CASE("A plugin that asks something as it is made is waited for past the lim
     for (const auto& [file, now] : rig.asking)
         said += paths::toUtf8(file.filename()) + (now ? " asking; " : " done asking; ");
     INFO(said);
-    CHECK(foundWhole(rig.recorded("Asks when made 3000 ms")));
-    CHECK(foundWhole(rig.recorded("Asks modally when made 3000 ms")));
+    CHECK(foundWhole(rig.recorded("Asks when made 8000 ms")));
+    CHECK(foundWhole(rig.recorded("Asks modally when made 8000 ms")));
     CHECK(foundWhole(rig.recorded("Good A")));
     REQUIRE(rig.asking.size() == 4);
-    CHECK(rig.asking[0].first == Rig::file("Asks when made 3000 ms").path);
+    CHECK(rig.asking[0].first == Rig::file("Asks when made 8000 ms").path);
     CHECK(rig.asking[0].second);
     CHECK_FALSE(rig.asking[1].second);
-    CHECK(rig.asking[2].first == Rig::file("Asks modally when made 3000 ms").path);
+    CHECK(rig.asking[2].first == Rig::file("Asks modally when made 8000 ms").path);
     CHECK(rig.asking[2].second);
     CHECK_FALSE(rig.asking[3].second);
     CHECK(rig.scanner->workersKilled() == 0);
@@ -395,7 +397,7 @@ TEST_CASE("A plugin that asks something as it is made is waited for past the lim
 
 TEST_CASE("Skip ends the worker of a plugin that is asking something, leaving it to be scanned again, never set aside")
 {
-    Rig rig(1000ms);
+    Rig rig(4000ms);
     REQUIRE(rig.scanner->scan({Rig::file("Asks when made 60000 ms"), Rig::file("Good A")}));
     REQUIRE(rig.main.turnUntil([&] { return !rig.asking.empty(); }, 20s));
     const auto skipped = std::chrono::steady_clock::now();

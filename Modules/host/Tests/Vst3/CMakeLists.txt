@@ -91,7 +91,7 @@ set(misbehaving_names "Good A" "Good B" "Good C" "Crash on load" "Abort on load"
     "Hang on a thread on load" "Crash when made" "Abort when made" "Throw when made" "Overflow when made"
     "Fail fast when made" "Exit when made" "Hang when made" "Many 40 with 20 crashes 50 ms" "Damage" "Slow A 1500 ms"
     "Slow B 1500 ms" "Slow C 1500 ms" "Hungry 300" "Detach deadlock" "Crash on a thread when made"
-    "Asks when made 3000 ms" "Asks when made 60000 ms" "Asks modally when made 3000 ms")
+    "Asks when made 8000 ms" "Asks when made 60000 ms" "Asks modally when made 8000 ms")
 list(JOIN misbehaving_names "|" misbehaving_joined)
 set(misbehaving_folder "${CMAKE_CURRENT_BINARY_DIR}/Misbehaving")
 if(APPLE)
