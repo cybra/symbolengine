@@ -483,8 +483,13 @@ TEST_CASE("An Audio Unit's own edits, gestures and all, reach the program as the
 {
     Rig rig;
     auto plugin = rig.made("Gain");
+
+    // Its own edits only, not what its meter reports.
     std::vector<std::pair<PluginEdit, bool>> edits;
-    plugin->onEdit = [&](const PluginEdit& edit, bool byUser) { edits.emplace_back(edit, byUser); };
+    plugin->onEdit = [&](const PluginEdit& edit, bool byUser) {
+        if (edit.kind != PluginEdit::Kind::reported)
+            edits.emplace_back(edit, byUser);
+    };
     rig.main.turnUntil([] { return false; }, 300ms);
     REQUIRE(plugin->setParameter(3, 1.0));
     play(*plugin, 64, 1);
@@ -656,5 +661,44 @@ TEST_CASE("An Audio Unit's state for a copy carries every value, set again after
     const auto metered = gain->saveState(PluginStateUse::copy);
     REQUIRE(metered);
     REQUIRE(rig.made("Gain")->loadState(*metered, PluginStateUse::copy));
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("Values an Audio Unit's processing reports, as a meter's, reach the program as they change, never as the "
+          "user's")
+{
+    Rig rig;
+    auto plugin = rig.made("Gain");
+    std::vector<std::pair<PluginEdit, bool>> edits;
+    plugin->onEdit = [&](const PluginEdit& edit, bool byUser) { edits.emplace_back(edit, byUser); };
+    const auto playLevel = [&](float level) {
+        std::thread([&] {
+            std::vector<float> left(64, level), right(64, level);
+            float* channels[] = {left.data(), right.data()};
+            plugin->process(channels, 2, 64, nullptr, 0);
+        }).join();
+        rig.main.turnUntil([] { return false; }, 50ms);
+    };
+    const auto metered = [&] {
+        return std::count_if(edits.begin(), edits.end(), [](const auto& one) {
+            return one.first.kind == PluginEdit::Kind::reported && one.first.id == 2;
+        });
+    };
+
+    // A level of 0.5 is -6 dB, on a meter from -60 to 0; the same level again is no change.
+    for (int i = 0; i < 3; ++i)
+        playLevel(0.5f);
+    const auto half = (20.0 * std::log10(0.5) + 60.0) / 60.0;
+    CHECK(plugin->parameter(2) == Catch::Approx(half).epsilon(1e-5));
+    CHECK(metered() == 1);
+
+    playLevel(0.25f);
+    CHECK(plugin->parameter(2) == Catch::Approx((20.0 * std::log10(0.25) + 60.0) / 60.0).epsilon(1e-5));
+    CHECK(metered() == 2);
+    for (const auto& [edit, byUser] : edits)
+    {
+        CHECK_FALSE(byUser);
+        CHECK((edit.kind != PluginEdit::Kind::reported || edit.id == 2));
+    }
     CHECK(misuses().empty());
 }

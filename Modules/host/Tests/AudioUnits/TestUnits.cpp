@@ -618,10 +618,10 @@ private:
     std::atomic<int> renders{0};
 };
 
-// Parameters: a gain from 0 to 2 it takes at the frame of each change; a mode of three named
-// steps; a meter it reports, which can't be written; an edit, which when set makes it move its gain itself in a
-// gesture, as its own window would; and more, which when set gives it a sixth parameter and says its list changed. It
-// keeps a document form of its state apart from its plain one.
+// Parameters: a gain from 0 to 2 it takes at the frame of each change; a mode of three named steps; a meter of its
+// output's level, which can't be written; an edit, which when set makes it move its gain itself in a gesture, as its
+// own window would; and more, which when set gives it a sixth parameter and says its list changed. It keeps a document
+// form of its state apart from its plain one.
 class Gain final : public Scheduled
 {
 public:
@@ -758,6 +758,20 @@ public:
             grown = true;
             Globals()->UseIndexedParameters(6);
             PropertyChanged(kAudioUnitProperty_ParameterList, kAudioUnitScope_Global, 0);
+        }
+        return result;
+    }
+
+protected:
+    // Its meter, the level of its last output sample in dB from -60 to 0.
+    OSStatus process(AudioUnitRenderActionFlags& flags, const AudioBufferList& in, AudioBufferList& out,
+                     UInt32 frames) override
+    {
+        const auto result = Scheduled::process(flags, in, out, frames);
+        if (out.mNumberBuffers > 0 && frames > 0)
+        {
+            const auto last = std::abs(static_cast<const float*>(out.mBuffers[0].mData)[frames - 1]);
+            Globals()->SetParameter(meter, std::clamp(last > 0 ? 20.0f * std::log10(last) : -60.0f, -60.0f, 0.0f));
         }
         return result;
     }

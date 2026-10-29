@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <memory>
 
 namespace symbolengine
@@ -123,7 +124,8 @@ AudioStreamBasicDescription floatFormat(double rate, UInt32 channels)
 }
 
 // What the host needs of a parameter, on any thread, to turn the program's value from 0 to 1 into the unit's own and
-// back: its range, its steps as VST3 counts them, and its unit.
+// back: its range, its steps as VST3 counts them, and its unit; and for one the host can't set, the value last
+// reported, which only the audio thread uses.
 struct ParameterRange
 {
     AudioUnitParameterID id = 0;
@@ -132,6 +134,7 @@ struct ParameterRange
     int steps = 0;
     AudioUnitParameterUnit unit = kAudioUnitParameterUnit_Generic;
     bool writable = true;
+    mutable AudioUnitParameterValue reported = std::numeric_limits<AudioUnitParameterValue>::quiet_NaN();
 };
 
 double normalized(const ParameterRange& range, AudioUnitParameterValue value)
@@ -394,6 +397,7 @@ public:
                 return false;
             done += static_cast<int>(frames);
         }
+        report(block);
         return true;
     }
 
@@ -783,7 +787,31 @@ private:
                     return false;
             }
         }
+        report(block);
         return true;
+    }
+
+    // The values its processing reports, as a meter's: every parameter the host can't set, read after the block and
+    // reported at its last frame where it changed.
+    void report(PluginBlock& block) const
+    {
+        block.reportedCount = 0;
+        const auto* const now = ranges.load();
+        if (now == nullptr || block.reported == nullptr)
+            return;
+        for (const auto& range : *now)
+        {
+            if (range.writable)
+                continue;
+            if (block.reportedCount >= block.reportedRoom)
+                break;
+            AudioUnitParameterValue value = 0;
+            if (AudioUnitGetParameter(unit, range.id, kAudioUnitScope_Global, 0, &value) != noErr ||
+                value == range.reported)
+                continue;
+            range.reported = value;
+            block.reported[block.reportedCount++] = {range.id, std::max(0, block.frames - 1), normalized(range, value)};
+        }
     }
 
     // A change gathered for the next full block; with no room left, the last one gathered of the same parameter takes
