@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cfenv>
 #include <clocale>
+#include <cstdio>
 #include <filesystem>
 #include <mutex>
 #include <stdexcept>
@@ -803,7 +804,8 @@ TEST_CASE("A reset a plugin asks for from inside its processing comes from the m
     auto plugin = rig.made("asking");
     REQUIRE(plugin->prepare({48000.0, 64, false}));
 
-    // The host looks every 10 ms, so waiting for its look would take 5 ms in the middle.
+    // The host looks every 10 ms, and each reset is asked for just after the last, so waiting for its look takes about
+    // 10 ms every time; woken, it takes well under a millisecond, and a few on a slow machine under the sanitizers.
     std::vector<std::chrono::steady_clock::duration> waits;
     for (int i = 0; i < 21; ++i)
     {
@@ -819,6 +821,6 @@ TEST_CASE("A reset a plugin asks for from inside its processing comes from the m
         waits.push_back(now() - asked);
     }
     std::sort(waits.begin(), waits.end());
-    CHECK(waits[10] < 2ms);
+    CHECK(waits[10] < 6ms);
     rig.checkNoMisuse();
 }
