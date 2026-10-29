@@ -237,6 +237,50 @@ int main(int argc, char** argv)
                                           std::to_string(gapBeforeSilent.load()) + " ms, and " +
                                           std::to_string(afterLate.load()) + " silent after the host was late");
 
+    // While a host plays, a value set over and over from another thread, as a user dragging one of the host's own
+    // controls sets it: no block comes out silent, as one would if setting a value held up a render. Nothing else takes
+    // the unit's lock meanwhile, so every silent block is one a value made.
+    {
+        std::atomic<bool> going{true};
+        std::atomic<int> rendered{0}, quietBlocks{0};
+        std::thread player([&] {
+            auto stamp = time;
+            stamp.mSampleTime += 1000000;
+            while (going)
+            {
+                stamp.mSampleTime += frames;
+                AudioUnitRenderActionFlags playFlags = 0;
+                if (AudioUnitRender(unit, &playFlags, &stamp, 0, frames, output) == noErr)
+                {
+                    ++rendered;
+                    bool quiet = false;
+                    for (UInt32 channel = 0; channel < channels; ++channel)
+                    {
+                        const auto* got = static_cast<const float*>(output->mBuffers[channel].mData);
+                        quiet |= std::any_of(got, got + frames, [](float value) { return value == 0.0f; });
+                    }
+                    quietBlocks += quiet ? 1 : 0;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+        });
+        int set = 0;
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
+        while (std::chrono::steady_clock::now() < until)
+        {
+            AudioUnitSetParameter(unit, 1, kAudioUnitScope_Global, 0, (++set % 2) != 0 ? 1.0f : -1.0f, 0);
+            std::this_thread::yield();
+        }
+        AudioUnitSetParameter(unit, 1, kAudioUnitScope_Global, 0, 0.5f, 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        going = false;
+        player.join();
+        check(rendered > 50 && quietBlocks == 0,
+              "Set over and over while playing: " + std::to_string(set) + " values set, " +
+                  std::to_string(rendered.load()) + " blocks rendered, " + std::to_string(quietBlocks.load()) +
+                  " of them silent");
+    }
+
     // Uninitialized again, as a host may save it.
     AudioUnitUninitialize(unit);
     savesAs("0.5", "Uninitialized");
