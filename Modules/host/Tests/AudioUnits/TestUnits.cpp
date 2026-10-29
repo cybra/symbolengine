@@ -5,10 +5,13 @@
 
 #include <AudioUnitSDK/AUEffectBase.h>
 
+#include <AudioToolbox/AudioUnitUtilities.h>
+
 #include <mach/mach_time.h>
 #include <pthread.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -95,8 +98,19 @@ public:
         return AUEffectBase::SetProperty(id, scope, element, data, size);
     }
 
+    // A host's value never comes from another thread while the unit renders, as some units lock their render against
+    // that.
+    OSStatus SetParameter(AudioUnitParameterID id, AudioUnitScope scope, AudioUnitElement element,
+                          AudioUnitParameterValue value, UInt32 offset) override
+    {
+        if (rendering && pthread_equal(pthread_self(), renderer.load()) == 0)
+            misuse(name, "a parameter set from another thread while it rendered");
+        return AUEffectBase::SetParameter(id, scope, element, value, offset);
+    }
+
     OSStatus Render(AudioUnitRenderActionFlags& flags, const AudioTimeStamp& time, UInt32 frames) override
     {
+        renderer = pthread_self();
         if (rendering.exchange(true))
             misuse(name, "rendered while already rendering");
         if (pthread_main_np() != 0)
@@ -122,6 +136,7 @@ public:
 protected:
     const char* name;
     std::atomic<bool> rendering{false};
+    std::atomic<pthread_t> renderer{};
 
     virtual OSStatus render(AudioUnitRenderActionFlags& flags, const AudioTimeStamp& time, UInt32 frames)
     {
@@ -150,6 +165,59 @@ private:
     bool outputSet = false;
 
     void noteFormatSet(AudioUnitScope scope) { (scope == kAudioUnitScope_Input ? inputSet : outputSet) = true; }
+};
+
+// A unit that takes each change scheduled for a render at its frame, as Apple's SDK sets an immediate change's value
+// as it is scheduled, before the render: a gain from 0 to 2, parameter 0, which it applies to its input.
+class Scheduled : public Checked
+{
+public:
+    Scheduled(AudioComponentInstance instance, const char* unitName) : Checked(instance, unitName) {}
+
+    OSStatus ScheduleParameter(const AudioUnitParameterEvent* changes, UInt32 count) override
+    {
+        for (UInt32 i = 0; i < count; ++i)
+            if (changes[i].eventType != kParameterEvent_Immediate || waiting == pending.size())
+                misuse(name, "given a change it can't keep");
+            else
+                pending[waiting++] = changes[i];
+        return noErr;
+    }
+
+    // A render's changes are for that render alone, whether or not it rendered them.
+    OSStatus Render(AudioUnitRenderActionFlags& flags, const AudioTimeStamp& time, UInt32 frames) override
+    {
+        const auto result = Checked::Render(flags, time, frames);
+        waiting = 0;
+        return result;
+    }
+
+protected:
+    OSStatus process(AudioUnitRenderActionFlags&, const AudioBufferList& in, AudioBufferList& out,
+                     UInt32 frames) override
+    {
+        std::stable_sort(pending.begin(), pending.begin() + waiting, [](const auto& a, const auto& b) {
+            return a.eventValues.immediate.bufferOffset < b.eventValues.immediate.bufferOffset;
+        });
+        std::size_t next = 0;
+        for (UInt32 i = 0; i < frames; ++i)
+        {
+            for (; next < waiting && pending[next].eventValues.immediate.bufferOffset <= i; ++next)
+                SetParameter(pending[next].parameter, pending[next].scope, pending[next].element,
+                             pending[next].eventValues.immediate.value, 0);
+            const auto level = Globals()->GetParameter(0);
+            for (UInt32 c = 0; c < std::min(in.mNumberBuffers, out.mNumberBuffers); ++c)
+                static_cast<float*>(out.mBuffers[c].mData)[i] =
+                    static_cast<const float*>(in.mBuffers[c].mData)[i] * level;
+        }
+        for (; next < waiting; ++next)
+            misuse(name, "given a change past its render");
+        return noErr;
+    }
+
+private:
+    std::array<AudioUnitParameterEvent, 64> pending{};
+    std::size_t waiting = 0;
 };
 
 // Passes its input through, with a latency it says only once initialized.
@@ -488,11 +556,29 @@ protected:
     }
 };
 
-// Fails every render shorter than its largest block, as units that need every block the same size do.
-class FixedBlocks final : public Checked
+// Fails every render shorter than its largest block, as units that need every block the same size do; its gain takes
+// each change at its frame.
+class FixedBlocks final : public Scheduled
 {
 public:
-    explicit FixedBlocks(AudioComponentInstance instance) : Checked(instance, "FixedBlocks") {}
+    explicit FixedBlocks(AudioComponentInstance instance) : Scheduled(instance, "FixedBlocks")
+    {
+        Globals()->UseIndexedParameters(1);
+        Globals()->SetParameter(0, 1.0f);
+    }
+
+    OSStatus GetParameterInfo(AudioUnitScope scope, AudioUnitParameterID id, AudioUnitParameterInfo& info) override
+    {
+        if (scope != kAudioUnitScope_Global || id != 0)
+            return kAudioUnitErr_InvalidParameter;
+        FillInParameterName(info, CFSTR("Gain"), false);
+        info.flags = kAudioUnitParameterFlag_IsReadable | kAudioUnitParameterFlag_IsWritable;
+        info.unit = kAudioUnitParameterUnit_LinearGain;
+        info.minValue = 0;
+        info.maxValue = 2;
+        info.defaultValue = 1;
+        return noErr;
+    }
 
 protected:
     OSStatus render(AudioUnitRenderActionFlags& flags, const AudioTimeStamp& time, UInt32 frames) override
@@ -529,6 +615,175 @@ private:
     std::atomic<int> renders{0};
 };
 
+// Parameters: a gain from 0 to 2 it takes at the frame of each change; a mode of three named
+// steps; a meter it reports, which can't be written; an edit, which when set makes it move its gain itself in a
+// gesture, as its own window would; and more, which when set gives it a sixth parameter and says its list changed. It
+// keeps a document form of its state apart from its plain one.
+class Gain final : public Scheduled
+{
+public:
+    enum : AudioUnitParameterID
+    {
+        gain,
+        mode,
+        meter,
+        edit,
+        more,
+        extra,
+    };
+
+    explicit Gain(AudioComponentInstance instance) : Scheduled(instance, "Gain")
+    {
+        Globals()->UseIndexedParameters(5);
+        Globals()->SetParameter(gain, 1.0f);
+        Globals()->SetParameter(mode, 1.0f);
+    }
+
+    OSStatus GetParameterInfo(AudioUnitScope scope, AudioUnitParameterID id, AudioUnitParameterInfo& info) override
+    {
+        if (scope != kAudioUnitScope_Global)
+            return kAudioUnitErr_InvalidScope;
+        info.flags = kAudioUnitParameterFlag_IsReadable | kAudioUnitParameterFlag_IsWritable;
+        switch (id)
+        {
+            case gain:
+                FillInParameterName(info, CFSTR("Gain"), false);
+                info.unit = kAudioUnitParameterUnit_LinearGain;
+                info.minValue = 0;
+                info.maxValue = 2;
+                info.defaultValue = 1;
+                return noErr;
+            case mode:
+                FillInParameterName(info, CFSTR("Mode"), false);
+                info.unit = kAudioUnitParameterUnit_Indexed;
+                info.minValue = 0;
+                info.maxValue = 2;
+                info.defaultValue = 1;
+                return noErr;
+            case meter:
+                FillInParameterName(info, CFSTR("Meter"), false);
+                info.unit = kAudioUnitParameterUnit_Decibels;
+                info.minValue = -60;
+                info.maxValue = 0;
+                info.flags = kAudioUnitParameterFlag_IsReadable;
+                return noErr;
+            case edit:
+            case more:
+            case extra:
+                FillInParameterName(info,
+                                    id == edit   ? CFSTR("Edit")
+                                    : id == more ? CFSTR("More")
+                                                 : CFSTR("Extra"),
+                                    false);
+                info.unit = kAudioUnitParameterUnit_Boolean;
+                info.minValue = 0;
+                info.maxValue = 1;
+                return noErr;
+            default: return kAudioUnitErr_InvalidParameter;
+        }
+    }
+
+    OSStatus GetParameterValueStrings(AudioUnitScope scope, AudioUnitParameterID id, CFArrayRef* strings) override
+    {
+        if (scope != kAudioUnitScope_Global || id != mode)
+            return kAudioUnitErr_InvalidProperty;
+        if (strings != nullptr)
+        {
+            const void* names[] = {CFSTR("Soft"), CFSTR("Normal"), CFSTR("Hard")};
+            *strings = CFArrayCreate(nullptr, names, 3, &kCFTypeArrayCallBacks);
+        }
+        return noErr;
+    }
+
+    // Its document form, its class info marked as a document's, which it takes as one and never as any other; its plain
+    // form it won't take as a document's, as units that tell them apart may not.
+    OSStatus GetPropertyInfo(AudioUnitPropertyID id, AudioUnitScope scope, AudioUnitElement element, UInt32& size,
+                             bool& writable) override
+    {
+        if (id != kAudioUnitProperty_ClassInfoFromDocument || scope != kAudioUnitScope_Global)
+            return Scheduled::GetPropertyInfo(id, scope, element, size, writable);
+        size = sizeof(CFPropertyListRef);
+        writable = true;
+        return noErr;
+    }
+
+    OSStatus GetProperty(AudioUnitPropertyID id, AudioUnitScope scope, AudioUnitElement element, void* data) override
+    {
+        if (id != kAudioUnitProperty_ClassInfoFromDocument || scope != kAudioUnitScope_Global)
+            return Scheduled::GetProperty(id, scope, element, data);
+        CFPropertyListRef info = nullptr;
+        if (const auto status = SaveState(&info); status != noErr)
+            return status;
+        const auto marked = CFDictionaryCreateMutableCopy(nullptr, 0, static_cast<CFDictionaryRef>(info));
+        CFRelease(info);
+        CFDictionarySetValue(marked, documentKey(), kCFBooleanTrue);
+        *static_cast<CFPropertyListRef*>(data) = marked;
+        return noErr;
+    }
+
+    OSStatus SetProperty(AudioUnitPropertyID id, AudioUnitScope scope, AudioUnitElement element, const void* data,
+                         UInt32 size) override
+    {
+        if (id != kAudioUnitProperty_ClassInfoFromDocument || scope != kAudioUnitScope_Global)
+            return Scheduled::SetProperty(id, scope, element, data, size);
+        const auto info = *static_cast<const CFPropertyListRef*>(data);
+        if (!isDocument(info))
+            return kAudioUnitErr_InvalidPropertyValue;
+        takingDocument = true;
+        const auto result = RestoreState(info);
+        takingDocument = false;
+        return result;
+    }
+
+    OSStatus RestoreState(CFPropertyListRef info) override
+    {
+        if (!takingDocument && isDocument(info))
+            misuse(name, "its document's state given as any other");
+        return Scheduled::RestoreState(info);
+    }
+
+    OSStatus SetParameter(AudioUnitParameterID id, AudioUnitScope scope, AudioUnitElement element,
+                          AudioUnitParameterValue value, UInt32 offset) override
+    {
+        if (id == meter)
+            misuse(name, "its meter, which can't be written, was set");
+        const auto result = Scheduled::SetParameter(id, scope, element, value, offset);
+        if (id == edit && value >= 0.5f)
+            editItself();
+        if (id == more && value >= 0.5f && !grown)
+        {
+            grown = true;
+            Globals()->UseIndexedParameters(6);
+            PropertyChanged(kAudioUnitProperty_ParameterList, kAudioUnitScope_Global, 0);
+        }
+        return result;
+    }
+
+private:
+    bool grown = false;
+    bool takingDocument = false;
+
+    static CFStringRef documentKey() { return CFSTR("SymbolEngine document"); }
+
+    static bool isDocument(CFPropertyListRef info)
+    {
+        return info != nullptr && CFGetTypeID(info) == CFDictionaryGetTypeID() &&
+               CFDictionaryContainsKey(static_cast<CFDictionaryRef>(info), documentKey());
+    }
+
+    // Its gain moved to 1.5 in a gesture of its own, as its window would, which listeners hear.
+    void editItself()
+    {
+        AudioUnitEvent event{};
+        event.mArgument.mParameter = {GetComponentInstance(), gain, kAudioUnitScope_Global, 0};
+        event.mEventType = kAudioUnitEvent_BeginParameterChangeGesture;
+        AUEventListenerNotify(nullptr, nullptr, &event);
+        AUParameterSet(nullptr, nullptr, &event.mArgument.mParameter, 1.5f, 0);
+        event.mEventType = kAudioUnitEvent_EndParameterChangeGesture;
+        AUEventListenerNotify(nullptr, nullptr, &event);
+    }
+};
+
 }
 
 AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Pass)
@@ -544,3 +799,4 @@ AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Time)
 AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Rate)
 AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, FixedBlocks)
 AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Late)
+AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Gain)

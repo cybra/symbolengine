@@ -106,11 +106,11 @@ void comeForward()
 {
     // Asks to be in front, which only the program in front can grant, and puts the window above every other
     // program's meanwhile, which needs no one's leave.
-    if (const auto window = visibleWindow())
+    if (const auto shown = visibleWindow())
     {
-        SetForegroundWindow(window);
-        SetWindowPos(window, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-        SetWindowPos(window, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        SetForegroundWindow(shown);
+        SetWindowPos(shown, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        SetWindowPos(shown, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 }
 

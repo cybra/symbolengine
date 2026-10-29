@@ -172,7 +172,7 @@ TEST_CASE("An Audio Unit's component and units are read from its bundle without 
     PluginError error;
     const auto plugins = rig.format.pluginsIn(units, error);
     CHECK_FALSE(error);
-    REQUIRE(plugins.size() == 13);
+    REQUIRE(plugins.size() == 14);
     CHECK(plugins[0].identity == PluginIdentity::audioUnit(code("aufx"), code("Pass"), code("SyTs")));
     CHECK(plugins[0].location == units);
     CHECK(plugins[0].maker == "SymbolEngine Tests");
@@ -412,5 +412,187 @@ TEST_CASE("A unit's change of latency is followed when it says so, never asked f
     CHECK(plugin->latency() == 480);
     play(*plugin, 128, 60);
     REQUIRE(rig.main.turnUntil([&] { return plugin->latency() == 960; }, 5s));
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("An Audio Unit's parameters are listed by ID with their names, units, steps and flags, values from 0 to 1")
+{
+    Rig rig;
+    auto plugin = rig.made("Gain");
+    const auto parameters = plugin->parameters();
+    REQUIRE(parameters.size() == 5);
+    CHECK(parameters[0].id == 0);
+    CHECK(parameters[0].name == "Gain");
+    CHECK(parameters[0].defaultValue == Catch::Approx(0.5));
+    CHECK(parameters[0].steps == 0);
+    CHECK_FALSE(parameters[0].readOnly);
+    CHECK(parameters[1].name == "Mode");
+    CHECK(parameters[1].steps == 2);
+    CHECK(parameters[1].defaultValue == Catch::Approx(0.5));
+    CHECK(parameters[2].readOnly);
+    CHECK(parameters[2].units == "dB");
+    CHECK(parameters[3].steps == 1);
+    CHECK(plugin->parameter(0) == Catch::Approx(0.5));
+    CHECK(plugin->parameterText(1, 1.0) == "Hard");
+    CHECK(plugin->parameterText(1, 0.0) == "Soft");
+    CHECK(plugin->parameterText(0, 0.75).find("1.5") != std::string::npos);
+    CHECK(plugin->parameterText(3, 1.0) == "On");
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("Values the program sets while an Audio Unit plays reach it at their frame, through its render")
+{
+    Rig rig;
+    auto plugin = rig.made("Gain");
+    std::vector<float> left(256, 1.0f), right(256, 1.0f);
+    const PluginParameterChange change{0, 100, 0.25};
+    std::thread([&] {
+        float* channels[] = {left.data(), right.data()};
+        plugin->process(channels, 2, 256, &change, 1);
+    }).join();
+    CHECK(left[99] == 1.0f);
+    CHECK(left[100] == 0.5f);
+    CHECK(left[255] == 0.5f);
+    CHECK(rig.main.turnUntil([&] { return plugin->parameter(0) == 0.25; }, 2s));
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("An Audio Unit's state holds the values set while nothing played it, and gives them all back")
+{
+    Rig rig;
+    auto plugin = rig.made("Gain");
+    REQUIRE(plugin->setParameter(0, 0.75));
+    REQUIRE(plugin->setParameter(1, 0.0));
+    const auto state = plugin->saveState(PluginStateUse::document);
+    REQUIRE(state);
+    CHECK(state->starts_with("bplist00"));
+
+    auto other = rig.made("Gain");
+    REQUIRE(other->loadState(*state, PluginStateUse::document));
+    rig.main.settle();
+    CHECK(other->parameter(0) == Catch::Approx(0.75));
+    CHECK(other->parameter(1) == Catch::Approx(0.0));
+    const auto out = play(*other, 64, 1);
+    CHECK(out[0][10] == Catch::Approx(11.0f * 1.5f));
+
+    CHECK_FALSE(other->loadState("not a state", PluginStateUse::document));
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("An Audio Unit's own edits, gestures and all, reach the program as the user's")
+{
+    Rig rig;
+    auto plugin = rig.made("Gain");
+    std::vector<std::pair<PluginEdit, bool>> edits;
+    plugin->onEdit = [&](const PluginEdit& edit, bool byUser) { edits.emplace_back(edit, byUser); };
+    rig.main.turnUntil([] { return false; }, 300ms);
+    REQUIRE(plugin->setParameter(3, 1.0));
+    play(*plugin, 64, 1);
+    REQUIRE(rig.main.turnUntil([&] { return edits.size() >= 3; }, 5s));
+
+    CHECK(edits[0].first == PluginEdit{PluginEdit::Kind::begin, 0, 0.0});
+    CHECK(edits[1].first.kind == PluginEdit::Kind::value);
+    CHECK(edits[1].first.id == 0);
+    CHECK(edits[1].first.value == Catch::Approx(0.75));
+    CHECK(edits[2].first == PluginEdit{PluginEdit::Kind::end, 0, 0.0});
+    CHECK(edits[1].second);
+    CHECK(plugin->parameter(0) == Catch::Approx(0.75));
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("A change to an Audio Unit's list of parameters is told, and the list read again")
+{
+    Rig rig;
+    auto plugin = rig.made("Gain");
+    std::vector<PluginChange> changes;
+    plugin->onChange = [&](PluginChange change) { changes.push_back(change); };
+    REQUIRE(plugin->setParameter(4, 1.0));
+    play(*plugin, 64, 1);
+    REQUIRE(rig.main.turnUntil(
+        [&] { return std::find(changes.begin(), changes.end(), PluginChange::parameters) != changes.end(); }, 5s));
+    CHECK(plugin->parameters().size() == 6);
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("Values set for a unit fed full blocks reach it at their frame, the buffer's delay later, and one set in the "
+          "block that showed it needs them is kept")
+{
+    Rig rig;
+    auto plugin = rig.made("Fixd");
+
+    // On one audio thread with no pause, so the main thread shows the unit nothing meanwhile: the first block shows it
+    // needs full blocks, and passes as it came; the rest go through the buffer from the next frame on.
+    std::vector<float> left(2100), right(2100);
+    std::thread([&] {
+        const PluginParameterChange louder{0, 10, 0.75};
+        const PluginParameterChange quieter{0, 50, 0.25};
+        for (int block = 0; block < 21; ++block)
+        {
+            float* channels[] = {left.data() + block * 100, right.data() + block * 100};
+            for (int i = 0; i < 100; ++i)
+                channels[0][i] = channels[1][i] = static_cast<float>(block * 100 + i + 1);
+            const auto* const change = block == 0 ? &louder : block == 4 ? &quieter : nullptr;
+            plugin->process(channels, 2, 100, change, change != nullptr ? 1 : 0);
+        }
+    }).join();
+    CHECK(left[50] == 51.0f);
+    CHECK(left[611] == 0.0f);
+    CHECK(left[612] == 101.0f * 1.5f);
+    CHECK(left[961] == 450.0f * 1.5f);
+    CHECK(left[962] == 451.0f * 0.5f);
+    CHECK(left[2099] == 1588.0f * 0.5f);
+    CHECK(rig.main.turnUntil([&] { return plugin->latency() == 512; }, 5s));
+    CHECK(rig.main.turnUntil([&] { return plugin->parameter(0) == 0.25; }, 2s));
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("Values the program sets while an Audio Unit may be playing reach it through its render, never from another "
+          "thread meanwhile")
+{
+    Rig rig;
+    auto plugin = rig.made("Gain");
+    std::atomic<bool> playing{true};
+    std::thread audio([&] {
+        std::vector<float> left(64), right(64);
+        float* channels[] = {left.data(), right.data()};
+        while (playing)
+        {
+            std::fill(left.begin(), left.end(), 1.0f);
+            std::fill(right.begin(), right.end(), 1.0f);
+            plugin->process(channels, 2, 64, nullptr, 0);
+        }
+    });
+    for (int i = 0; i < 300; ++i)
+    {
+        REQUIRE(plugin->setParameter(0, (i % 10) / 10.0));
+        rig.main.turnUntil([] { return false; }, 1ms);
+    }
+    REQUIRE(plugin->setParameter(0, 0.25));
+    rig.main.turnUntil([] { return false; }, 50ms);
+    playing = false;
+    audio.join();
+
+    const auto out = play(*plugin, 64, 1);
+    CHECK(out[0][0] == Catch::Approx(0.5f));
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("An Audio Unit's document state is its document form where it has one, given back as a document's, and a "
+          "preset's its plain form")
+{
+    Rig rig;
+    auto plugin = rig.made("Gain");
+    REQUIRE(plugin->setParameter(0, 0.75));
+    const auto document = plugin->saveState(PluginStateUse::document);
+    const auto preset = plugin->saveState(PluginStateUse::preset);
+    REQUIRE(document);
+    REQUIRE(preset);
+    CHECK(*document != *preset);
+
+    auto other = rig.made("Gain");
+    CHECK(other->loadState(*document, PluginStateUse::document));
+    CHECK(other->loadState(*preset, PluginStateUse::document));
+    CHECK(other->loadState(*preset, PluginStateUse::preset));
+    CHECK(rig.main.turnUntil([&] { return other->parameter(0) == 0.75; }, 2s));
     CHECK(misuses().empty());
 }

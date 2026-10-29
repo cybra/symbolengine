@@ -7,15 +7,20 @@
 #include <symbolengine/core/Text.h>
 
 #include <AudioToolbox/AudioToolbox.h>
+#include <AudioToolbox/AudioUnitUtilities.h>
 #include <CoreFoundation/CoreFoundation.h>
+#include <dispatch/dispatch.h>
 #include <mach/mach_time.h>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <climits>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <memory>
 
 namespace symbolengine
 {
@@ -117,20 +122,96 @@ AudioStreamBasicDescription floatFormat(double rate, UInt32 channels)
     return format;
 }
 
+// What the host needs of a parameter, on any thread, to turn the program's value from 0 to 1 into the unit's own and
+// back: its range, its steps as VST3 counts them, and its unit.
+struct ParameterRange
+{
+    AudioUnitParameterID id = 0;
+    AudioUnitParameterValue minimum = 0;
+    AudioUnitParameterValue maximum = 1;
+    int steps = 0;
+    AudioUnitParameterUnit unit = kAudioUnitParameterUnit_Generic;
+    bool writable = true;
+};
+
+double normalized(const ParameterRange& range, AudioUnitParameterValue value)
+{
+    if (range.maximum <= range.minimum)
+        return 0.0;
+    return std::clamp(
+        (static_cast<double>(value) - range.minimum) / (static_cast<double>(range.maximum) - range.minimum), 0.0, 1.0);
+}
+
+AudioUnitParameterValue unitValue(const ParameterRange& range, double value)
+{
+    auto position = std::clamp(value, 0.0, 1.0);
+    if (range.steps > 0)
+        position = std::round(position * range.steps) / range.steps;
+    return static_cast<AudioUnitParameterValue>(range.minimum +
+                                                position * (static_cast<double>(range.maximum) - range.minimum));
+}
+
+int stepsOf(const AudioUnitParameterInfo& info)
+{
+    if (info.unit == kAudioUnitParameterUnit_Boolean)
+        return 1;
+    if (info.unit == kAudioUnitParameterUnit_Indexed)
+        return std::max(0, static_cast<int>(std::lround(info.maxValue - info.minValue)));
+    return 0;
+}
+
+std::string unitsOf(const AudioUnitParameterInfo& info)
+{
+    switch (info.unit)
+    {
+        case kAudioUnitParameterUnit_Percent: return "%";
+        case kAudioUnitParameterUnit_Seconds: return "s";
+        case kAudioUnitParameterUnit_Milliseconds: return "ms";
+        case kAudioUnitParameterUnit_Hertz: return "Hz";
+        case kAudioUnitParameterUnit_Decibels: return "dB";
+        case kAudioUnitParameterUnit_Cents:
+        case kAudioUnitParameterUnit_AbsoluteCents: return "cents";
+        case kAudioUnitParameterUnit_Octaves: return "octaves";
+        case kAudioUnitParameterUnit_BPM: return "BPM";
+        case kAudioUnitParameterUnit_Beats: return "beats";
+        case kAudioUnitParameterUnit_SampleFrames: return "samples";
+        case kAudioUnitParameterUnit_Degrees: return "\u00B0";
+        case kAudioUnitParameterUnit_Meters: return "m";
+        case kAudioUnitParameterUnit_CustomUnit: return textOf(info.unitName);
+        default: return {};
+    }
+}
+
 // One Audio Unit, as the host module holds it.
 class AudioUnitPlugin final : public PluginFormatInstance
 {
 public:
     AudioUnitPlugin(AudioUnit made, PluginFormatClient& told) : unit(made), client(told)
     {
-        AudioUnitAddPropertyListener(unit, kAudioUnitProperty_Latency, &AudioUnitPlugin::propertyChanged, this);
+        for (const auto id : noticed)
+            AudioUnitAddPropertyListener(unit, id, &AudioUnitPlugin::propertyChanged, this);
+
+        // Its own edits, as its window makes them, heard on a queue of their own: the program's main thread may not
+        // turn the run loop the system would otherwise tell them on.
+        listenerQueue = dispatch_queue_create("SymbolEngine Audio Unit edits", DISPATCH_QUEUE_SERIAL);
+        AUEventListenerCreateWithDispatchQueue(
+            &listener, 0.0, 0.0, listenerQueue,
+            ^(void*, const AudioUnitEvent* event, UInt64, AudioUnitParameterValue value) {
+              heard(*event, value);
+            });
     }
 
     ~AudioUnitPlugin() override
     {
-        // In order: its listener gone, anything it holds of audio cleared, uninitialized, disposed, on the main thread.
-        AudioUnitRemovePropertyListenerWithUserData(unit, kAudioUnitProperty_Latency, &AudioUnitPlugin::propertyChanged,
-                                                    this);
+        // In order: its listeners gone, and any edit being told finished; anything it holds of audio cleared,
+        // uninitialized, disposed, on the main thread.
+        if (listener != nullptr)
+            AUListenerDispose(listener);
+        dispatch_sync(listenerQueue, ^{
+                      });
+        dispatch_release(listenerQueue);
+        for (const auto id : noticed)
+            AudioUnitRemovePropertyListenerWithUserData(unit, id, &AudioUnitPlugin::propertyChanged, this);
         AudioUnitReset(unit, kAudioUnitScope_Global, 0);
         if (initialized)
             AudioUnitUninitialize(unit);
@@ -215,6 +296,15 @@ public:
                     std::byte{});
         heldIn.assign(static_cast<std::size_t>(std::max(0, layout.inputs)), std::vector<float>(maximumFrames));
         heldOut.assign(static_cast<std::size_t>(layout.outputs), std::vector<float>(maximumFrames));
+        heldInChannels.assign(heldIn.size(), nullptr);
+        heldOutChannels.assign(heldOut.size(), nullptr);
+        for (std::size_t c = 0; c < heldIn.size(); ++c)
+            heldInChannels[c] = heldIn[c].data();
+        for (std::size_t c = 0; c < heldOut.size(); ++c)
+            heldOutChannels[c] = heldOut[c].data();
+        events.assign(maximumBlockChanges, {});
+        heldEvents.assign(maximumBlockChanges, {});
+        heldEventCount = 0;
         held = 0;
         sampleTime = 0;
         failures = 0;
@@ -250,11 +340,23 @@ public:
         if (fixedBlocks)
             return processHeld(block);
 
+        int next = 0;
         for (int done = 0; done < block.frames;)
         {
             const auto frames = std::min<UInt32>(maximumFrames, static_cast<UInt32>(block.frames - done));
-            const auto status =
-                render({block.inputs, block.inputChannels, done, block.frames}, frames, block.time, done);
+
+            // The block's changes for this piece, each at its frame in it; the last piece takes any left.
+            const bool last = done + static_cast<int>(frames) >= block.frames;
+            UInt32 count = 0;
+            for (; next < block.changeCount && (last || block.changes[next].offset < done + static_cast<int>(frames));
+                 ++next)
+                if (const auto* const range = rangeOf(block.changes[next].id); range != nullptr && range->writable)
+                    events[count++] = eventOf(*range, block.changes[next].value,
+                                              static_cast<UInt32>(std::clamp(block.changes[next].offset - done, 0,
+                                                                             static_cast<int>(frames) - 1)));
+
+            const auto status = render({block.inputs, block.inputChannels, done, block.frames}, frames, block.time,
+                                       done, events.data(), count);
 
             // A unit that fails a short block needs every block the same size: from now on it is fed full blocks
             // through a buffer, whose length its latency counts, and is prepared again for it. This block passes.
@@ -275,22 +377,189 @@ public:
         return true;
     }
 
-    void flush(const PluginParameterChange*, int) override {}
-    std::vector<PluginParameter> parameters() override { return {}; }
-    double parameterValue(std::uint32_t) override { return 0.0; }
-    void showParameterValue(std::uint32_t, double) override {}
-    std::string parameterText(std::uint32_t, double) override { return {}; }
-
-    std::optional<std::string> state(PluginStateUse, PluginError& error) override
+    // An Audio Unit has one value for each parameter, which its processing and its window share. While it is
+    // initialized, the program's values reach it only through its render, just before it, or handed over while nothing
+    // plays it, never by a call from another thread while it may render, as some units lock their render against such
+    // calls; until then they are set on it straight away.
+    void flush(const PluginParameterChange* changes, int count) override
     {
-        error = {"An Audio Unit's state isn't kept yet.", "state", 0};
-        return std::nullopt;
+        for (int i = 0; i < count; ++i)
+            set(changes[i].id, changes[i].value);
     }
 
-    bool setState(std::string_view, PluginStateUse, PluginError& error) override
+    void showParameterValue(std::uint32_t id, double value) override
     {
-        error = {"An Audio Unit's state isn't kept yet.", "setState", 0};
-        return false;
+        if (!initialized)
+            set(id, value);
+    }
+
+    double parameterValue(std::uint32_t id) override
+    {
+        const auto* const range = rangeOf(id);
+        AudioUnitParameterValue value = 0;
+        if (range == nullptr || AudioUnitGetParameter(unit, id, kAudioUnitScope_Global, 0, &value) != noErr)
+            return 0.0;
+        return normalized(*range, value);
+    }
+
+    // Its global parameters, which are the ones a host shows; each one's edits listened for from then on.
+    std::vector<PluginParameter> parameters() override
+    {
+        std::vector<PluginParameter> found;
+        auto made = std::make_unique<std::vector<ParameterRange>>();
+        for (const auto id : parameterIds())
+        {
+            AudioUnitParameterInfo info{};
+            UInt32 size = sizeof info;
+            if (AudioUnitGetProperty(unit, kAudioUnitProperty_ParameterInfo, kAudioUnitScope_Global, id, &info,
+                                     &size) != noErr)
+                continue;
+
+            const ParameterRange range{id,
+                                       info.minValue,
+                                       info.maxValue,
+                                       stepsOf(info),
+                                       info.unit,
+                                       (info.flags & kAudioUnitParameterFlag_IsWritable) != 0};
+            PluginParameter parameter;
+            parameter.id = id;
+            parameter.name = (info.flags & kAudioUnitParameterFlag_HasCFNameString) != 0 && info.cfNameString != nullptr
+                                 ? textOf(info.cfNameString)
+                                 : std::string(info.name, strnlen(info.name, sizeof info.name));
+            parameter.units = unitsOf(info);
+            parameter.defaultValue = normalized(range, info.defaultValue);
+            parameter.steps = range.steps;
+            parameter.readOnly = !range.writable;
+            parameter.automatable = range.writable && (info.flags & kAudioUnitParameterFlag_NonRealTime) == 0;
+            if ((info.flags & kAudioUnitParameterFlag_CFNameRelease) != 0)
+            {
+                if ((info.flags & kAudioUnitParameterFlag_HasCFNameString) != 0 && info.cfNameString != nullptr)
+                    CFRelease(info.cfNameString);
+                if (info.unit == kAudioUnitParameterUnit_CustomUnit && info.unitName != nullptr)
+                    CFRelease(info.unitName);
+            }
+            found.push_back(std::move(parameter));
+            made->push_back(range);
+        }
+
+        std::sort(made->begin(), made->end(), [](const auto& a, const auto& b) { return a.id < b.id; });
+        ranges = made.get();
+        rangeTables.push_back(std::move(made));
+        listenTo(found);
+        return found;
+    }
+
+    // A step's own name where it has one, the unit's text for a value where it gives one, else the value.
+    std::string parameterText(std::uint32_t id, double value) override
+    {
+        const auto* const range = rangeOf(id);
+        if (range == nullptr)
+            return {};
+        const auto own = unitValue(*range, value);
+
+        if (range->unit == kAudioUnitParameterUnit_Indexed)
+        {
+            CFArrayRef names = nullptr;
+            UInt32 size = sizeof names;
+            if (AudioUnitGetProperty(unit, kAudioUnitProperty_ParameterValueStrings, kAudioUnitScope_Global, id, &names,
+                                     &size) == noErr &&
+                names != nullptr)
+            {
+                const auto index = static_cast<CFIndex>(std::lround(own - range->minimum));
+                auto text =
+                    index >= 0 && index < CFArrayGetCount(names) ? textOf(CFArrayGetValueAtIndex(names, index)) : "";
+                CFRelease(names);
+                if (!text.empty())
+                    return text;
+            }
+        }
+
+        AudioUnitParameterValue asked = own;
+        AudioUnitParameterStringFromValue text{id, &asked, nullptr};
+        UInt32 size = sizeof text;
+        if (AudioUnitGetProperty(unit, kAudioUnitProperty_ParameterStringFromValue, kAudioUnitScope_Global, 0, &text,
+                                 &size) == noErr &&
+            text.outString != nullptr)
+        {
+            auto given = textOf(text.outString);
+            CFRelease(text.outString);
+            if (!given.empty())
+                return given;
+        }
+
+        if (range->unit == kAudioUnitParameterUnit_Boolean)
+            return own >= 0.5f ? "On" : "Off";
+        char number[32];
+        std::snprintf(number, sizeof number, "%.2f", static_cast<double>(own));
+        return number;
+    }
+
+    // Its state as a binary property list: for a document, its document form where it has one, and otherwise its class
+    // info.
+    std::optional<std::string> state(PluginStateUse use, PluginError& error) override
+    {
+        CFPropertyListRef info = nullptr;
+        UInt32 size = sizeof info;
+        OSStatus status = kAudioUnitErr_InvalidProperty;
+        if (use == PluginStateUse::document)
+            status = AudioUnitGetProperty(unit, kAudioUnitProperty_ClassInfoFromDocument, kAudioUnitScope_Global, 0,
+                                          &info, &size);
+        if (status != noErr || info == nullptr)
+        {
+            info = nullptr;
+            size = sizeof info;
+            status = AudioUnitGetProperty(unit, kAudioUnitProperty_ClassInfo, kAudioUnitScope_Global, 0, &info, &size);
+        }
+        if (status != noErr || info == nullptr)
+        {
+            error = {reason("It gave no state", status), "state", status};
+            return std::nullopt;
+        }
+        const auto data = CFPropertyListCreateData(nullptr, info, kCFPropertyListBinaryFormat_v1_0, 0, nullptr);
+        CFRelease(info);
+        if (data == nullptr)
+        {
+            error = {"Its state couldn't be written as a property list.", "state", 0};
+            return std::nullopt;
+        }
+        std::string bytes(reinterpret_cast<const char*>(CFDataGetBytePtr(data)),
+                          static_cast<std::size_t>(CFDataGetLength(data)));
+        CFRelease(data);
+        return bytes;
+    }
+
+    // A document's state given as one, which a unit may take differently, keeping settings of its own; a unit that
+    // doesn't tell them apart takes it as any other. Its listeners, its own window's among them, are told every value
+    // changed, and the host reads them again.
+    bool setState(std::string_view state, PluginStateUse use, PluginError& error) override
+    {
+        const auto data =
+            CFDataCreate(nullptr, reinterpret_cast<const UInt8*>(state.data()), static_cast<CFIndex>(state.size()));
+        const auto info = CFPropertyListCreateWithData(nullptr, data, kCFPropertyListImmutable, nullptr, nullptr);
+        CFRelease(data);
+        if (info == nullptr)
+        {
+            error = {"It isn't an Audio Unit's state.", "setState", 0};
+            return false;
+        }
+
+        OSStatus status = kAudioUnitErr_InvalidProperty;
+        if (use == PluginStateUse::document)
+            status = AudioUnitSetProperty(unit, kAudioUnitProperty_ClassInfoFromDocument, kAudioUnitScope_Global, 0,
+                                          &info, sizeof info);
+        if (status != noErr)
+            status =
+                AudioUnitSetProperty(unit, kAudioUnitProperty_ClassInfo, kAudioUnitScope_Global, 0, &info, sizeof info);
+        CFRelease(info);
+        if (status != noErr)
+        {
+            error = {reason("It didn't take the state", status), "setState", status};
+            return false;
+        }
+        AudioUnitParameter every{unit, kAUParameterListener_AnyParameter, kAudioUnitScope_Global, 0};
+        AUParameterListenerNotify(nullptr, nullptr, &every);
+        client.notice(PluginNotice::values);
+        return true;
     }
 
 private:
@@ -303,8 +572,14 @@ private:
         int frames = 0;
     };
 
+    // The properties it tells of that the host follows.
+    static constexpr AudioUnitPropertyID noticed[] = {kAudioUnitProperty_Latency, kAudioUnitProperty_ParameterList};
+
     AudioUnit unit;
     PluginFormatClient& client;
+    dispatch_queue_t listenerQueue = nullptr;
+    AUEventListenerRef listener = nullptr;
+    std::vector<AudioUnitParameterID> listened;
     bool initialized = false;
     const char* gone = nullptr;
     int failures = 0;
@@ -321,7 +596,20 @@ private:
     // are.
     std::vector<std::vector<float>> heldIn;
     std::vector<std::vector<float>> heldOut;
+    std::vector<const float*> heldInChannels;
+    std::vector<float*> heldOutChannels;
     UInt32 held = 0;
+
+    // Its parameters' ranges, sorted by ID, which the audio thread and the listener's queue read while the main thread
+    // may make new ones; every one kept for as long as the unit is.
+    std::vector<std::unique_ptr<const std::vector<ParameterRange>>> rangeTables;
+    std::atomic<const std::vector<ParameterRange>*> ranges{nullptr};
+
+    // The changes scheduled for a render; and for a unit fed full blocks, those gathered for its next one, at their
+    // frames in it.
+    std::vector<AudioUnitParameterEvent> events;
+    std::vector<AudioUnitParameterEvent> heldEvents;
+    UInt32 heldEventCount = 0;
 
     // During a render, on the audio thread: its input, how much of it the unit has pulled, and where the program is in
     // time, which the host's callbacks answer from and refuse outside a render.
@@ -337,8 +625,10 @@ private:
                 static_cast<int>(channels(kAudioUnitScope_Output, 0))};
     }
 
-    // Renders frames into its own buffers, at the time given, its sample time running on by exactly the frames.
-    OSStatus render(Source from, UInt32 frames, const PluginTime* time, int offset)
+    // Renders frames into its own buffers, at the time given, with the changes scheduled for it, its sample time
+    // running on by exactly the frames.
+    OSStatus render(Source from, UInt32 frames, const PluginTime* time, int offset,
+                    const AudioUnitParameterEvent* changes, UInt32 changeCount)
     {
         source = from;
         pulled = 0;
@@ -371,10 +661,19 @@ private:
         for (std::size_t c = 0; c < outputs.size(); ++c)
             buffers->mBuffers[c] = {1, frames * static_cast<UInt32>(sizeof(float)), outputs[c].data()};
 
+        if (changeCount > 0)
+            AudioUnitScheduleParameters(unit, changes, changeCount);
         AudioUnitRenderActionFlags flags = 0;
         const auto status = AudioUnitRender(unit, &flags, &stamp, 0, frames, buffers);
         source = {};
         renderTime = nullptr;
+
+        // The values of a render that failed, which a unit drops with it, are set at once, so its processing still
+        // has them.
+        if (status != noErr)
+            for (UInt32 i = 0; i < changeCount; ++i)
+                AudioUnitSetParameter(unit, changes[i].parameter, kAudioUnitScope_Global, 0,
+                                      changes[i].eventValues.immediate.value, 0);
 
         // Its frames are used up whether or not it rendered them; a unit given the same time again may give back what
         // it gave the last time, as Apple's SDK does.
@@ -427,20 +726,22 @@ private:
             std::fill_n(to, frames, 0.0f);
     }
 
-    // A unit fed full blocks: the block's input gathered into the next full one and its output given from the last,
-    // rendering each time one is full.
+    // A unit fed full blocks: the block's input and changes gathered into the next full one and its output given from
+    // the last, rendering each time one is full.
     bool processHeld(PluginBlock& block)
     {
-        std::vector<const float*> in(heldIn.size());
-        std::vector<float*> out(heldOut.size());
-        for (std::size_t c = 0; c < heldIn.size(); ++c)
-            in[c] = heldIn[c].data();
-        for (std::size_t c = 0; c < heldOut.size(); ++c)
-            out[c] = heldOut[c].data();
-
+        int next = 0;
         for (int done = 0; done < block.frames;)
         {
             const auto frames = std::min<UInt32>(maximumFrames - held, static_cast<UInt32>(block.frames - done));
+            const bool last = done + static_cast<int>(frames) >= block.frames;
+            for (; next < block.changeCount && (last || block.changes[next].offset < done + static_cast<int>(frames));
+                 ++next)
+                if (const auto* const range = rangeOf(block.changes[next].id); range != nullptr && range->writable)
+                    holdChange(*range, block.changes[next].value,
+                               held + static_cast<UInt32>(std::clamp(block.changes[next].offset - done, 0,
+                                                                     static_cast<int>(frames) - 1)));
+
             for (std::size_t c = 0; c < heldIn.size(); ++c)
                 passDry(block.inputs, block.inputChannels, static_cast<int>(c), done, heldIn[c].data() + held, frames);
             for (int c = 0; c < block.outputChannels; ++c)
@@ -453,15 +754,119 @@ private:
 
             if (held == maximumFrames)
             {
-                const auto status = render({in.data(), static_cast<int>(in.size()), 0, static_cast<int>(maximumFrames)},
-                                           maximumFrames, block.time, done);
+                const auto status = render({heldInChannels.data(), static_cast<int>(heldInChannels.size()), 0,
+                                            static_cast<int>(maximumFrames)},
+                                           maximumFrames, block.time, done, heldEvents.data(), heldEventCount);
                 held = 0;
-                if (!take(status, maximumFrames, in.data(), static_cast<int>(in.size()), 0, out.data(),
-                          static_cast<int>(out.size()), 0))
+                heldEventCount = 0;
+                if (!take(status, maximumFrames, heldInChannels.data(), static_cast<int>(heldInChannels.size()), 0,
+                          heldOutChannels.data(), static_cast<int>(heldOutChannels.size()), 0))
                     return false;
             }
         }
         return true;
+    }
+
+    // A change gathered for the next full block; with no room left, the last one gathered of the same parameter takes
+    // its value, or with none, the value is set at once.
+    void holdChange(const ParameterRange& range, double value, UInt32 frame)
+    {
+        if (heldEventCount < heldEvents.size())
+        {
+            heldEvents[heldEventCount++] = eventOf(range, value, frame);
+            return;
+        }
+        for (auto i = heldEventCount; i-- > 0;)
+            if (heldEvents[i].parameter == range.id)
+            {
+                heldEvents[i].eventValues.immediate.value = unitValue(range, value);
+                return;
+            }
+        AudioUnitSetParameter(unit, range.id, kAudioUnitScope_Global, 0, unitValue(range, value), 0);
+    }
+
+    static AudioUnitParameterEvent eventOf(const ParameterRange& range, double value, UInt32 frame)
+    {
+        AudioUnitParameterEvent event{};
+        event.scope = kAudioUnitScope_Global;
+        event.element = 0;
+        event.parameter = range.id;
+        event.eventType = kParameterEvent_Immediate;
+        event.eventValues.immediate.bufferOffset = frame;
+        event.eventValues.immediate.value = unitValue(range, value);
+        return event;
+    }
+
+    const ParameterRange* rangeOf(AudioUnitParameterID id) const
+    {
+        const auto* const now = ranges.load();
+        if (now == nullptr)
+            return nullptr;
+        const auto found =
+            std::lower_bound(now->begin(), now->end(), id,
+                             [](const ParameterRange& range, AudioUnitParameterID one) { return range.id < one; });
+        return found != now->end() && found->id == id ? &*found : nullptr;
+    }
+
+    void set(AudioUnitParameterID id, double value)
+    {
+        if (const auto* const range = rangeOf(id); range != nullptr && range->writable)
+            AudioUnitSetParameter(unit, id, kAudioUnitScope_Global, 0, unitValue(*range, value), 0);
+    }
+
+    std::vector<AudioUnitParameterID> parameterIds() const
+    {
+        UInt32 size = 0;
+        if (AudioUnitGetPropertyInfo(unit, kAudioUnitProperty_ParameterList, kAudioUnitScope_Global, 0, &size,
+                                     nullptr) != noErr ||
+            size == 0)
+            return {};
+        std::vector<AudioUnitParameterID> ids(size / sizeof(AudioUnitParameterID));
+        if (AudioUnitGetProperty(unit, kAudioUnitProperty_ParameterList, kAudioUnitScope_Global, 0, ids.data(),
+                                 &size) != noErr)
+            return {};
+        ids.resize(size / sizeof(AudioUnitParameterID));
+        return ids;
+    }
+
+    // Listens for the gestures and values of exactly these parameters, as a listener can't ask for every one.
+    void listenTo(const std::vector<PluginParameter>& parameters)
+    {
+        if (listener == nullptr)
+            return;
+        constexpr AudioUnitEventType kinds[] = {kAudioUnitEvent_BeginParameterChangeGesture,
+                                                kAudioUnitEvent_ParameterValueChange,
+                                                kAudioUnitEvent_EndParameterChangeGesture};
+        const auto each = [&](AudioUnitParameterID id, auto change) {
+            for (const auto kind : kinds)
+            {
+                AudioUnitEvent event{};
+                event.mEventType = kind;
+                event.mArgument.mParameter = {unit, id, kAudioUnitScope_Global, 0};
+                change(listener, nullptr, &event);
+            }
+        };
+        for (const auto id : listened)
+            each(id, AUEventListenerRemoveEventType);
+        listened.clear();
+        for (const auto& parameter : parameters)
+        {
+            each(parameter.id, AUEventListenerAddEventType);
+            listened.push_back(parameter.id);
+        }
+    }
+
+    // An edit of its own, on the listener's queue.
+    void heard(const AudioUnitEvent& event, AudioUnitParameterValue value)
+    {
+        const auto id = event.mArgument.mParameter.mParameterID;
+        if (event.mEventType == kAudioUnitEvent_BeginParameterChangeGesture)
+            client.edit({PluginEdit::Kind::begin, id, 0.0});
+        else if (event.mEventType == kAudioUnitEvent_EndParameterChangeGesture)
+            client.edit({PluginEdit::Kind::end, id, 0.0});
+        else if (const auto* const range = rangeOf(id);
+                 event.mEventType == kAudioUnitEvent_ParameterValueChange && range != nullptr)
+            client.edit({PluginEdit::Kind::value, id, normalized(*range, value)});
     }
 
     UInt32 busCount(AudioUnitScope scope) const
@@ -536,8 +941,11 @@ private:
 
     static void propertyChanged(void* context, AudioUnit, AudioUnitPropertyID id, AudioUnitScope, AudioUnitElement)
     {
+        auto& client = static_cast<AudioUnitPlugin*>(context)->client;
         if (id == kAudioUnitProperty_Latency)
-            static_cast<AudioUnitPlugin*>(context)->client.notice(PluginNotice::latency);
+            client.notice(PluginNotice::latency);
+        else if (id == kAudioUnitProperty_ParameterList)
+            client.notice(PluginNotice::parameters);
     }
 
     // The host's callbacks, answered from where the program is in time for the render under way, and refused outside
