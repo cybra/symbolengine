@@ -19,7 +19,17 @@ struct PluginIdentity
     std::string format;
     std::string id;
 
+    /** An Audio Unit's identity: its type, subtype and manufacturer codes as raw values, each as 8 hexadecimal digits
+        joined by hyphens, such as "61756678-53706b72-5379456e" for aufx Spkr SyEn, so codes holding spaces, zeros or
+        bytes past ASCII are kept exactly. */
+    static PluginIdentity audioUnit(std::uint32_t type, std::uint32_t subtype, std::uint32_t manufacturer);
+
     bool operator==(const PluginIdentity&) const = default;
+
+    bool operator<(const PluginIdentity& other) const
+    {
+        return format != other.format ? format < other.format : id < other.id;
+    }
 };
 
 enum class PluginKind
@@ -29,16 +39,43 @@ enum class PluginKind
     other,
 };
 
-/** What the host knows of a plugin before making it: who it is, where its code lies and what it says it is. */
+/** How many channels a plugin's main buses have. */
+struct PluginLayout
+{
+    int inputs = 2;
+    int outputs = 2;
+
+    bool operator==(const PluginLayout&) const = default;
+};
+
+/** What the host knows of a plugin before making it: who it is, where its code lies and what it says it is, and what
+    a scan found it does, so a program knows it without making it. */
 struct PluginDescription
 {
-    PluginIdentity identity;
-    std::filesystem::path location;
-    std::string name;
-    std::string maker;
-    std::string version;
+    PluginIdentity identity{};
+    std::filesystem::path location{};
+    std::string name{};
+    std::string maker{};
+    std::string version{};
     PluginKind kind = PluginKind::effect;
+
+    /** The layouts of its main buses it took when a scan made it, none for a plugin no scan made; one with no outputs
+        gives no audio out. */
+    std::vector<PluginLayout> layouts{};
+
+    /** Whether it has an editor of its own. */
+    bool editor = false;
+
+    /** The version of its format's SDK it says it was built with, where it says. */
+    std::string sdk{};
+
+    bool operator==(const PluginDescription&) const = default;
 };
+
+/** Which of two plugin versions is the newer, as a negative number, 0 or a positive number like strcmp's: compared
+    piece by piece, the runs of digits as numbers and the rest as text, so "1.10" is newer than "1.9" and "2.0" the
+    same as "2.0.0". */
+int compareVersions(std::string_view a, std::string_view b);
 
 /** Why something asked of a plugin failed: in words for people, with the step it failed at and the format's own code. */
 struct PluginError
@@ -48,15 +85,6 @@ struct PluginError
     std::int64_t code = 0;
 
     explicit operator bool() const { return !message.empty(); }
-};
-
-/** How many channels a plugin's main buses have. */
-struct PluginLayout
-{
-    int inputs = 2;
-    int outputs = 2;
-
-    bool operator==(const PluginLayout&) const = default;
 };
 
 /** How a plugin is to run: its rate, the longest block it is given, and whether it renders offline, where it may take

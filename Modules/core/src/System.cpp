@@ -20,7 +20,11 @@
     #include <sys/wait.h>
     #if defined(__APPLE__)
         #include <crt_externs.h>
+        #include <sys/sysctl.h>
+        #include <sys/time.h>
     #else
+        #include <ctime>
+        #include <fstream>
         #include <unistd.h>
 extern char** environ;
     #endif
@@ -90,6 +94,48 @@ bool openInBrowser(std::string_view url)
         return false;
     int status = 0;
     return waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+#endif
+}
+
+std::string_view architecture()
+{
+#if defined(__aarch64__) || defined(_M_ARM64)
+    return "arm64";
+#elif defined(__x86_64__) || defined(_M_X64)
+    return "x86_64";
+#elif defined(__arm__) || defined(_M_ARM)
+    return "arm";
+#elif defined(__i386__) || defined(_M_IX86)
+    return "x86";
+#else
+    return "unknown";
+#endif
+}
+
+std::chrono::system_clock::time_point computerStarted()
+{
+    using namespace std::chrono;
+#if defined(_WIN32)
+    // The time since it started counts its sleep too.
+    return system_clock::now() - duration_cast<system_clock::duration>(milliseconds(GetTickCount64()));
+#elif defined(__APPLE__)
+    timeval started{};
+    std::size_t size = sizeof started;
+    int name[] = {CTL_KERN, KERN_BOOTTIME};
+    if (sysctl(name, 2, &started, &size, nullptr, 0) == 0)
+        return system_clock::time_point(
+            duration_cast<system_clock::duration>(seconds(started.tv_sec) + microseconds(started.tv_usec)));
+    return {};
+#else
+    // The kernel's own record of when it started, in whole seconds.
+    std::ifstream stat("/proc/stat");
+    for (std::string line; std::getline(stat, line);)
+        if (line.starts_with("btime "))
+            return system_clock::time_point(duration_cast<system_clock::duration>(seconds(std::stoll(line.substr(6)))));
+    timespec since{};
+    clock_gettime(CLOCK_BOOTTIME, &since);
+    return system_clock::now() -
+           duration_cast<system_clock::duration>(seconds(since.tv_sec) + nanoseconds(since.tv_nsec));
 #endif
 }
 
