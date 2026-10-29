@@ -225,13 +225,19 @@ int main(int argc, char** argv)
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
     });
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    // Ten blocks played before the value is set and ten after the save, however long a busy machine takes over them.
+    const auto playedTo = [&blocks](int count) {
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (blocks < count && std::chrono::steady_clock::now() < until)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    };
+    playedTo(10);
     AudioUnitSetParameter(unit, 1, kAudioUnitScope_Global, 0, 0.5f, 0);
     savesAs("0.5", "Set while playing");
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    playedTo(blocks + 10);
     playing = false;
     host.join();
-    check(blocks > 10 && silent == 0, "Set while playing: " + std::to_string(blocks.load()) + " blocks rendered, " +
+    check(blocks >= 20 && silent == 0, "Set while playing: " + std::to_string(blocks.load()) + " blocks rendered, " +
                                           std::to_string(silent.load()) + " of them silent, the first block " +
                                           std::to_string(firstSilent.load()) + " after a gap of " +
                                           std::to_string(gapBeforeSilent.load()) + " ms, and " +
@@ -264,9 +270,10 @@ int main(int argc, char** argv)
                 std::this_thread::sleep_for(std::chrono::milliseconds(2));
             }
         });
+        // Until a hundred blocks have played, however long a busy machine takes over them.
         int set = 0;
-        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
-        while (std::chrono::steady_clock::now() < until)
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+        while (rendered < 100 && std::chrono::steady_clock::now() < until)
         {
             AudioUnitSetParameter(unit, 1, kAudioUnitScope_Global, 0, (++set % 2) != 0 ? 1.0f : -1.0f, 0);
             std::this_thread::yield();
@@ -275,7 +282,7 @@ int main(int argc, char** argv)
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         going = false;
         player.join();
-        check(rendered > 50 && quietBlocks == 0,
+        check(rendered >= 100 && quietBlocks == 0,
               "Set over and over while playing: " + std::to_string(set) + " values set, " +
                   std::to_string(rendered.load()) + " blocks rendered, " + std::to_string(quietBlocks.load()) +
                   " of them silent");
