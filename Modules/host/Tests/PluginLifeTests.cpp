@@ -9,7 +9,6 @@
 #include <atomic>
 #include <cfenv>
 #include <clocale>
-#include <cstdio>
 #include <filesystem>
 #include <mutex>
 #include <stdexcept>
