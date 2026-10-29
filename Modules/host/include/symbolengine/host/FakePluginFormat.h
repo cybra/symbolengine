@@ -49,6 +49,10 @@ public:
         bool failToMake = false;
         bool failToActivate = false;
 
+        /** How many times it activates before it refuses as failToActivate does, as a plugin that can't be prepared
+            again; any number while negative. */
+        int activations = -1;
+
         /** How many turns of the main thread making it takes before it says it is made; 0 says so before make returns. */
         int turnsToMake = 0;
 

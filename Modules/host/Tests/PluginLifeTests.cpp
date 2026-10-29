@@ -683,3 +683,104 @@ TEST_CASE("A plugin that throws from its processing is switched off, its audio p
     CHECK(blocks == 2);
     CHECK(rig.fake.calls("throws").size() == calls);
 }
+
+TEST_CASE("A block that comes while a plugin is held for a call that can't overlap its processing is silent, and one "
+          "that comes once it has failed passes as it came")
+{
+    Rig rig;
+
+    // Plays one block of ones through the plugin on an audio thread of the test's own once told to.
+    const auto playOnes = [](Plugin& plugin) {
+        std::vector<float> left(64, 1.0f), right(64, 1.0f);
+        float* channels[] = {left.data(), right.data()};
+        plugin.process(channels, 2, 64);
+        return left;
+    };
+
+    // A reset that takes its time, during which a block comes.
+    FakePluginFormat::Script slow;
+    slow.gain = 0.5f;
+    std::atomic<bool> resetting{false};
+    slow.inside = [&resetting](std::string_view call) {
+        if (call == "reset")
+        {
+            resetting = true;
+            std::this_thread::sleep_for(300ms);
+            resetting = false;
+        }
+    };
+    rig.fake.script("slowReset", slow);
+    auto plugin = rig.made("slowReset");
+    REQUIRE(plugin->prepare({48000.0, 256, false}));
+    std::vector<float> during;
+    std::thread audio([&] {
+        while (!resetting)
+            std::this_thread::sleep_for(1ms);
+        during = playOnes(*plugin);
+    });
+    REQUIRE(plugin->reset());
+    audio.join();
+    CHECK(std::all_of(during.begin(), during.end(), [](float sample) { return sample == 0.0f; }));
+    std::vector<float> after;
+    std::thread([&] { after = playOnes(*plugin); }).join();
+    CHECK(after[0] == 0.5f);
+
+    // A reset that fails it, after which the audio passes it by.
+    FakePluginFormat::Script throwing;
+    throwing.gain = 0.5f;
+    throwing.inside = [](std::string_view call) {
+        if (call == "reset")
+            throw std::runtime_error("The reset failed.");
+    };
+    rig.fake.script("throwingReset", throwing);
+    auto broken = rig.made("throwingReset");
+    REQUIRE(broken->prepare({48000.0, 256, false}));
+    CHECK_FALSE(broken->reset());
+    CHECK(broken->state() == Plugin::State::failed);
+    std::thread([&] { after = playOnes(*broken); }).join();
+    CHECK(after[0] == 1.0f);
+}
+
+TEST_CASE("A hold that leaves a plugin off the audio, as when its state is taken unprepared or it can't be prepared "
+          "again, by the program or after a notice, lets the audio pass it as it came again")
+{
+    Rig rig;
+    const auto playOnes = [](Plugin& plugin) {
+        std::vector<float> left(64, 1.0f), right(64, 1.0f);
+        std::thread([&] {
+            float* channels[] = {left.data(), right.data()};
+            plugin.process(channels, 2, 64);
+        }).join();
+        return left[0];
+    };
+    FakePluginFormat::Script once;
+    once.gain = 0.5f;
+    once.activations = 1;
+    PluginParameter level;
+    level.id = 7;
+    level.name = "Level";
+    once.parameters = {level};
+    rig.fake.script("once", once);
+    auto plugin = rig.made("once");
+
+    // Its state taken while it isn't prepared, with a value waiting for it.
+    REQUIRE(plugin->setParameter(7, 0.25));
+    REQUIRE(plugin->saveState(PluginStateUse::document));
+    CHECK(playOnes(*plugin) == 1.0f);
+
+    // Prepared, then refusing to be prepared again.
+    REQUIRE(plugin->prepare({48000.0, 256, false}));
+    CHECK(playOnes(*plugin) == 0.5f);
+    CHECK_FALSE(plugin->prepare({48000.0, 512, false}));
+    CHECK(plugin->state() == Plugin::State::inactive);
+    CHECK(playOnes(*plugin) == 1.0f);
+
+    // Prepared, then saying its latency changed, and refusing to be prepared again for it.
+    auto noticed = rig.made("once");
+    REQUIRE(noticed->prepare({48000.0, 256, false}));
+    rig.fake.notify("once", PluginNotice::latency);
+    REQUIRE(rig.main.turnUntil([&] { return noticed->state() != Plugin::State::active; }, 2s));
+    CHECK(noticed->state() == Plugin::State::inactive);
+    CHECK(playOnes(*noticed) == 1.0f);
+    rig.checkNoMisuse();
+}

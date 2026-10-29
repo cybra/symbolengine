@@ -115,11 +115,14 @@ public:
         if (active)
             misuse("activated while active");
 
-        if (script.failToActivate)
+        if (script.failToActivate || script.activations == 0)
         {
             error = {"The fake plugin was told not to activate.", "activate", 2};
             return false;
         }
+
+        if (script.activations > 0)
+            --script.activations;
 
         delay.assign(static_cast<std::size_t>(std::max(0, layout.outputs)),
                      std::vector<float>(static_cast<std::size_t>(std::max(1, script.latency)), 0.0f));

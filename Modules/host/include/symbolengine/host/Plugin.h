@@ -181,8 +181,9 @@ public:
     void whenFree(std::function<void()> then);
 
     /** Plays a block through it in place on the audio thread, as many channels as the program has, the plugin's
-        layout fitted to them. While it can't be called, being made, prepared or taken down, or failed, the block
-        passes as it came. */
+        layout fitted to them. While it is held off the audio for a call that can't overlap its processing, as while
+        it is prepared, given a state, reset or taken down, the block is silent, never heard unprocessed; before it is
+        first prepared, or once it has failed, the block passes as it came, so the program plays past it. */
     void process(float* const* channels, int channelCount, int frames) noexcept;
 
     /** The same, with the program's own changes to its parameters for the block, as its automation gives them, in

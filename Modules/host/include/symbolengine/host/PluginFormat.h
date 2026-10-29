@@ -161,7 +161,7 @@ struct PluginParameterChange
     its timeline, in frames at the plugin's rate, which holds still while it is stopped; the device's time for that
     frame in the steady clock's nanoseconds, 0 where it isn't known; and its tempo in beats a minute and its meter,
     0 where it has none. A discontinuity, as a jump or a new take starts with, clears what the plugin holds of the audio
-    before it. */
+    before it; a loop returning to its start is none, so tails carry over it. */
 struct PluginTime
 {
     bool playing = false;

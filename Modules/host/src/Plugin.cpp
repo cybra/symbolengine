@@ -152,6 +152,10 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     // Shared with the audio thread.
     std::atomic<State> state{State::making};
     std::atomic<bool> accepting{false}, inProcess{false}, processing{false};
+
+    // Whether the main thread holds it off the audio for a call that can't overlap its processing, during which a block
+    // is silent, never heard unprocessed.
+    std::atomic<bool> holding{false};
     PluginFormatInstance* audioInstance = nullptr;
     std::vector<std::vector<float>> inputs, outputs;
     std::vector<const float*> inputPointers;
@@ -336,6 +340,7 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     void fail(const char* step, std::string message)
     {
         accepting = false;
+        holding = false;
         problem = {std::move(message), step, 0};
         state = State::failed;
         tell(PluginChange::failed);
@@ -371,6 +376,8 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     // out for good.
     bool hold()
     {
+        // Holding before accepting is left, so no block between the two passes unprocessed.
+        holding = true;
         accepting = false;
         const auto until = std::chrono::steady_clock::now() + host->options.audioLimit;
 
@@ -382,6 +389,7 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
                                std::to_string(host->options.audioLimit.count()) + " ms.",
                            "process", 0};
                 state = State::failed;
+                endHold();
                 tell(PluginChange::stuck);
                 return false;
             }
@@ -401,6 +409,10 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
 
         return true;
     }
+
+    // Ends a hold that leaves it off the audio, as when it is released, can't be prepared again or has failed: a block
+    // passes as it came again.
+    void endHold() { holding = false; }
 
     void keepUnheard(const PluginParameterChange& change)
     {
@@ -555,6 +567,7 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     {
         audioInstance = instance.get();
         accepting = state == State::active;
+        holding = false;
     }
 
     bool activate()
@@ -713,22 +726,24 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
             const auto before = std::make_pair(latency, tail);
             const auto layoutBefore = layout;
 
-            if (wasActive && (!hold() || !deactivate()))
+            if ((wasActive && (!hold() || !deactivate())) || state == State::failed)
+            {
+                endHold();
                 return;
-
-            if (state == State::failed)
-                return;
+            }
 
             state = State::inactive;
 
             if (has(what, PluginNotice::buses) && !settleLayout())
             {
+                endHold();
                 tell(PluginChange::failed);
                 return;
             }
 
             if (wasActive && !activate())
             {
+                endHold();
                 tell(PluginChange::failed);
                 return;
             }
@@ -788,6 +803,7 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
 
         call("destroy", [this] { instance.reset(); });
         state = State::failed;
+        endHold();
     }
 };
 
@@ -963,18 +979,21 @@ bool Plugin::prepare(const PluginSetup& setup)
     if (!inner->usable("prepare"))
         return false;
 
-    if (inner->state == State::active && (!inner->hold() || !inner->deactivate()))
+    if ((inner->state == State::active && (!inner->hold() || !inner->deactivate())) || inner->state == State::failed)
+    {
+        inner->endHold();
         return false;
-
-    if (inner->state == State::failed)
-        return false;
+    }
 
     inner->state = State::inactive;
     inner->setup = setup;
 
     // Values set while it wasn't prepared reach its processing before any block.
     if (!inner->activate() || !inner->flushUnheard())
+    {
+        inner->endHold();
         return false;
+    }
 
     inner->open();
     return true;
@@ -987,6 +1006,8 @@ void Plugin::release()
 
     if (inner->hold() && inner->deactivate() && inner->state != State::failed)
         inner->state = State::inactive;
+
+    inner->endHold();
 }
 
 bool Plugin::reset()
@@ -1035,10 +1056,15 @@ std::optional<std::string> Plugin::saveState(PluginStateUse use)
         const bool wasAccepting = held.accepting;
 
         if (!held.hold() || !held.flushUnheard())
+        {
+            held.endHold();
             return std::nullopt;
+        }
 
         if (wasAccepting)
             held.open();
+        else
+            held.endHold();
     }
 
     std::optional<std::string> state;
@@ -1176,6 +1202,10 @@ void Plugin::process(float* const* channels, int channelCount, int frames, const
 
     if (!held.accepting)
     {
+        if (held.holding)
+            for (int c = 0; c < channelCount; ++c)
+                std::fill_n(channels[c], frames, 0.0f);
+
         held.inProcess = false;
         return;
     }
