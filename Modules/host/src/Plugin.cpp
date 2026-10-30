@@ -1393,6 +1393,23 @@ bool Plugin::hasEditor()
     return has;
 }
 
+void Plugin::editAsEditor(const PluginEdit& edit)
+{
+    if (!inner->host->onMainThread())
+    {
+        inner->host->misuse("editAsEditor was called on a thread other than the main thread");
+        return;
+    }
+
+    if (inner->state != State::failed)
+        inner->edit(edit);
+}
+
+bool Plugin::editorOpen() const
+{
+    return inner->editorOpen;
+}
+
 std::unique_ptr<PluginEditor> PluginEditor::open(std::shared_ptr<Plugin> plugin, void* view, PluginEditorFrame& frame,
                                                  PluginError& error)
 {

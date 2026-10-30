@@ -94,10 +94,20 @@ HMODULE thisModule()
 }
 
 std::atomic<int> sent{0};
+std::atomic<int> holding{0};
+constexpr UINT_PTR holdTimer = 1;
 
-// Counts each key the system sends it, and keeps them, as a view that takes every key does.
+// Counts each key the system sends it, and keeps them, as a view that takes every key does; and holds up the main
+// thread from its timer when told to.
 LRESULT CALLBACK viewProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
+    if (message == WM_TIMER && wParam == holdTimer)
+    {
+        KillTimer(hwnd, holdTimer);
+        Sleep(static_cast<DWORD>(holding.load()));
+        return 0;
+    }
+
     if (message == WM_KEYDOWN || message == WM_SYSKEYDOWN)
     {
         ++sent;
@@ -223,6 +233,12 @@ bool awareAsParent(void* parent)
 bool takesDrops(void* view)
 {
     return static_cast<Native*>(view)->dropping == S_OK;
+}
+
+void holdLater(void* view, int milliseconds)
+{
+    holding = milliseconds;
+    SetTimer(static_cast<Native*>(view)->own, holdTimer, 20, nullptr);
 }
 
 int keysSent()

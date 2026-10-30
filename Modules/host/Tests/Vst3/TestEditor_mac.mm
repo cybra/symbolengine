@@ -114,6 +114,13 @@ bool takesDrops(void*)
     return true;
 }
 
+void holdLater(void*, int milliseconds)
+{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+      [NSThread sleepForTimeInterval:milliseconds / 1000.0];
+    });
+}
+
 int keysSent()
 {
     return 0;

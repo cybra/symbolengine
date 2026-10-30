@@ -304,6 +304,12 @@ public:
         return kResultTrue;
     }
 
+    void holdLater(int milliseconds)
+    {
+        if (native != nullptr)
+            testEditor::holdLater(native, milliseconds);
+    }
+
     // Asks its host to be resized, on the main thread or from a thread of its own.
     void ask(int askedWidth, int askedHeight, bool fromThread)
     {
@@ -407,6 +413,7 @@ public:
         parameters.addParameter(STR16("Ask height"), nullptr, 0, 0.0, 0, testIds::askHeight);
         parameters.addParameter(STR16("Ask resize"), nullptr, 2, 0.0, 0, testIds::askResize);
         parameters.addParameter(STR16("Request editor"), nullptr, 1, 0.0, 0, testIds::requestEditor);
+        parameters.addParameter(STR16("Hold main thread"), nullptr, 0, 0.0, 0, testIds::holdMainThread);
         return result;
     }
 
@@ -451,6 +458,10 @@ public:
             else
                 misuse("told to ask to be resized with no view");
         }
+
+        if (id == testIds::holdMainThread && value > 0.0)
+            if (auto* open = record->view.load())
+                open->holdLater(static_cast<int>(std::lround(value * 1000.0)));
 
         if (id == testIds::requestEditor && value > 0.5)
             if (FUnknownPtr<IComponentHandler2> handler(componentHandler); handler)

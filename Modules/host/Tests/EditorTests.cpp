@@ -6,6 +6,7 @@
 #if SYMBOLENGINE_PLUGIN_WINDOWS
     #include <symbolengine/host/PluginWindow.h>
     #include <symbolengine/host/PluginWindows.h>
+    #include <symbolengine/ui/MessageLoop.h>
 #endif
 
 #include "TestMainThread.h"
@@ -21,8 +22,10 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -299,8 +302,13 @@ TEST_CASE("Plugin windows float above the program's while it is in front, and st
     ui::Window program({.title = "Program"});
     bool front = true;
     void* tool = nullptr;
-    PluginWindows group(
-        {&program, [&](void* window) { return window == tool; }, {U' '}, nullptr, [&] { return front; }});
+    PluginWindows group({&program,
+                         [&](void* window) { return window == tool; },
+                         {U' '},
+                         nullptr,
+                         [&] { return front; },
+                         100ms,
+                         nullptr});
     auto first = rig.made("first");
     auto second = rig.made("second");
     PluginError error;
@@ -364,7 +372,8 @@ TEST_CASE("The program's keys reach it from a plugin window whatever the plugin 
     FakeRig rig;
     ui::Window program({.title = "Program"});
     std::vector<char32_t> taken;
-    PluginWindows group({&program, nullptr, {U' '}, [&](char32_t key) { taken.push_back(key); }, [] { return true; }});
+    PluginWindows group(
+        {&program, nullptr, {U' '}, [&](char32_t key) { taken.push_back(key); }, [] { return true; }, 100ms, nullptr});
     auto plugin = rig.made("keys");
     PluginError error;
     auto window = PluginWindow::open(plugin, {"Keys", 0, &group}, error);
@@ -760,6 +769,158 @@ TEST_CASE(
     CHECK(misuses().empty());
 }
 
+namespace
+{
+
+// The value of a script run in a window's page of parameters, once it gives one.
+template <typename Turn>
+Value inPage(PluginWindow& window, const std::string& script, Turn turnUntil)
+{
+    auto* page = window.parameterPage();
+    REQUIRE(page != nullptr);
+    std::optional<Value> result;
+    page->run(script, [&](const Value& value, const std::string& error) {
+        result = error.empty() ? value : Value("error: " + error);
+    });
+    REQUIRE(turnUntil([&] { return result.has_value(); }));
+    return *result;
+}
+
+// The page's rows, once it has drawn them: each parameter's id, name, text, control and whether it is disabled.
+template <typename Turn>
+Value pageRows(PluginWindow& window, Turn turnUntil)
+{
+    const std::string script = R"(Array.from(document.querySelectorAll("[data-parameter]")).map(row => {
+        const control = row.querySelector("input, select");
+        return {id: Number(row.dataset.parameter), name: row.querySelector(".name").textContent,
+                text: row.querySelector(".text").textContent, control: control.type, disabled: control.disabled};
+    }))";
+    Value rows;
+    for (int i = 0; i < 200 && rows.size() == 0; ++i)
+        rows = inPage(window, script, turnUntil);
+    return rows;
+}
+
+}
+
+TEST_CASE("A plugin with no editor gets a page of its parameters in its window, each with the plugin's own text, the "
+          "hidden ones and its bypass left out",
+          "[windows]")
+{
+    ui::messageLoop::initialize();
+    Vst3Rig rig;
+    auto plugin = rig.made(testIds::wellBehaved, testIds::gain);
+    PluginError error;
+    auto window = PluginWindow::open(plugin, {"Gain"}, error);
+    INFO(error.message);
+    REQUIRE(window != nullptr);
+    CHECK(window->editor() == nullptr);
+    CHECK(window->editorProblem().message == "It has no editor.");
+
+    // Listed in the plugin's order: gain, meter, program, echo and rounded echo; never the hidden ones or the bypass.
+    const auto rows = pageRows(*window, [&](auto condition) { return rig.turnUntil(condition); });
+    std::vector<std::int64_t> ids;
+    for (std::size_t i = 0; i < rows.size(); ++i)
+        ids.push_back(rows[i]["id"].intOr(-1));
+    CHECK(ids == std::vector<std::int64_t>{testIds::gainParameter, testIds::meterParameter, testIds::programParameter,
+                                           testIds::echoParameter, testIds::roundedEchoParameter});
+    CHECK(rows[0]["name"].stringOr("") == "Gain");
+    CHECK(rows[0]["text"].stringOr("") == plugin->parameterText(testIds::gainParameter, 0.5));
+    CHECK(rows[0]["control"].stringOr("") == "range");
+    CHECK(rows[1]["disabled"] == Value(true));
+    CHECK(rows[2]["control"].stringOr("") == "select-one");
+
+    window.reset();
+    rig.settle();
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("A move on the page of parameters reaches the plugin and the program as its own editor's would, in a "
+          "gesture, and the page follows values changed elsewhere",
+          "[windows]")
+{
+    ui::messageLoop::initialize();
+    Vst3Rig rig;
+    auto plugin = rig.made(testIds::wellBehaved, testIds::gain);
+    std::vector<std::pair<PluginEdit, bool>> edits;
+    plugin->onEdit = [&](const PluginEdit& edit, bool byUser) { edits.emplace_back(edit, byUser); };
+    PluginError error;
+    auto window = PluginWindow::open(plugin, {"Gain"}, error);
+    REQUIRE(window != nullptr);
+    const auto turnUntil = [&](auto condition) { return rig.turnUntil(condition); };
+    REQUIRE(pageRows(*window, turnUntil).size() > 0);
+
+    inPage(*window, R"((() => {
+        const slider = document.querySelector('[data-parameter="100"] input');
+        slider.dispatchEvent(new PointerEvent("pointerdown"));
+        slider.value = 0.25;
+        slider.dispatchEvent(new Event("input"));
+        slider.dispatchEvent(new Event("change"));
+        return true;
+    })())",
+           turnUntil);
+    CHECK(rig.turnUntil([&] { return plugin->parameter(testIds::gainParameter) == 0.25 && edits.size() >= 3; }));
+    REQUIRE(edits.size() == 3);
+    CHECK(edits[0].first == PluginEdit{PluginEdit::Kind::begin, testIds::gainParameter, 0.0});
+    CHECK(edits[1].first == PluginEdit{PluginEdit::Kind::value, testIds::gainParameter, 0.25});
+    CHECK(edits[2].first == PluginEdit{PluginEdit::Kind::end, testIds::gainParameter, 0.0});
+    CHECK(std::all_of(edits.begin(), edits.end(), [](const auto& edit) { return edit.second; }));
+
+    // A read-only one, as a meter, is never set from the page, whatever the page asks.
+    inPage(*window, R"(symbolengine.call("set", 3000000, 0.9))", turnUntil);
+    rig.settle();
+    CHECK(plugin->parameter(testIds::meterParameter) == 0.0);
+    CHECK(edits.size() == 3);
+
+    // Changed by the program: the page shows the plugin's text for it.
+    REQUIRE(plugin->setParameter(testIds::gainParameter, 0.75));
+    const auto wanted = plugin->parameterText(testIds::gainParameter, 0.75);
+    std::string shown;
+    for (int i = 0; i < 200 && shown != wanted; ++i)
+        shown = inPage(*window, R"(document.querySelector('[data-parameter="100"] .text').textContent)", turnUntil)
+                    .stringOr("");
+    CHECK(shown == wanted);
+    CHECK(inPage(*window, R"(Number(document.querySelector('[data-parameter="100"] input').value))", turnUntil)
+              .numberOr(0.0) == 0.75);
+
+    window.reset();
+    rig.settle();
+    CHECK(misuses().empty());
+}
+
+TEST_CASE("A program's own page of parameters is served in place of SymbolEngine's, reaching the plugin through the "
+          "same functions",
+          "[windows]")
+{
+    ui::messageLoop::initialize();
+    Vst3Rig rig;
+    auto plugin = rig.made(testIds::wellBehaved, testIds::gain);
+    PluginWindow::Options options;
+    options.title = "Own page";
+    options.page = [](std::string_view path) -> std::optional<ui::Resource> {
+        if (path != "/index.html")
+            return std::nullopt;
+        return ui::Resource{R"(<!doctype html><script src="symbolengine.js"></script><script>
+            symbolengine.call("parameters").then(list => symbolengine.call("report", list.length, list[0].name));
+            </script>)",
+                            "text/html"};
+    };
+    PluginError error;
+    auto window = PluginWindow::open(plugin, options, error);
+    REQUIRE(window != nullptr);
+    REQUIRE(window->parameterPage() != nullptr);
+    std::optional<std::pair<std::int64_t, std::string>> reported;
+    window->parameterPage()->expose("report", [&](const Value& arguments) {
+        reported = std::make_pair(arguments[0].intOr(-1), arguments[1].stringOr(""));
+        return Value();
+    });
+
+    CHECK(rig.turnUntil([&] { return reported.has_value(); }));
+    REQUIRE(reported);
+    CHECK(reported->first == 5);
+    CHECK(reported->second == "Gain");
+}
+
     #if defined(_WIN32)
 TEST_CASE("A VST3 editor on Windows takes the size it gives at its screen's new scale once a move there is over",
           "[windows]")
@@ -792,7 +953,7 @@ TEST_CASE("Keys other than the program's are offered to a VST3 editor on Windows
 {
     Vst3Rig rig;
     auto plugin = rig.made();
-    PluginWindows group({nullptr, nullptr, {U' '}, nullptr, [] { return true; }});
+    PluginWindows group({nullptr, nullptr, {U' '}, nullptr, [] { return true; }, 100ms, nullptr});
     PluginError error;
     auto window = PluginWindow::open(plugin, {"Keys", 0, &group}, error);
     REQUIRE(window != nullptr);
@@ -829,6 +990,40 @@ TEST_CASE("A VST3 editor on Windows keeps its parent through a thousand moves an
     CHECK(misuses().empty());
 }
     #endif
+
+TEST_CASE("A main thread held up while plugin windows are open is said, with the plugins whose windows were open",
+          "[windows]")
+{
+    Vst3Rig rig;
+    auto plugin = rig.made();
+    std::vector<std::pair<std::chrono::milliseconds, std::vector<std::shared_ptr<Plugin>>>> stalls;
+    PluginWindows::Options options;
+    options.inFront = [] { return true; };
+    options.onStall = [&](std::chrono::milliseconds stall, const std::vector<std::shared_ptr<Plugin>>& plugins) {
+        stalls.emplace_back(stall, plugins);
+    };
+    PluginWindows group(options);
+    PluginError error;
+    auto window = PluginWindow::open(plugin, {"Held up", 0, &group}, error);
+    REQUIRE(window != nullptr);
+
+    // A while of ordinary beats first, none of them said, then its view holds the main thread up for 150 ms, as a
+    // view that redraws for too long does.
+    const auto until = std::chrono::steady_clock::now() + 200ms;
+    rig.turnUntil([&] { return std::chrono::steady_clock::now() > until; });
+    REQUIRE(plugin->setParameter(testIds::holdMainThread, 0.15));
+    CHECK(rig.turnUntil([&] {
+        return std::any_of(stalls.begin(), stalls.end(), [](const auto& stall) { return stall.first >= 120ms; });
+    }));
+    REQUIRE_FALSE(stalls.empty());
+    for (const auto& [stall, plugins] : stalls)
+    {
+        CHECK(stall > 100ms);
+        CHECK(plugins == std::vector<std::shared_ptr<Plugin>>{plugin});
+    }
+    window.reset();
+    rig.settle();
+}
 
 TEST_CASE("A VST3 plugin asking for its editor is told to the program", "[windows]")
 {
@@ -925,7 +1120,10 @@ struct UnitRig
 
 std::unique_ptr<PluginWindow> openWindow(const std::shared_ptr<Plugin>& plugin, PluginError& error)
 {
-    return PluginWindow::open(plugin, {"Audio Unit editor test"}, error);
+    PluginWindow::Options options;
+    options.title = "Audio Unit editor test";
+    options.parameterPage = false;
+    return PluginWindow::open(plugin, options, error);
 }
 
 }
@@ -936,7 +1134,8 @@ TEST_CASE("Keys a plugin's view hands up to its window's view are taken there qu
     FakeRig rig;
     ui::Window program({.title = "Program"});
     std::vector<char32_t> taken;
-    PluginWindows group({&program, nullptr, {U' '}, [&](char32_t key) { taken.push_back(key); }, [] { return true; }});
+    PluginWindows group(
+        {&program, nullptr, {U' '}, [&](char32_t key) { taken.push_back(key); }, [] { return true; }, 100ms, nullptr});
     auto plugin = rig.made("handsUp");
     PluginError error;
     auto window = PluginWindow::open(plugin, {"Hands up", 0, &group}, error);
@@ -1036,6 +1235,20 @@ TEST_CASE("An Audio Unit's view that sizes itself is followed by its window, nev
 
     rig.turnFor(50ms);
     CHECK(unitMisuses().empty());
+}
+
+TEST_CASE("An Audio Unit whose view can't be made gets the page of its parameters in its window, saying why",
+          "[windows]")
+{
+    ui::messageLoop::initialize();
+    UnitRig rig;
+    auto plugin = rig.made("VThr");
+    PluginError error;
+    auto window = PluginWindow::open(plugin, {"Throws"}, error);
+    REQUIRE(window != nullptr);
+    CHECK(window->editor() == nullptr);
+    CHECK(window->parameterPage() != nullptr);
+    CHECK(window->editorProblem().message.find("the test view's own exception") != std::string::npos);
 }
 
 TEST_CASE("A resizable Audio Unit view's window can be dragged, the view following it, and a fixed one's can't",

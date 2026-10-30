@@ -42,6 +42,9 @@ bool awareAsParent(void* parent);
 // for OLE can; elsewhere it does.
 bool takesDrops(void* view);
 
+// Holds up the main thread for so many milliseconds, a moment from now, from the view's own timer.
+void holdLater(void* view, int milliseconds);
+
 // How many keys the system has sent views' own native views since the module was loaded: on Windows; elsewhere none.
 int keysSent();
 

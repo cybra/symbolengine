@@ -5,7 +5,10 @@
 #include "PluginWindowsNative.h"
 
 #include <algorithm>
+#include <chrono>
+#include <optional>
 #include <set>
+#include <utility>
 
 namespace symbolengine
 {
@@ -18,6 +21,9 @@ struct PluginWindows::Impl
 
     // Keys taken as they were pressed, whose letting go is taken too.
     std::set<char32_t> held;
+
+    // When the main thread last beat, while plugin windows were open.
+    std::optional<std::chrono::steady_clock::time_point> lastBeat;
 
     std::unique_ptr<pluginWindowsNative::Watch> watch;
 
@@ -72,6 +78,39 @@ struct PluginWindows::Impl
         return true;
     }
 
+    // The main thread's beat, late by as long as it was held up: a hold longer than the limit, while plugin windows
+    // were open, said with the plugins whose windows were open, those showing first.
+    void beat()
+    {
+        const auto now = std::chrono::steady_clock::now();
+
+        if (windows.empty())
+        {
+            lastBeat.reset();
+            return;
+        }
+
+        const auto last = std::exchange(lastBeat, now);
+
+        if (!last || options.onStall == nullptr)
+            return;
+
+        const auto stall = std::chrono::duration_cast<std::chrono::milliseconds>(now - *last) -
+                           std::chrono::milliseconds(pluginWindowsNative::beatMilliseconds);
+
+        if (stall <= options.stallLimit)
+            return;
+
+        auto ordered = windows;
+        std::stable_partition(ordered.begin(), ordered.end(), [](PluginWindow* window) { return window->isVisible(); });
+        std::vector<std::shared_ptr<Plugin>> plugins;
+
+        for (auto* window : ordered)
+            plugins.push_back(window->plugin());
+
+        options.onStall(stall, plugins);
+    }
+
     bool offer(void* native, const PluginKey& key, bool down)
     {
         auto* window = windowOf(native);
@@ -91,7 +130,8 @@ PluginWindows::PluginWindows(Options options) : impl(std::make_unique<Impl>())
     impl->watch = std::make_unique<pluginWindowsNative::Watch>(pluginWindowsNative::Calls{
         [state] { state->arrange(false); },
         [state](void* window, char32_t key, bool down, bool repeat) { return state->take(window, key, down, repeat); },
-        [state](void* window, const PluginKey& key, bool down) { return state->offer(window, key, down); }});
+        [state](void* window, const PluginKey& key, bool down) { return state->offer(window, key, down); },
+        [state] { state->beat(); }});
     impl->floats = impl->inFront();
 }
 

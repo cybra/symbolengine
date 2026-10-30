@@ -3,16 +3,37 @@
 
 #include "PluginWindowNative.h"
 
+#include <symbolengine/ui/Native.h>
+
+#include <algorithm>
+#include <cstdint>
+#include <map>
+#include <optional>
+#include <string_view>
+
+// SymbolEngine's own page of parameters, built into the module from its web folder.
+std::optional<std::string_view> symbolengine_host_parameter_page(std::string_view path);
+
 namespace symbolengine
 {
 
 namespace
 {
 constexpr ui::Size smallest{100, 50};
+
+// The parameters a page shows: all but the hidden ones and the plugin's own bypass, which the program's switch stands
+// in for.
+std::vector<PluginParameter> shownOf(const Plugin& plugin)
+{
+    auto parameters = plugin.parameters();
+    std::erase_if(parameters, [](const PluginParameter& parameter) { return parameter.hidden || parameter.bypass; });
+    return parameters;
+}
 }
 
-// The window and the view in it the editor is put in, made with the window and kept for its life. Sizes are the
-// editor's own: points on a Mac and pixels on Windows, the window measuring itself in pixels there.
+// The window, and either the plugin's editor in a view of the window's own made with it and kept for its life, or
+// the page of its parameters. An editor's sizes are its own: points on a Mac and pixels on Windows, the window
+// measuring itself in pixels there.
 struct PluginWindow::Impl final : PluginEditorFrame
 {
     PluginWindow* owner = nullptr;
@@ -23,13 +44,28 @@ struct PluginWindow::Impl final : PluginEditorFrame
     std::unique_ptr<PluginEditor> editor;
     std::shared_ptr<bool> alive = std::make_shared<bool>(true);
 
+    // The page standing in for its editor, why, and what it was last shown.
+    std::unique_ptr<ui::WebView> page;
+    std::unique_ptr<ui::Timer> look;
+    PluginError problem;
+    std::vector<PluginParameter> shown;
+    std::map<std::uint32_t, double> sent;
+
     ~Impl() override
     {
         // The editor goes while the window and its view are whole, then the window, then the view.
         *alive = false;
         editor.reset();
+        look.reset();
 
         const pluginWindowNative::Awareness awareness;
+
+        if (page != nullptr)
+        {
+            window->setContent(nullptr);
+            page.reset();
+        }
+
         window.reset();
 
         if (container != nullptr)
@@ -55,11 +91,12 @@ struct PluginWindow::Impl final : PluginEditorFrame
             owner->onMovedOrResized();
     }
 
-    // A drag of its edge held to the nearest size the editor takes, the size it has for one that can't be resized.
+    // A drag of its edge held to the nearest size the editor takes, the size it has for one that can't be resized; a
+    // page takes any.
     ui::Size resizing(ui::Size wanted) const
     {
         if (editor == nullptr)
-            return window->size();
+            return page != nullptr ? wanted : window->size();
 
         const auto taken = editor->constrain({wanted.width, wanted.height});
         return {taken.width, taken.height};
@@ -69,6 +106,107 @@ struct PluginWindow::Impl final : PluginEditorFrame
     {
         if (editor != nullptr)
             editor->rescaled(window->scale());
+    }
+
+    // The page's functions: the parameters shown, each step's text, and a gesture's begin, values and end, each
+    // reaching the plugin as its own editor's edit would.
+    void expose()
+    {
+        const auto idOf = [](const Value& arguments) { return static_cast<std::uint32_t>(arguments[0].intOr(0)); };
+        const auto writable = [this](std::uint32_t id) {
+            const auto found = std::find_if(shown.begin(), shown.end(),
+                                            [id](const PluginParameter& parameter) { return parameter.id == id; });
+            return found != shown.end() && !found->readOnly;
+        };
+
+        page->expose("parameters", [this](const Value&) {
+            shown = shownOf(*plugin);
+            Array list;
+
+            for (const auto& parameter : shown)
+            {
+                const auto value = plugin->parameter(parameter.id);
+                sent[parameter.id] = value;
+                list.push_back(Object{{"id", parameter.id},
+                                      {"name", parameter.name},
+                                      {"units", parameter.units},
+                                      {"steps", parameter.steps},
+                                      {"value", value},
+                                      {"text", plugin->parameterText(parameter.id, value)},
+                                      {"readOnly", parameter.readOnly}});
+            }
+
+            return Value(std::move(list));
+        });
+
+        page->expose("stepTexts", [this, idOf](const Value& arguments) {
+            const auto id = idOf(arguments);
+            Array texts;
+
+            for (const auto& parameter : shown)
+                if (parameter.id == id)
+                    for (int step = 0; step <= std::min(parameter.steps, 128); ++step)
+                        texts.push_back(plugin->parameterText(id, static_cast<double>(step) / parameter.steps));
+
+            return Value(std::move(texts));
+        });
+
+        page->expose("begin", [this, idOf, writable](const Value& arguments) {
+            if (writable(idOf(arguments)))
+                plugin->editAsEditor({PluginEdit::Kind::begin, idOf(arguments), 0.0});
+            return Value();
+        });
+
+        page->expose("set", [this, idOf, writable](const Value& arguments) {
+            const auto id = idOf(arguments);
+            const auto value = std::clamp(arguments[1].numberOr(0.0), 0.0, 1.0);
+
+            if (!writable(id))
+                return Value(plugin->parameterText(id, plugin->parameter(id)));
+
+            plugin->editAsEditor({PluginEdit::Kind::value, id, value});
+            sent[id] = value;
+            return Value(plugin->parameterText(id, value));
+        });
+
+        page->expose("end", [this, idOf, writable](const Value& arguments) {
+            if (writable(idOf(arguments)))
+                plugin->editAsEditor({PluginEdit::Kind::end, idOf(arguments), 0.0});
+            return Value();
+        });
+    }
+
+    // Ten times a second: parameters changed told to the page, which asks for them again, or else each value changed
+    // elsewhere, by the program, its automation or the plugin itself, with its text.
+    void lookAtValues()
+    {
+        if (plugin->isBusy() || plugin->state() == Plugin::State::failed || !page->pageReady())
+            return;
+
+        if (const auto now = shownOf(*plugin); now != shown)
+        {
+            shown = now;
+            sent.clear();
+            page->send("parameters", Value());
+            return;
+        }
+
+        Array changed;
+
+        for (const auto& parameter : shown)
+        {
+            const auto value = plugin->parameter(parameter.id);
+
+            if (const auto last = sent.find(parameter.id); last != sent.end() && last->second == value)
+                continue;
+
+            sent[parameter.id] = value;
+            changed.push_back(
+                Object{{"id", parameter.id}, {"value", value}, {"text", plugin->parameterText(parameter.id, value)}});
+        }
+
+        if (!changed.empty())
+            page->send("values", Value(std::move(changed)));
     }
 };
 
@@ -82,7 +220,35 @@ std::unique_ptr<PluginWindow> PluginWindow::open(std::shared_ptr<Plugin> plugin,
         return nullptr;
     }
 
+    if (plugin->isBusy())
+    {
+        error = {"A call into it is under way.", "openEditor", 0};
+        return nullptr;
+    }
+
+    if (plugin->state() == Plugin::State::failed)
+    {
+        error = plugin->problem();
+        return nullptr;
+    }
+
     pluginWindowNative::prepare();
+
+    // Its editor tried first, as asking whether it has one makes a view of its own.
+    if (auto made = openEditor(plugin, options, error))
+        return made;
+
+    // Refused by the host's own rules, as when one of its editors is open: no page in its place.
+    if (!options.parameterPage || plugin->editorOpen() || plugin->isBusy() || plugin->state() == Plugin::State::failed)
+        return nullptr;
+
+    const auto problem = error;
+    return openPage(std::move(plugin), options, problem, error);
+}
+
+std::unique_ptr<PluginWindow> PluginWindow::openEditor(std::shared_ptr<Plugin> plugin, const Options& options,
+                                                       PluginError& error)
+{
     auto parts = std::make_unique<Impl>();
     parts->plugin = plugin;
 
@@ -117,26 +283,77 @@ std::unique_ptr<PluginWindow> PluginWindow::open(std::shared_ptr<Plugin> plugin,
     }
 
     pluginWindowNative::settle(parts->container, parts->alive);
+    auto& state = *parts;
+    return finish(std::unique_ptr<PluginWindow>(new PluginWindow(std::move(parts))), state, options.windows);
+}
 
-    std::unique_ptr<PluginWindow> made(new PluginWindow(std::move(parts)));
-    auto* state = made->impl.get();
-    state->owner = made.get();
-    state->group = options.windows;
+// The page in a window measured as the program's own pages are, at its own size, resizable.
+std::unique_ptr<PluginWindow> PluginWindow::openPage(std::shared_ptr<Plugin> plugin, const Options& options,
+                                                     PluginError problem, PluginError& error)
+{
+    auto parts = std::make_unique<Impl>();
+    parts->plugin = std::move(plugin);
+    parts->problem = std::move(problem);
+
+    {
+        const pluginWindowNative::Awareness awareness;
+        parts->window = std::make_unique<ui::Window>(
+            ui::Window::Options{options.title, {480, 420}, {320, 160}, true, false, options.background, false});
+    }
+
+    ui::Resources resources = options.page;
+
+    if (resources == nullptr)
+        resources = [](std::string_view path) -> std::optional<ui::Resource> {
+            const auto bytes = symbolengine_host_parameter_page(path);
+            return bytes ? std::optional<ui::Resource>(ui::Resource{std::string(*bytes), ""}) : std::nullopt;
+        };
+
+    parts->page = std::make_unique<ui::WebView>(
+        ui::WebView::Options{std::move(resources), "symbolengine-parameters", {}, false, options.background, true});
+
+    if (!parts->page->available())
+    {
+        error = {"The page of its parameters can't be shown: the system's web view isn't there.", "openEditor", 0};
+        return nullptr;
+    }
+
+    parts->shown = shownOf(*parts->plugin);
+    parts->expose();
+    parts->window->setContent(parts->page->nativeView());
+
+    {
+        const pluginWindowNative::Awareness awareness;
+        parts->window->center();
+    }
+
+    auto& state = *parts;
+    parts->look = std::make_unique<ui::Timer>(100, [&state] { state.lookAtValues(); });
+    return finish(std::unique_ptr<PluginWindow>(new PluginWindow(std::move(parts))), state, options.windows);
+}
+
+// The window made, its callbacks set and joined to the program's others.
+std::unique_ptr<PluginWindow> PluginWindow::finish(std::unique_ptr<PluginWindow> made, Impl& state,
+                                                   PluginWindows* group)
+{
     auto* window = made.get();
-    state->window->onMovedOrResized = [state] { state->movedOrResized(); };
-    state->window->onResizing = [state](ui::Size wanted) { return state->resizing(wanted); };
-    state->window->onScaleChanged = [state] { state->rescaled(); };
-    state->window->onCloseButton = [window] {
+    state.owner = window;
+    state.group = group;
+    auto* parts = &state;
+    state.window->onMovedOrResized = [parts] { parts->movedOrResized(); };
+    state.window->onResizing = [parts](ui::Size wanted) { return parts->resizing(wanted); };
+    state.window->onScaleChanged = [parts] { parts->rescaled(); };
+    state.window->onCloseButton = [window] {
         if (auto pressed = window->onCloseButton)
             pressed();
     };
-    state->window->onActiveChanged = [window](bool active) {
+    state.window->onActiveChanged = [window](bool active) {
         if (window->onActiveChanged)
             window->onActiveChanged(active);
     };
 
-    if (state->group != nullptr)
-        state->group->join(*made);
+    if (group != nullptr)
+        group->join(*window);
 
     return made;
 }
@@ -169,12 +386,26 @@ const std::shared_ptr<Plugin>& PluginWindow::plugin() const
 
 PluginEditorSize PluginWindow::editorSize() const
 {
-    return impl->editor->size();
+    if (impl->editor != nullptr)
+        return impl->editor->size();
+
+    const auto size = impl->window->size();
+    return {size.width, size.height};
 }
 
 PluginEditor* PluginWindow::editor() const
 {
     return impl->editor.get();
+}
+
+ui::WebView* PluginWindow::parameterPage() const
+{
+    return impl->page.get();
+}
+
+PluginError PluginWindow::editorProblem() const
+{
+    return impl->problem;
 }
 
 bool PluginWindow::isResizable() const

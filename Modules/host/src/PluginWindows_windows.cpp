@@ -20,7 +20,7 @@ namespace
 {
 
 constexpr UINT runPosted = WM_APP + 0x5E10;
-constexpr UINT_PTR lookTimer = 1;
+constexpr UINT_PTR lookTimer = 1, beatTimer = 2;
 
 // A key as an editor is offered it: the named keys by their virtual keys, and its character as the keyboard's layout
 // gives it, with the modifier keys held.
@@ -99,6 +99,12 @@ struct Watch::Native
                 active->calls.look();
                 return 0;
             }
+
+            if (message == WM_TIMER && wParam == beatTimer)
+            {
+                active->calls.beat();
+                return 0;
+            }
         }
 
         return DefWindowProcW(hwnd, message, wParam, lParam);
@@ -162,6 +168,7 @@ Watch::Watch(Calls calls) : native(std::make_unique<Native>())
     // A window for messages alone, never shown: what is posted runs there, and the quarter-second look.
     native->window = CreateWindowExW(0, className.c_str(), L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, module, nullptr);
     SetTimer(native->window, lookTimer, 250, nullptr);
+    SetTimer(native->window, beatTimer, beatMilliseconds, nullptr);
     native->keys = SetWindowsHookExW(WH_GETMESSAGE, &Native::message, nullptr, GetCurrentThreadId());
     native->shows = SetWinEventHook(EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE, nullptr, &Native::windowEvent,
                                     GetCurrentProcessId(), 0, WINEVENT_OUTOFCONTEXT);
@@ -178,6 +185,7 @@ Watch::~Watch()
     if (native->keys != nullptr)
         UnhookWindowsHookEx(native->keys);
     KillTimer(native->window, lookTimer);
+    KillTimer(native->window, beatTimer);
     DestroyWindow(native->window);
 
     if (Native::active == native.get())

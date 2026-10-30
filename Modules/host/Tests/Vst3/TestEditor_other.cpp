@@ -49,6 +49,8 @@ bool takesDrops(void*)
     return true;
 }
 
+void holdLater(void*, int) {}
+
 int keysSent()
 {
     return 0;

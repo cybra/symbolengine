@@ -40,6 +40,7 @@ struct Watch::Native
     id monitor = nil;
     std::vector<id> observers;
     NSTimer* timer = nil;
+    NSTimer* beats = nil;
     std::shared_ptr<bool> alive = std::make_shared<bool>(true);
 };
 
@@ -86,13 +87,24 @@ Watch::Watch(Calls calls) : native(std::make_unique<Native>())
                                                 state->calls.look();
                                               }] retain];
     [[NSRunLoop mainRunLoop] addTimer:native->timer forMode:NSRunLoopCommonModes];
+
+    native->beats = [[NSTimer timerWithTimeInterval:beatMilliseconds / 1000.0
+                                            repeats:YES
+                                              block:^(NSTimer*) {
+                                                state->calls.beat();
+                                              }] retain];
+    [[NSRunLoop mainRunLoop] addTimer:native->beats forMode:NSRunLoopCommonModes];
 }
 
 Watch::~Watch()
 {
     *native->alive = false;
-    [native->timer invalidate];
-    [native->timer release];
+
+    for (NSTimer* timer : {native->timer, native->beats})
+    {
+        [timer invalidate];
+        [timer release];
+    }
 
     for (id observer : native->observers)
     {

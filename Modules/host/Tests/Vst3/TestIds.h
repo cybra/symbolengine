@@ -65,6 +65,10 @@ constexpr unsigned viewMode = 600;
 // Set while its view is open: the size the view is to ask for, at 2,000 pixels or points to 1; then askResize at 0.5
 // to ask on the main thread or at 1 to ask from a thread of its own. requestEditor asks the host to open its editor.
 constexpr unsigned askWidth = 601, askHeight = 602, askResize = 603, requestEditor = 604;
+
+// Set while its view is open: the view holds up the main thread a moment later for as long as the value says, at
+// 1,000 ms to 1, as a view that redraws for too long does.
+constexpr unsigned holdMainThread = 605;
 constexpr double editorPixels = 2000.0;
 
 // The editor plugin's text for queryParameter says what its views saw, as "made=1 live=1 attached=1 removed=0

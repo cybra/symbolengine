@@ -188,6 +188,14 @@ public:
         opening one, and kept: false on Linux, where editors aren't hosted yet. */
     bool hasEditor();
 
+    /** An edit of a parameter made in a window of the program's standing in for the plugin's own editor, as the page of
+        its parameters is: a gesture's begin, a value or its end, which reaches the plugin's processing and is shown to
+        it as its own editor's edit would be, and is told to the program through onEdit as the user's. */
+    void editAsEditor(const PluginEdit& edit);
+
+    /** Whether one of its editors is open. */
+    bool editorOpen() const;
+
     /** Plays a block through it in place on the audio thread, as many channels as the program has, the plugin's
         layout fitted to them. While it is held off the audio for a call that can't overlap its processing, as while
         it is prepared, given a state, reset or taken down, the block is silent, never heard unprocessed; before it is

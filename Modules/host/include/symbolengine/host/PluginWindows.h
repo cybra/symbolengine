@@ -2,6 +2,7 @@
 
 #include <symbolengine/ui/Window.h>
 
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -9,6 +10,7 @@
 namespace symbolengine
 {
 
+class Plugin;
 class PluginWindow;
 
 /** Every plugin window of a program, kept in their place among the program's windows, with the program's keys taken
@@ -40,6 +42,15 @@ public:
         /** Whether the program is in front of other programs: the system's answer unless given, as a test gives its
             own. */
         std::function<bool()> inFront;
+
+        /** How long the main thread may be held up, while plugin windows are open, before it is said, as when an
+            editor redraws for too long. */
+        std::chrono::milliseconds stallLimit{100};
+
+        /** Told once the main thread has been held up longer than the limit while plugin windows were open: how long,
+            and the plugins whose windows were open, those showing first. */
+        std::function<void(std::chrono::milliseconds stall, const std::vector<std::shared_ptr<Plugin>>& plugins)>
+            onStall;
     };
 
     explicit PluginWindows(Options options);

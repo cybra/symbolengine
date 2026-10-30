@@ -22,9 +22,16 @@ struct Calls
     /** Any other key pressed or let go of in a window, where the system offers keys to a plugin's editor before its
         own windows get them, as Windows does: whether the editor took it. */
     std::function<bool(void* window, const PluginKey& key, bool down)> offer;
+
+    /** A beat of the main thread every beatInterval, late by as long as the thread was held up. */
+    std::function<void()> beat;
 };
 
-/** Watches the process's windows and its keys while it lives, telling the calls, and looks every quarter second. */
+/** How often the main thread beats. */
+constexpr int beatMilliseconds = 20;
+
+/** Watches the process's windows and its keys while it lives, telling the calls, looks every quarter second and beats
+    the main thread. */
 class Watch
 {
 public:

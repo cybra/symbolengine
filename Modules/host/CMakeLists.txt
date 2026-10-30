@@ -62,6 +62,11 @@ if(TARGET symbolengine_ui)
 endif()
 
 symbolengine_add_module(host SOURCES ${sources} DEPENDS ${dependencies} LIBRARIES ${libraries})
+if(TARGET symbolengine_ui)
+    # SymbolEngine's own page of a plugin's parameters, shown where it has no editor.
+    include(SymbolEngineResources)
+    symbolengine_add_files(symbolengine_host FOLDER web FUNCTION symbolengine_host_parameter_page)
+endif()
 target_include_directories(symbolengine_host SYSTEM PRIVATE ${sdk})
 
 if(SYMBOLENGINE_TESTS)

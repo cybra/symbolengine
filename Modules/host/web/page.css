@@ -1,0 +1,52 @@
+/* The page of a plugin's parameters: plain, in the system's own type and colors, light or dark as the computer is. */
+
+:root {
+    color-scheme: light dark;
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+body {
+    margin: 0;
+    padding: 12px 16px;
+    background: Canvas;
+    color: CanvasText;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.row {
+    display: grid;
+    grid-template-columns: minmax(8em, 1fr) 2fr minmax(6em, auto);
+    align-items: center;
+    gap: 12px;
+    padding: 6px 0;
+}
+
+.name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.text {
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    white-space: nowrap;
+}
+
+input[type="range"],
+select {
+    width: 100%;
+    margin: 0;
+    font: inherit;
+}
+
+input[type="checkbox"] {
+    justify-self: start;
+    margin: 0;
+}
+
+#none {
+    margin: 8px 0;
+    opacity: 0.7;
+}

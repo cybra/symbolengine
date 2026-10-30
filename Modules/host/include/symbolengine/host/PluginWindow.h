@@ -2,6 +2,7 @@
 
 #include "Plugin.h"
 
+#include <symbolengine/ui/WebView.h>
 #include <symbolengine/ui/Window.h>
 
 #include <cstdint>
@@ -32,6 +33,18 @@ public:
         /** The program's plugin windows this one joins, kept in their place among the program's windows and taking
             the program's keys; none for a window left to the program alone. */
         PluginWindows* windows = nullptr;
+
+        /** Where the plugin has no editor, or its editor can't be opened, the window shows a page of its parameters
+            rather than not opening: SymbolEngine's own, plain and neutral, unless the program gives its own. */
+        bool parameterPage = true;
+
+        /** The program's own page of parameters, drawn as its other pages are, in place of SymbolEngine's: its files,
+            served as a ui::WebView's are. It reaches the plugin through the functions SymbolEngine's page calls:
+            "parameters", which gives each shown with its id, name, units, steps, value from 0 to 1, text and whether
+            it is read-only; "stepTexts" with an id, the text of each of its steps; "begin" and "end" with an id
+            around a gesture; and "set" with an id and a value, which gives its text; and it hears "values", each
+            value changed elsewhere with its id and text, and "parameters" when they change. */
+        ui::Resources page{};
     };
 
     /** Opens the plugin's editor in a window of its own, hidden, in the middle of the main screen; nothing, with the
@@ -49,8 +62,15 @@ public:
     /** The editor's size, as it last said it or was told. */
     PluginEditorSize editorSize() const;
 
-    /** Its editor. */
+    /** Its editor, or null where the page of its parameters stands in for it. */
     PluginEditor* editor() const;
+
+    /** The page of its parameters standing in for its editor, or null where its editor is shown, so a program giving
+        its own page can reach it as any page of its own. */
+    ui::WebView* parameterPage() const;
+
+    /** Why the page of its parameters stands in for its editor: it has none, or its editor couldn't be opened. */
+    PluginError editorProblem() const;
 
     /** Whether the user can resize it, as the editor says. */
     bool isResizable() const;
@@ -97,6 +117,12 @@ public:
 
 private:
     explicit PluginWindow(std::unique_ptr<Impl> impl);
+
+    static std::unique_ptr<PluginWindow> openEditor(std::shared_ptr<Plugin> plugin, const Options& options,
+                                                    PluginError& error);
+    static std::unique_ptr<PluginWindow> openPage(std::shared_ptr<Plugin> plugin, const Options& options,
+                                                  PluginError problem, PluginError& error);
+    static std::unique_ptr<PluginWindow> finish(std::unique_ptr<PluginWindow> made, Impl& state, PluginWindows* group);
 
     std::unique_ptr<Impl> impl;
 };
