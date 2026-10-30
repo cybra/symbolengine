@@ -165,6 +165,78 @@
             <key>version</key><integer>66051</integer>
             <key>factoryFunction</key><string>PickyFactory</string>
         </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>VFix</string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: ViewFixed</string>
+            <key>description</key><string>SymbolEngine's test unit ViewFixed</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>ViewFixedFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>VSiz</string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: ViewSizable</string>
+            <key>description</key><string>SymbolEngine's test unit ViewSizable</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>ViewSizableFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>VGro</string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: ViewGrows</string>
+            <key>description</key><string>SymbolEngine's test unit ViewGrows</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>ViewGrowsFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>VZer</string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: ViewZero</string>
+            <key>description</key><string>SymbolEngine's test unit ViewZero</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>ViewZeroFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>VOri</string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: ViewOrigin</string>
+            <key>description</key><string>SymbolEngine's test unit ViewOrigin</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>ViewOriginFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>VNei</string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: ViewNeedsInit</string>
+            <key>description</key><string>SymbolEngine's test unit ViewNeedsInit</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>ViewNeedsInitFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>VThr</string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: ViewThrows</string>
+            <key>description</key><string>SymbolEngine's test unit ViewThrows</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>ViewThrowsFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>VMis</string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: ViewMissing</string>
+            <key>description</key><string>SymbolEngine's test unit ViewMissing</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>ViewMissingFactory</string>
+        </dict>
     </array>
 </dict>
 </plist>

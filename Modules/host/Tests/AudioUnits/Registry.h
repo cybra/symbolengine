@@ -7,28 +7,30 @@
 #include <CoreFoundation/CoreFoundation.h>
 
 #include <filesystem>
+#include <map>
 #include <string>
 
 namespace symbolengine::testAudioUnits
 {
 
-// The component's bundle, its code loaded, once for the process; null where it can't be.
+// A component's bundle, its code loaded, once for the process for each component; null where it can't be.
 inline CFBundleRef bundle(const std::filesystem::path& component)
 {
-    static const CFBundleRef loaded = [&component]() -> CFBundleRef {
-        const auto path = component.string();
-        const auto url = CFURLCreateFromFileSystemRepresentation(nullptr, reinterpret_cast<const UInt8*>(path.c_str()),
-                                                                 static_cast<CFIndex>(path.size()), true);
-        const auto made = CFBundleCreate(nullptr, url);
-        CFRelease(url);
-        if (made != nullptr && !CFBundleLoadExecutable(made))
-        {
-            CFRelease(made);
-            return nullptr;
-        }
-        return made;
-    }();
-    return loaded;
+    static std::map<std::string, CFBundleRef> loaded;
+    const auto path = component.string();
+    if (const auto found = loaded.find(path); found != loaded.end())
+        return found->second;
+    const auto url = CFURLCreateFromFileSystemRepresentation(nullptr, reinterpret_cast<const UInt8*>(path.c_str()),
+                                                             static_cast<CFIndex>(path.size()), true);
+    auto made = CFBundleCreate(nullptr, url);
+    CFRelease(url);
+    if (made != nullptr && !CFBundleLoadExecutable(made))
+    {
+        CFRelease(made);
+        made = nullptr;
+    }
+    loaded[path] = made;
+    return made;
 }
 
 inline AudioComponentFactoryFunction factory(const std::filesystem::path& component, CFStringRef name)
@@ -52,10 +54,13 @@ inline OSType codeOf(CFDictionaryRef entry, CFStringRef key)
            static_cast<OSType>(static_cast<unsigned char>(text[3]));
 }
 
-// Every unit the component declares, registered once for the process; false if any can't be.
+// Every unit a component declares, registered once for the process; false if any can't be.
 inline bool registerAll(const std::filesystem::path& component)
 {
-    static const bool registered = [&component] {
+    static std::map<std::string, bool> done;
+    if (const auto found = done.find(component.string()); found != done.end())
+        return found->second;
+    const bool registered = [&component] {
         const auto loaded = bundle(component);
         if (loaded == nullptr)
             return false;
@@ -78,6 +83,7 @@ inline bool registerAll(const std::filesystem::path& component)
         }
         return true;
     }();
+    done[component.string()] = registered;
     return registered;
 }
 

@@ -66,3 +66,28 @@ void rescaleWindow(void* window, double)
     [[NSNotificationCenter defaultCenter] postNotificationName:NSWindowDidChangeBackingPropertiesNotification
                                                         object:static_cast<NSWindow*>(window)];
 }
+
+// The plugin's own views in the window's view the editor is put in.
+static NSView* editorView(void* window)
+{
+    return static_cast<NSWindow*>(window).contentView.subviews.firstObject;
+}
+
+int viewsInEditor(void* window)
+{
+    return static_cast<int>(editorView(window).subviews.count);
+}
+
+// The size of the first view the plugin put in it, and whether it lies at its top left.
+symbolengine::ui::Size ownViewSize(void* window)
+{
+    const auto size = editorView(window).subviews.firstObject.frame.size;
+    return {static_cast<int>(std::lround(size.width)), static_cast<int>(std::lround(size.height))};
+}
+
+bool ownViewAtTopLeft(void* window)
+{
+    NSView* container = editorView(window);
+    const auto frame = container.subviews.firstObject.frame;
+    return frame.origin.x == 0 && NSMaxY(frame) == NSHeight(container.bounds);
+}

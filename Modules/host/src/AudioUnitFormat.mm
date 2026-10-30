@@ -7,6 +7,9 @@
 #include <symbolengine/core/System.h>
 #include <symbolengine/core/Text.h>
 
+#import <AppKit/AppKit.h>
+#import <AudioToolbox/AUCocoaUIView.h>
+
 #include <AudioToolbox/AudioToolbox.h>
 #include <AudioToolbox/AudioUnitUtilities.h>
 #include <CoreFoundation/CoreFoundation.h>
@@ -21,6 +24,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits.h>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -187,6 +191,8 @@ std::string unitsOf(const AudioUnitParameterInfo& info)
     }
 }
 
+class AudioUnitEditor;
+
 // One Audio Unit, as the host module holds it.
 class AudioUnitPlugin final : public PluginFormatInstance
 {
@@ -334,13 +340,20 @@ public:
         held = 0;
         sampleTime = 0;
         failures = 0;
+
+        // An open editor's view, taken out as it was uninitialized, put back.
+        viewBack();
         return true;
     }
 
+    // An open editor's view taken out first, as a view keeps its unit and calls it while it lives.
     void deactivate() override
     {
         if (initialized)
+        {
+            viewOut();
             AudioUnitUninitialize(unit);
+        }
         initialized = false;
     }
 
@@ -597,7 +610,27 @@ public:
         return true;
     }
 
+    // Whether it has a Cocoa view, asked of its description without one being made.
+    bool hasEditor() override
+    {
+        UInt32 size = 0;
+        Boolean writable = false;
+        return AudioUnitGetPropertyInfo(unit, kAudioUnitProperty_CocoaUI, kAudioUnitScope_Global, 0, &size,
+                                        &writable) == noErr &&
+               size >= sizeof(AudioUnitCocoaViewInfo);
+    }
+
+    std::unique_ptr<PluginFormatEditor> openEditor(void* parent, PluginEditorFrame& frame, PluginError& error) override;
+
+    AudioUnit handle() const { return unit; }
+
+    // The editor open on it, told as it is uninitialized and initialized again.
+    AudioUnitEditor* editor = nullptr;
+
 private:
+    void viewOut();
+    void viewBack();
+
     // Where a render's input comes from: channels of samples, from a frame of them on, so many in all.
     struct Source
     {
@@ -1215,6 +1248,326 @@ private:
         return transport2(context, playing, nullptr, changed, sample, cycling, cycleStart, cycleEnd);
     }
 };
+
+// A unit's Cocoa view in the program's: made from the class the bundle its description names holds, on an initialized
+// unit, every exception from making it caught; put in the program's view once that is sized to it, at its top left;
+// and followed as it sizes itself, the program's view resized to it with the view's own sizing held still meanwhile,
+// so the window never feeds back, a size of none taken as not yet known and an origin it moves put back. It is taken
+// out, never hidden first, and let go of before the unit is uninitialized, and put back once it is initialized again.
+class AudioUnitEditor final : public PluginFormatEditor
+{
+public:
+    AudioUnitEditor(AudioUnitPlugin& owner, void* parentView, PluginEditorFrame& holder)
+        : plugin(owner), parent(static_cast<NSView*>(parentView)), frame(holder)
+    {
+        plugin.editor = this;
+    }
+
+    ~AudioUnitEditor() override
+    {
+        takeOut();
+        plugin.editor = nullptr;
+    }
+
+    // Its view made and put in, or false with the error set.
+    bool putIn(PluginError& error)
+    {
+        NSString* className = nil;
+        std::string location;
+
+        if (!describe(className, location, error))
+            return false;
+
+        @try
+        {
+            // Only from the bundle its description names, as two plugins' classes can share a name in one process.
+            NSBundle* bundle = [NSBundle bundleWithPath:[NSString stringWithUTF8String:location.c_str()]];
+            Class found = bundle != nil ? [bundle classNamed:className] : nil;
+            const auto ownBundle = [&](Class made) {
+                return [[NSBundle bundleForClass:made].bundlePath.stringByStandardizingPath
+                    isEqualToString:bundle.bundlePath.stringByStandardizingPath];
+            };
+
+            if (found == nil && NSClassFromString(className) == nil)
+            {
+                error = {"Its editor's class isn't in its bundle.", "openEditor", 0};
+                return false;
+            }
+
+            if (found == nil || !ownBundle(found))
+            {
+                error = {"Its editor's class collides with another plugin's.", "openEditor", 0};
+                return false;
+            }
+
+            if (![found conformsToProtocol:@protocol(AUCocoaUIBase)] ||
+                ![found instancesRespondToSelector:@selector(uiViewForAudioUnit:withSize:)])
+            {
+                error = {"Its editor's class makes no Audio Unit view.", "openEditor", 0};
+                return false;
+            }
+
+            factory = [[found alloc] init];
+            NSView* made =
+                [static_cast<id<AUCocoaUIBase>>(factory) uiViewForAudioUnit:plugin.handle() withSize:NSZeroSize];
+
+            if (made == nil)
+            {
+                error = {"Its editor gave no view.", "openEditor", 0};
+                [factory release];
+                factory = nil;
+                return false;
+            }
+
+            view = [made retain];
+        }
+        @catch (NSException* exception)
+        {
+            const char* why = exception.reason != nil ? exception.reason.UTF8String : nullptr;
+            error = {std::string("Its editor couldn't be made: ") + (why != nullptr ? why : "an exception") + ".",
+                     "openEditor", 0};
+            [view release];
+            view = nil;
+            [factory release];
+            factory = nil;
+            return false;
+        }
+
+        // The program's view sized to it first, unless it has no size yet; then it, at its top left.
+        if (const auto own = sizeOf(view.frame.size); own.width > 0 && own.height > 0)
+        {
+            current = own;
+            place(current);
+        }
+
+        placing = true;
+        view.postsFrameChangedNotifications = YES;
+        [parent addSubview:view];
+        toTopLeft();
+        placing = false;
+
+        // Its own frame followed, and kept at the top left as the program's view changes, as when it is settled.
+        auto* self = this;
+        auto* center = [NSNotificationCenter defaultCenter];
+        parent.postsFrameChangedNotifications = YES;
+        watcher = [[center addObserverForName:NSViewFrameDidChangeNotification
+                                       object:view
+                                        queue:nil
+                                   usingBlock:^(NSNotification*) {
+                                     self->followed();
+                                   }] retain];
+        parentWatcher = [[center addObserverForName:NSViewFrameDidChangeNotification
+                                             object:parent
+                                              queue:nil
+                                         usingBlock:^(NSNotification*) {
+                                           self->kept();
+                                         }] retain];
+        return true;
+    }
+
+    // Its view taken out and let go of; the program's view stays as it is.
+    void takeOut()
+    {
+        if (view == nil)
+            return;
+
+        for (id* one : {&watcher, &parentWatcher})
+        {
+            [[NSNotificationCenter defaultCenter] removeObserver:*one];
+            [*one release];
+            *one = nil;
+        }
+
+        @try
+        {
+            [view removeFromSuperview];
+        }
+        @catch (NSException*)
+        {
+        }
+
+        [view release];
+        view = nil;
+        [factory release];
+        factory = nil;
+    }
+
+    PluginEditorSize size() override { return current; }
+
+    // Resizable only if its view is.
+    bool resizable() override
+    {
+        return view != nil && (view.autoresizingMask & (NSViewWidthSizable | NSViewHeightSizable)) != 0;
+    }
+
+    PluginEditorSize constrain(PluginEditorSize dragged) override { return resizable() ? dragged : current; }
+
+    void resized(PluginEditorSize size) override
+    {
+        if (view == nil || !resizable() || size == current)
+            return;
+
+        current = size;
+        placing = true;
+        [view setFrameSize:NSMakeSize(size.width, size.height)];
+        toTopLeft();
+        placing = false;
+    }
+
+private:
+    static PluginEditorSize sizeOf(NSSize size)
+    {
+        return {static_cast<int>(std::lround(size.width)), static_cast<int>(std::lround(size.height))};
+    }
+
+    // Its description, as the unit gives it: the file path of the bundle holding its class, never the URL's text,
+    // which escapes what the path holds, and the class's name; the strings and URL let go of as the host owns them.
+    bool describe(NSString*& className, std::string& location, PluginError& error)
+    {
+        UInt32 size = 0;
+        Boolean writable = false;
+        const auto unit = plugin.handle();
+
+        if (AudioUnitGetPropertyInfo(unit, kAudioUnitProperty_CocoaUI, kAudioUnitScope_Global, 0, &size, &writable) !=
+                noErr ||
+            size < sizeof(AudioUnitCocoaViewInfo))
+        {
+            error = {"It has no editor.", "openEditor", 0};
+            return false;
+        }
+
+        std::vector<std::byte> room(size);
+        UInt32 given = size;
+
+        if (AudioUnitGetProperty(unit, kAudioUnitProperty_CocoaUI, kAudioUnitScope_Global, 0, room.data(), &given) !=
+                noErr ||
+            given < sizeof(AudioUnitCocoaViewInfo) || given > size)
+        {
+            error = {"Its editor's description can't be read.", "openEditor", 0};
+            return false;
+        }
+
+        auto* info = reinterpret_cast<AudioUnitCocoaViewInfo*>(room.data());
+        const auto classes = (given - offsetof(AudioUnitCocoaViewInfo, mCocoaAUViewClass)) / sizeof(CFStringRef);
+        char path[PATH_MAX] = {};
+
+        if (info->mCocoaAUViewBundleLocation != nullptr &&
+            CFURLGetFileSystemRepresentation(info->mCocoaAUViewBundleLocation, true, reinterpret_cast<UInt8*>(path),
+                                             sizeof path))
+            location = path;
+
+        if (info->mCocoaAUViewClass[0] != nullptr)
+            className = [[static_cast<NSString*>(info->mCocoaAUViewClass[0]) copy] autorelease];
+
+        if (info->mCocoaAUViewBundleLocation != nullptr)
+            CFRelease(info->mCocoaAUViewBundleLocation);
+
+        for (std::size_t c = 0; c < classes; ++c)
+            if (info->mCocoaAUViewClass[c] != nullptr)
+                CFRelease(info->mCocoaAUViewClass[c]);
+
+        if (location.empty() || className == nil)
+        {
+            error = {"Its editor's description can't be read.", "openEditor", 0};
+            return false;
+        }
+
+        return true;
+    }
+
+    // The program's view resized to the size, the view's own sizing held still meanwhile so it isn't fed back.
+    void place(PluginEditorSize size)
+    {
+        const auto mask = view.autoresizingMask;
+        view.autoresizingMask = NSViewNotSizable;
+        placing = true;
+        frame.place(size);
+        toTopLeft();
+        placing = false;
+        view.autoresizingMask = mask;
+    }
+
+    void toTopLeft()
+    {
+        const auto origin = NSMakePoint(0, NSHeight(parent.bounds) - NSHeight(view.frame));
+
+        if (!NSEqualPoints(view.frame.origin, origin))
+            [view setFrameOrigin:origin];
+    }
+
+    // The view's frame changed by the view itself: a size it gives followed, and an origin it moved put back.
+    void followed()
+    {
+        if (placing || view == nil)
+            return;
+
+        if (const auto own = sizeOf(view.frame.size); own.width > 0 && own.height > 0 && own != current)
+        {
+            current = own;
+            place(current);
+            return;
+        }
+
+        placing = true;
+        toTopLeft();
+        placing = false;
+    }
+
+    void kept()
+    {
+        if (placing || view == nil)
+            return;
+
+        placing = true;
+        toTopLeft();
+        placing = false;
+    }
+
+    AudioUnitPlugin& plugin;
+    NSView* parent;
+    PluginEditorFrame& frame;
+    NSView* view = nil;
+    id factory = nil;
+    id watcher = nil;
+    id parentWatcher = nil;
+    bool placing = false;
+    PluginEditorSize current{};
+};
+
+std::unique_ptr<PluginFormatEditor> AudioUnitPlugin::openEditor(void* parent, PluginEditorFrame& frame,
+                                                                PluginError& error)
+{
+    if (!initialized)
+    {
+        error = {"An Audio Unit's editor opens once it is prepared.", "openEditor", 0};
+        return nullptr;
+    }
+
+    if (editor != nullptr)
+    {
+        error = {"Its editor is open already.", "openEditor", 0};
+        return nullptr;
+    }
+
+    auto made = std::make_unique<AudioUnitEditor>(*this, parent, frame);
+
+    if (!made->putIn(error))
+        return nullptr;
+
+    return made;
+}
+
+void AudioUnitPlugin::viewOut()
+{
+    if (editor != nullptr)
+        editor->takeOut();
+}
+
+void AudioUnitPlugin::viewBack()
+{
+    if (PluginError ignored; editor != nullptr)
+        editor->putIn(ignored);
+}
 
 }
 

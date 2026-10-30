@@ -94,8 +94,9 @@ if(SYMBOLENGINE_TESTS)
         target_link_libraries(symbolengine_host_tests PRIVATE "-framework AppKit" "-framework AudioToolbox")
         target_compile_definitions(symbolengine_host_tests PRIVATE
             "SYMBOLENGINE_TEST_AUDIO_UNITS=\"$<TARGET_BUNDLE_DIR:symbolengine_test_audio_units>\""
+            "SYMBOLENGINE_TEST_TWIN_AUDIO_UNITS=\"$<TARGET_BUNDLE_DIR:symbolengine_test_audio_units_twin>\""
             "SYMBOLENGINE_TEST_AU_LOG=\"${CMAKE_CURRENT_BINARY_DIR}/test-au-log.txt\"")
-        add_dependencies(symbolengine_host_tests symbolengine_test_audio_units)
+        add_dependencies(symbolengine_host_tests symbolengine_test_audio_units symbolengine_test_audio_units_twin)
         if(SYMBOLENGINE_TEST_INTEL_AUDIO_UNITS)
             target_compile_definitions(symbolengine_host_tests PRIVATE
                 "SYMBOLENGINE_TEST_INTEL_AUDIO_UNITS=\"$<TARGET_BUNDLE_DIR:symbolengine_test_audio_units_intel>\"")

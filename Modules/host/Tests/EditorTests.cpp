@@ -10,6 +10,12 @@
 #include "TestMainThread.h"
 #include "Vst3/TestIds.h"
 
+#if SYMBOLENGINE_PLUGIN_WINDOWS && defined(__APPLE__)
+    #include <symbolengine/host/AudioUnitFormat.h>
+
+    #include "AudioUnits/Registry.h"
+#endif
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -32,6 +38,11 @@ bool holdsViews(void* window);
 void beginWindowMove(void* window);
 void endWindowMove(void* window);
 void rescaleWindow(void* window, double scale);
+#endif
+#if SYMBOLENGINE_PLUGIN_WINDOWS && defined(__APPLE__)
+int viewsInEditor(void* window);
+ui::Size ownViewSize(void* window);
+bool ownViewAtTopLeft(void* window);
 #endif
 
 namespace
@@ -678,6 +689,235 @@ TEST_CASE("A VST3 plugin asking for its editor is told to the program", "[window
 
     CHECK(rig.turnUntil(
         [&] { return std::find(rig.changes.begin(), rig.changes.end(), PluginChange::editor) != rig.changes.end(); }));
+}
+
+#endif
+
+#if SYMBOLENGINE_PLUGIN_WINDOWS && defined(__APPLE__)
+
+namespace
+{
+
+const std::filesystem::path units = SYMBOLENGINE_TEST_AUDIO_UNITS;
+const std::filesystem::path twinUnits = SYMBOLENGINE_TEST_TWIN_AUDIO_UNITS;
+const std::filesystem::path unitLog = SYMBOLENGINE_TEST_AU_LOG;
+
+std::string unitMisuses()
+{
+    std::error_code missing;
+    return files::read(unitLog, missing);
+}
+
+OSType code(const char (&four)[5])
+{
+    return static_cast<OSType>(static_cast<unsigned char>(four[0])) << 24 |
+           static_cast<OSType>(static_cast<unsigned char>(four[1])) << 16 |
+           static_cast<OSType>(static_cast<unsigned char>(four[2])) << 8 |
+           static_cast<OSType>(static_cast<unsigned char>(four[3]));
+}
+
+// The test component's units, and the twin's, registered with this process in that order, as the twin's view class
+// is to collide with the first's.
+struct UnitRig
+{
+    UnitRig()
+    {
+        REQUIRE(testAudioUnits::registerAll(units));
+        REQUIRE(testAudioUnits::registerAll(twinUnits));
+        std::error_code ignored;
+        std::filesystem::remove(unitLog, ignored);
+        setenv("SYMBOLENGINE_TEST_AU_LOG", unitLog.c_str(), 1);
+    }
+
+    TestMainThread main;
+    std::vector<std::string> wrong;
+    AudioUnitFormat format{{main.post(), main.isCurrent(), nullptr}};
+    PluginHost host{
+        {main.post(), main.isCurrent(), 2000ms, [this](const std::string& what) { wrong.push_back(what); }}};
+
+    // A unit, made and, unless asked not to be, prepared, which initializes it.
+    std::shared_ptr<Plugin> made(const char (&subtype)[5], bool prepared = true)
+    {
+        PluginError error;
+        const auto identity = PluginIdentity::audioUnit(code("aufx"), code(subtype), code("SyTs"));
+        PluginDescription description;
+        for (const auto& component : {units, twinUnits})
+            for (const auto& plugin : format.pluginsIn(component, error))
+                if (plugin.identity == identity)
+                    description = plugin;
+        REQUIRE(description.identity == identity);
+        auto plugin = host.make(format, description);
+        REQUIRE(main.turnUntil([&] { return plugin->state() != Plugin::State::making; }));
+        INFO(plugin->problem().message);
+        REQUIRE(plugin->state() == Plugin::State::inactive);
+        if (prepared)
+            REQUIRE(plugin->prepare({48000.0, 512, false}));
+        return plugin;
+    }
+
+    template <typename Condition>
+    bool turnUntil(Condition condition, std::chrono::milliseconds limit = 5s)
+    {
+        return main.turnUntil(
+            [&] {
+                turnSystemLoop();
+                return condition();
+            },
+            limit);
+    }
+
+    // Turns both for a while, as views that change on timers are given time to.
+    void turnFor(std::chrono::milliseconds time)
+    {
+        const auto until = std::chrono::steady_clock::now() + time;
+        turnUntil([&] { return std::chrono::steady_clock::now() > until; }, time + 1s);
+    }
+};
+
+std::unique_ptr<PluginWindow> openWindow(const std::shared_ptr<Plugin>& plugin, PluginError& error)
+{
+    return PluginWindow::open(plugin, {"Audio Unit editor test"}, error);
+}
+
+}
+
+TEST_CASE("An Audio Unit says whether it has a view, asked without one being made", "[windows]")
+{
+    UnitRig rig;
+    CHECK(rig.made("VFix", false)->hasEditor());
+    CHECK_FALSE(rig.made("Pass", false)->hasEditor());
+    CHECK(unitMisuses().empty());
+}
+
+TEST_CASE("An Audio Unit's view opens only on an initialized unit, at its own size, and is taken out before the unit "
+          "is uninitialized and put back once it is initialized again",
+          "[windows]")
+{
+    UnitRig rig;
+    auto plugin = rig.made("VFix", false);
+    PluginError error;
+    CHECK(openWindow(plugin, error) == nullptr);
+    CHECK(error);
+
+    REQUIRE(plugin->prepare({48000.0, 512, false}));
+    auto window = openWindow(plugin, error);
+    INFO(error.message);
+    REQUIRE(window != nullptr);
+    CHECK(window->editorSize() == PluginEditorSize{500, 300});
+    CHECK(windowSize(*window) == ui::Size{500, 300});
+    CHECK_FALSE(window->isResizable());
+    CHECK(viewsInEditor(window->nativeHandle()) == 1);
+    CHECK(ownViewAtTopLeft(window->nativeHandle()));
+
+    // Prepared again at another rate, and let go of: its view out while it is uninitialized, and back after.
+    REQUIRE(plugin->prepare({44100.0, 256, false}));
+    CHECK(viewsInEditor(window->nativeHandle()) == 1);
+    plugin->release();
+    CHECK(viewsInEditor(window->nativeHandle()) == 0);
+    REQUIRE(plugin->prepare({48000.0, 512, false}));
+    CHECK(viewsInEditor(window->nativeHandle()) == 1);
+
+    window.reset();
+    rig.turnFor(50ms);
+    CHECK(unitMisuses().empty());
+    CHECK(rig.wrong.empty());
+}
+
+TEST_CASE("An Audio Unit's view that sizes itself is followed by its window, never fed back, a size of none taken as "
+          "not yet known and an origin it moves put back",
+          "[windows]")
+{
+    UnitRig rig;
+    PluginError error;
+
+    SECTION("growing on a timer")
+    {
+        auto plugin = rig.made("VGro");
+        auto window = openWindow(plugin, error);
+        REQUIRE(window != nullptr);
+        CHECK(rig.turnUntil([&] { return windowSize(*window) == ui::Size{550, 350}; }));
+        rig.turnFor(300ms);
+        CHECK(windowSize(*window) == ui::Size{550, 350});
+        CHECK(window->editorSize() == PluginEditorSize{550, 350});
+        CHECK(ownViewSize(window->nativeHandle()) == ui::Size{550, 350});
+    }
+
+    SECTION("saying its size only once shown")
+    {
+        auto plugin = rig.made("VZer");
+        auto window = openWindow(plugin, error);
+        REQUIRE(window != nullptr);
+        CHECK(windowSize(*window).width >= 100);
+        CHECK(rig.turnUntil([&] { return windowSize(*window) == ui::Size{600, 400}; }));
+        CHECK(ownViewAtTopLeft(window->nativeHandle()));
+    }
+
+    SECTION("moving its own origin")
+    {
+        auto plugin = rig.made("VOri");
+        auto window = openWindow(plugin, error);
+        REQUIRE(window != nullptr);
+        CHECK(rig.turnUntil([&] { return windowSize(*window) == ui::Size{520, 320}; }));
+        rig.turnFor(50ms);
+        CHECK(ownViewAtTopLeft(window->nativeHandle()));
+    }
+
+    rig.turnFor(50ms);
+    CHECK(unitMisuses().empty());
+}
+
+TEST_CASE("A resizable Audio Unit view's window can be dragged, the view following it, and a fixed one's can't",
+          "[windows]")
+{
+    UnitRig rig;
+    PluginError error;
+    auto sizable = rig.made("VSiz");
+    auto window = openWindow(sizable, error);
+    REQUIRE(window != nullptr);
+    CHECK(window->isResizable());
+    CHECK(dragWindow(*window, {700, 500}) == ui::Size{700, 500});
+    CHECK(window->editorSize() == PluginEditorSize{700, 500});
+    CHECK(ownViewSize(window->nativeHandle()) == ui::Size{700, 500});
+    CHECK(ownViewAtTopLeft(window->nativeHandle()));
+
+    auto fixedUnit = rig.made("VFix");
+    auto fixedWindow = openWindow(fixedUnit, error);
+    REQUIRE(fixedWindow != nullptr);
+    CHECK_FALSE(fixedWindow->isResizable());
+    CHECK(dragWindow(*fixedWindow, {700, 500}) == ui::Size{500, 300});
+    CHECK(unitMisuses().empty());
+}
+
+TEST_CASE("An Audio Unit whose view can't be made opens none, saying why, and goes on working: a factory that throws, "
+          "a class its bundle doesn't hold, and a class another plugin's took",
+          "[windows]")
+{
+    UnitRig rig;
+    PluginError error;
+
+    auto throws = rig.made("VThr");
+    CHECK(openWindow(throws, error) == nullptr);
+    CHECK(error.message.find("the test view's own exception") != std::string::npos);
+    CHECK(throws->state() == Plugin::State::active);
+
+    auto missing = rig.made("VMis");
+    CHECK(openWindow(missing, error) == nullptr);
+    CHECK(error.message == "Its editor's class isn't in its bundle.");
+
+    // The twin's view class was taken by the first component's copy, so it is refused rather than shown as the first's.
+    auto first = rig.made("VFix");
+    auto firstWindow = openWindow(first, error);
+    REQUIRE(firstWindow != nullptr);
+    auto twin = rig.made("VTwn");
+    CHECK(openWindow(twin, error) == nullptr);
+    CHECK(error.message == "Its editor's class collides with another plugin's.");
+
+    // One whose factory needs its unit initialized gets an initialized unit.
+    auto needs = rig.made("VNei");
+    auto needsWindow = openWindow(needs, error);
+    INFO(error.message);
+    CHECK(needsWindow != nullptr);
+    CHECK(unitMisuses().empty());
 }
 
 #endif

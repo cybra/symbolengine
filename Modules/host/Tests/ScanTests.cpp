@@ -447,9 +447,19 @@ TEST_CASE(
     REQUIRE(recorded);
     INFO(rig.output());
     CHECK(recorded->outcome == PluginFile::Outcome::found);
-    CHECK(recorded->plugins.size() == 16);
+    CHECK(recorded->plugins.size() == 24);
     REQUIRE(recorded->setAside.size() == 1);
     CHECK(recorded->setAside[0].plugin.name == "Grow");
+
+    // Which have a view, asked without one being made.
+    const auto named = [&](const std::string& name) {
+        return std::find_if(recorded->plugins.begin(), recorded->plugins.end(),
+                            [&](const PluginDescription& plugin) { return plugin.name == name; });
+    };
+    REQUIRE(named("ViewFixed") != recorded->plugins.end());
+    CHECK(named("ViewFixed")->editor);
+    REQUIRE(named("Pass") != recorded->plugins.end());
+    CHECK_FALSE(named("Pass")->editor);
     CHECK(recorded->setAside[0].failure.detail == "It changed its buses as it was initialized.");
     CHECK_FALSE(rig.list.needsScan(units, file.stamp));
     std::error_code missing;

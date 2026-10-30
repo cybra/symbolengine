@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <key>CFBundleExecutable</key><string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
+    <key>CFBundleIdentifier</key><string>dev.symbolengine.test.units.twin</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>CFBundleName</key><string>SymbolEngine Twin Test Units</string>
+    <key>CFBundlePackageType</key><string>BNDL</string>
+    <key>CFBundleShortVersionString</key><string>1.2.3</string>
+    <key>CFBundleVersion</key><string>1.2.3</string>
+    <key>AudioComponents</key>
+    <array>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>VTwn</string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: ViewTwin</string>
+            <key>description</key><string>SymbolEngine's test unit ViewTwin</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>ViewTwinFactory</string>
+        </dict>
+    </array>
+</dict>
+</plist>

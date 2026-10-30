@@ -7,6 +7,7 @@
 
 #include <AudioToolbox/AudioUnitUtilities.h>
 
+#include <dlfcn.h>
 #include <mach/mach_time.h>
 #include <pthread.h>
 
@@ -16,6 +17,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -844,6 +846,100 @@ public:
     }
 };
 
+// A property of the test units' own, which their views ask: whether the unit is initialized, as a UInt32.
+constexpr AudioUnitPropertyID initializedProperty = 64100;
+
+// The bundle this code is in, found from where this function lies: .../X.component from
+// .../X.component/Contents/MacOS/X.
+CFURLRef bundleLocation()
+{
+    Dl_info found{};
+    if (dladdr(reinterpret_cast<const void*>(&bundleLocation), &found) == 0 || found.dli_fname == nullptr)
+        return nullptr;
+    auto url = CFURLCreateFromFileSystemRepresentation(nullptr, reinterpret_cast<const UInt8*>(found.dli_fname),
+                                                       static_cast<CFIndex>(std::strlen(found.dli_fname)), false);
+    for (int up = 0; up < 3 && url != nullptr; ++up)
+    {
+        const auto parent = CFURLCreateCopyDeletingLastPathComponent(nullptr, url);
+        CFRelease(url);
+        url = parent;
+    }
+    return url;
+}
+
+// A unit with a Cocoa view from this bundle, of the kind its factory class's name says (TestUnitViews.mm), or one
+// naming a class the bundle doesn't hold.
+class Viewed : public Checked
+{
+public:
+    Viewed(AudioComponentInstance instance, const char* unitName, const char* factoryClass)
+        : Checked(instance, unitName), factory(factoryClass)
+    {
+    }
+
+    OSStatus GetPropertyInfo(AudioUnitPropertyID id, AudioUnitScope scope, AudioUnitElement element, UInt32& size,
+                             bool& writable) override
+    {
+        if (scope == kAudioUnitScope_Global && (id == kAudioUnitProperty_CocoaUI || id == initializedProperty))
+        {
+            size = id == kAudioUnitProperty_CocoaUI ? sizeof(AudioUnitCocoaViewInfo) : sizeof(UInt32);
+            writable = false;
+            return noErr;
+        }
+        return Checked::GetPropertyInfo(id, scope, element, size, writable);
+    }
+
+    OSStatus GetProperty(AudioUnitPropertyID id, AudioUnitScope scope, AudioUnitElement element, void* data) override
+    {
+        if (scope == kAudioUnitScope_Global && id == kAudioUnitProperty_CocoaUI)
+        {
+            // Both the host's to let go of.
+            auto* info = static_cast<AudioUnitCocoaViewInfo*>(data);
+            info->mCocoaAUViewBundleLocation = bundleLocation();
+            info->mCocoaAUViewClass[0] = CFStringCreateWithCString(nullptr, factory, kCFStringEncodingUTF8);
+            return noErr;
+        }
+        if (scope == kAudioUnitScope_Global && id == initializedProperty)
+        {
+            *static_cast<UInt32*>(data) = IsInitialized() ? 1 : 0;
+            return noErr;
+        }
+        return Checked::GetProperty(id, scope, element, data);
+    }
+
+private:
+    const char* factory;
+};
+
+#define SYMBOLENGINE_VIEWED(Unit, factoryClass)                                                                        \
+    class Unit final : public Viewed                                                                                   \
+    {                                                                                                                  \
+    public:                                                                                                            \
+        explicit Unit(AudioComponentInstance instance) : Viewed(instance, #Unit, factoryClass) {}                      \
+    };
+
+// A fixed view; one the user may resize; one that grows itself; one that has no size until after it is shown; one
+// that moves its own origin as it is resized; one whose factory throws unless its unit is initialized; one whose
+// factory always throws; and a class the bundle doesn't hold.
+SYMBOLENGINE_VIEWED(ViewFixed, "SymbolEngineTestUnitViewFixed")
+SYMBOLENGINE_VIEWED(ViewSizable, "SymbolEngineTestUnitViewSizable")
+SYMBOLENGINE_VIEWED(ViewGrows, "SymbolEngineTestUnitViewGrows")
+SYMBOLENGINE_VIEWED(ViewZero, "SymbolEngineTestUnitViewZero")
+SYMBOLENGINE_VIEWED(ViewOrigin, "SymbolEngineTestUnitViewOrigin")
+SYMBOLENGINE_VIEWED(ViewNeedsInit, "SymbolEngineTestUnitViewNeedsInit")
+SYMBOLENGINE_VIEWED(ViewThrows, "SymbolEngineTestUnitViewThrows")
+SYMBOLENGINE_VIEWED(ViewMissing, "SymbolEngineTestUnitViewNowhere")
+
+// In the twin component, built from the same source: a unit naming the fixed view's factory class, which the main
+// component's copy of the class has already taken in a process that loaded both.
+SYMBOLENGINE_VIEWED(ViewTwin, "SymbolEngineTestUnitViewFixed")
+
+}
+
+// What a test unit's view found wrong, written as the units' own.
+extern "C" void symbolEngineTestUnitMisuse(const char* unit, const char* what)
+{
+    misuse(unit, what);
 }
 
 AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Pass)
@@ -863,3 +959,12 @@ AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Gain)
 AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Lazy)
 AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Picky)
 AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Forget)
+AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, ViewFixed)
+AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, ViewSizable)
+AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, ViewGrows)
+AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, ViewZero)
+AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, ViewOrigin)
+AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, ViewNeedsInit)
+AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, ViewThrows)
+AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, ViewMissing)
+AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, ViewTwin)
