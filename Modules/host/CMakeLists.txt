@@ -87,7 +87,8 @@ if(SYMBOLENGINE_TESTS)
     endif()
     symbolengine_set_warnings(symbolengine_host_scan_worker)
 
-    set(test_sources Tests/Allocations.cpp Tests/CrashNoteTests.cpp Tests/EditorTests.cpp Tests/LateBlockTests.cpp
+    set(test_sources Tests/Allocations.cpp Tests/CrashNoteTests.cpp Tests/EditorTests.cpp Tests/FreePluginTests.cpp
+                     Tests/LateBlockTests.cpp
                      Tests/ParameterTests.cpp Tests/PluginLifeTests.cpp Tests/PluginListTests.cpp
                      Tests/PluginTimingTests.cpp Tests/ScanTests.cpp Tests/ScanWorkerTests.cpp Tests/TimeTests.cpp
                      Tests/Vst3Tests.cpp Tests/WalkTests.cpp)
@@ -105,7 +106,7 @@ if(SYMBOLENGINE_TESTS)
     if(TARGET symbolengine_ui)
         list(APPEND test_sources $<IF:$<BOOL:${APPLE}>,Tests/EditorTests_mac.mm,Tests/EditorTests_windows.cpp>)
     endif()
-    symbolengine_add_tests(host SOURCES ${test_sources} ALONE "[timing],[windows]")
+    symbolengine_add_tests(host SOURCES ${test_sources} ALONE "[timing],[windows],[free]")
     # The devices module's fake system and its tests' helpers, for a device's late blocks named by their plugin.
     target_link_libraries(symbolengine_host_tests PRIVATE SymbolEngine::devices)
     target_include_directories(symbolengine_host_tests PRIVATE ${PROJECT_SOURCE_DIR}/Modules/core/Tests

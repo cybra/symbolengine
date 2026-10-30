@@ -127,6 +127,55 @@ jobs:
           unzip -q sdk.zip
           echo "ASIO=-DSYMBOLENGINE_ASIO_SDK=$(cygpath -m "$RUNNER_TEMP/asio/ASIOSDK")" >> "$GITHUB_ENV"
 
+      # Plugins by other makers for the host's tests, free to download, each pinned by its checksum, used as tests alone
+      # and never shipped. The host's tests skip what they need of them without SYMBOLENGINE_FREE_PLUGINS.
+      - name: Free plugins
+        if: matrix.validator
+        shell: bash
+        run: |
+          free="$RUNNER_TEMP/free-plugins"
+          mkdir -p "$free/VST3" "$free/archives"
+          cd "$free/archives"
+          fetch() { # fetch <url> <sha256>: the file, its checksum checked, under its own name
+            curl -sSfL -O "$1"
+            file=$(basename "$1")
+            if command -v shasum > /dev/null; then actual=$(shasum -a 256 "$file" | cut -d' ' -f1); else actual=$(sha256sum "$file" | cut -d' ' -f1); fi
+            [ "$actual" = "$2" ] || { echo "$1 has checksum $actual, not $2"; exit 1; }
+          }
+          surge=https://github.com/surge-synthesizer/releases-xt/releases/download/1.3.4
+          dragonfly=https://github.com/michaelwillis/dragonfly-reverb/releases/download/3.2.10
+          case "$RUNNER_OS" in
+            macOS)
+              fetch "$surge/surge-xt-macos-1.3.4-pluginsonly.zip" 37d8d809693adc86587b7bc75a2384fc4e905f259aa9b9a21777749d36fbf8aa
+              fetch "$dragonfly/dragonfly-reverb-3.2.10-macos-universal.dmg" e0b854b92a4e51ce5851320fb1a9f91ab1a4309f997de070e175b3e5cab4adaf
+              unzip -q surge-xt-macos-1.3.4-pluginsonly.zip
+              hdiutil attach -nobrowse -readonly -mountpoint "$free/archives/mounted" dragonfly-reverb-3.2.10-macos-universal.dmg
+              pkgutil --expand-full "$free/archives/mounted/dragonfly-reverb-AudioPlugins.pkg" dragonfly
+              hdiutil detach "$free/archives/mounted"
+              # Audio Units reach a program through the system's registry, so these are installed for the user.
+              mkdir -p "$HOME/Library/Audio/Plug-Ins/Components"
+              cp -R *.component "$HOME/Library/Audio/Plug-Ins/Components/"
+              ln -s "$HOME/Library/Audio/Plug-Ins/Components" "$free/Components"
+              killall -9 AudioComponentRegistrar || true
+              ;;
+            Windows)
+              fetch "$surge/surge-xt-win64-1.3.4-pluginsonly.zip" 564e162c560af07ad4ed47fe1bfcd827cf97a575de30d06c48249aad2e7c35e6
+              fetch "$dragonfly/dragonfly-reverb-3.2.10-win64.zip" ca5f35f9dcd9a33f06490d3c92f04061a1a798cb81257d5ca5851bdda0824c66
+              unzip -q surge-xt-win64-1.3.4-pluginsonly.zip
+              unzip -q dragonfly-reverb-3.2.10-win64.zip
+              ;;
+            Linux)
+              fetch "$surge/surge-xt-linux-1.3.4-pluginsonly.tar.gz" dd431b75f5fa197c4bffa6ca27ca46970f0a94c834119bb1db7decdeec4c28db
+              fetch "$dragonfly/dragonfly-reverb-3.2.10-linux-x86_64.tar.xz" 59f1593120de82e31dd194e2ab1536af14fec2b3ec6ec45abf6d9c8ac02ef430
+              tar xzf surge-xt-linux-1.3.4-pluginsonly.tar.gz
+              tar xJf dragonfly-reverb-3.2.10-linux-x86_64.tar.xz
+              ;;
+          esac
+          find . -type d -name '*.vst3' -prune -exec cp -R {} "$free/VST3/" \;
+          ls "$free/VST3"
+          if [ "$RUNNER_OS" = "Windows" ]; then free=$(cygpath -m "$free"); fi
+          echo "SYMBOLENGINE_FREE_PLUGINS=$free" >> "$GITHUB_ENV"
+
       - name: Configure
         shell: bash
         run: cmake --preset ${{ matrix.preset }} $VALIDATORS $ASIO
