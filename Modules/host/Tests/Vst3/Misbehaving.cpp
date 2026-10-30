@@ -301,6 +301,9 @@ public:
     {
         if (data.numSamples <= 0 || data.numInputs < 1 || data.numOutputs < 1)
             return kResultOk;
+        // Over every block as long as its name says, as "Late 100 ms.vst3", for a program naming what made it late.
+        if (says("late"))
+            std::this_thread::sleep_for(std::chrono::milliseconds(numberBefore(" ms")));
         const auto& in = data.inputs[0];
         auto& out = data.outputs[0];
         for (int32 channel = 0; channel < std::min(in.numChannels, out.numChannels); ++channel)
