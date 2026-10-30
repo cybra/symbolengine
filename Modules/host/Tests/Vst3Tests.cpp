@@ -522,6 +522,7 @@ TEST_CASE("A discontinuity in the program's time stops and starts a VST3 plugin'
     INFO(text);
     CHECK(text.find("position=480000 playing=1") != std::string::npos);
     CHECK(text.find("stops=1") != std::string::npos);
+    CHECK(plugin->timing().longestResetWait == 0);
     CHECK(misuses().empty());
 }
 

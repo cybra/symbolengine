@@ -45,6 +45,12 @@ void run(void* call)
     (*static_cast<Call*>(call))();
 }
 
+std::int64_t nanosecondsNow() noexcept
+{
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
 std::int64_t ticksNow() noexcept
 {
     return std::chrono::steady_clock::now().time_since_epoch().count();
@@ -255,6 +261,9 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     std::atomic<std::int64_t> blocksTimed{0}, lateBlocks{0}, took{0}, lasted{0}, worstAt{0};
     std::atomic<std::uint64_t> worst{0};
 
+    // When it asked for a reset not yet done, and the longest it waited for one since its timing was last taken.
+    std::atomic<std::int64_t> resetAsked{0}, longestResetWait{0};
+
     void timed(std::chrono::steady_clock::time_point began, int frames) noexcept
     {
         const auto taken =
@@ -291,6 +300,7 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
         const auto spent = take ? took.exchange(0) : took.load();
         const auto blocksLasted = take ? lasted.exchange(0) : lasted.load();
         const auto worstBlock = take ? worst.exchange(0) : worst.load();
+        measured.longestResetWait = take ? longestResetWait.exchange(0) : longestResetWait.load();
 
         if (blocksLasted > 0)
             measured.load = static_cast<double>(spent) / static_cast<double>(blocksLasted);
@@ -324,6 +334,13 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
 
     void notice(PluginNotice what) noexcept override
     {
+        // The first asking for a reset, kept until it is done.
+        if (has(what, PluginNotice::reset))
+        {
+            std::int64_t none = 0;
+            resetAsked.compare_exchange_strong(none, nanosecondsNow());
+        }
+
         pending.fetch_or(static_cast<std::uint32_t>(what));
 
         if (insideProcess)
@@ -870,12 +887,25 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
             return;
 
         // Reset with nothing playing it, as a reset is made.
-        if (has(what, PluginNotice::reset) && state == State::active)
+        if (has(what, PluginNotice::reset))
         {
-            if (!hold() || !call("reset", [this] { instance->reset(); }))
-                return;
+            const auto asked = resetAsked.exchange(0);
 
-            open();
+            if (state == State::active)
+            {
+                if (!hold() || !call("reset", [this] { instance->reset(); }))
+                    return;
+
+                // None asked, for a notice that came as the last was handled, which that reset answered.
+                const auto wait = asked != 0 ? nanosecondsNow() - asked : 0;
+
+                for (auto longest = longestResetWait.load();
+                     wait > longest && !longestResetWait.compare_exchange_weak(longest, wait);)
+                {
+                }
+
+                open();
+            }
         }
 
         if (has(what, PluginNotice::buses) || has(what, PluginNotice::latency))

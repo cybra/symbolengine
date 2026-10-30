@@ -9,6 +9,8 @@
 #include <chrono>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -224,4 +226,69 @@ TEST_CASE("The plugin that alone took longer than its block lasts is named for a
     REQUIRE(late.has_value());
     CHECK(late->plugin.name == "Alpha");
     CHECK_FALSE(rig.host.slowestBetween(ended + 1, together.first - 1).has_value());
+}
+
+TEST_CASE("The longest a plugin waited from asking for its reset until it had it is kept until its timing is taken, so "
+          "a main thread kept busy shows",
+          "[timing]")
+{
+    Rig rig;
+    std::atomic<bool> ask{false}, reset{false};
+    FakePluginFormat::Script asking;
+    asking.inside = [&](std::string_view call) {
+        if (call == "process" && ask.exchange(false))
+            rig.fake.notify("asking", PluginNotice::reset);
+        if (call == "reset")
+            reset = true;
+    };
+    rig.fake.script("asking", asking);
+    auto plugin = rig.host.make(rig.fake, FakePluginFormat::describe("asking"));
+    REQUIRE(rig.main.turnUntil([&] { return plugin->state() != Plugin::State::making; }));
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+    CHECK(plugin->timing().longestResetWait == 0);
+
+    // A block on an audio thread of the test's own in which it asks, as an Audio Unit does at a discontinuity.
+    const auto jump = [&] {
+        reset = false;
+        ask = true;
+        std::thread([&] {
+            std::vector<float> left(64), right(64);
+            float* channels[] = {left.data(), right.data()};
+            plugin->process(channels, 2, 64);
+        }).join();
+    };
+
+    // The main thread free, it comes soon.
+    jump();
+    REQUIRE(rig.main.turnUntil([&] { return reset.load(); }, 2s));
+    const auto quick = plugin->timing().longestResetWait;
+    CHECK(quick > 0);
+    CHECK(quick < 150'000'000);
+
+    // The main thread held up for 240 ms, it waits as long from when it first asked, though it asked again meanwhile.
+    jump();
+    std::this_thread::sleep_for(120ms);
+    jump();
+    std::this_thread::sleep_for(120ms);
+    REQUIRE(rig.main.turnUntil([&] { return reset.load(); }, 2s));
+    const auto held = plugin->timing().longestResetWait;
+    CHECK(held >= 240'000'000);
+
+    // A quick one after it leaves the longest, until it is taken.
+    jump();
+    REQUIRE(rig.main.turnUntil([&] { return reset.load(); }, 2s));
+    CHECK(plugin->timing().longestResetWait == held);
+    CHECK(plugin->takeTiming().longestResetWait == held);
+    CHECK(plugin->timing().longestResetWait == 0);
+
+    // Asked for while it isn't prepared, no reset comes, and the time isn't counted against the next.
+    plugin->release();
+    rig.fake.notify("asking", PluginNotice::reset);
+    rig.main.settle();
+    std::this_thread::sleep_for(100ms);
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+    jump();
+    REQUIRE(rig.main.turnUntil([&] { return reset.load(); }, 2s));
+    CHECK(plugin->timing().longestResetWait < 100'000'000);
+    CHECK(rig.fake.misuses().empty());
 }

@@ -796,6 +796,22 @@ TEST_CASE("At a discontinuity an Audio Unit playing in real time renders on and 
     CHECK(misuses().empty());
 }
 
+TEST_CASE("The longest an Audio Unit playing in real time waited from a discontinuity to its reset is kept, so a main "
+          "thread kept busy shows",
+          "[timing]")
+{
+    Rig rig;
+    auto plugin = rig.made("Echo");
+    CHECK(plugin->timing().longestResetWait == 0);
+
+    playBlock(*plugin, 64, 1, false);
+    playBlock(*plugin, 64, 0, true);
+    std::this_thread::sleep_for(200ms);
+    REQUIRE(rig.main.turnUntil([&] { return plugin->timing().longestResetWait > 0; }, 2s));
+    CHECK(plugin->timing().longestResetWait >= 200'000'000);
+    CHECK(misuses().empty());
+}
+
 TEST_CASE("At a discontinuity an Audio Unit rendering offline is reset at once, before it renders the block")
 {
     Rig rig;

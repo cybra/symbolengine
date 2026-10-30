@@ -76,6 +76,11 @@ struct PluginTiming
     double worstShare = 0.0;
     std::int64_t worstNanoseconds = 0;
     std::int64_t worstAt = 0;
+
+    /** Since its timing was last taken, the longest in nanoseconds it waited from asking to be reset from the main
+        thread, as an Audio Unit playing in real time does at a discontinuity, until it had been, so a main thread kept
+        busy shows; 0 for one that never asks, as a VST3 plugin, reset on the audio thread. */
+    std::int64_t longestResetWait = 0;
 };
 
 /** The plugin that made the audio late, as PluginHost::slowestBetween finds it. */
