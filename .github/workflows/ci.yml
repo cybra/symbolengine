@@ -182,6 +182,8 @@ jobs:
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
       - name: Test
+        env:
+          SYMBOLENGINE_HTTP_TEST_URL: https://raw.githubusercontent.com/cybra/symbolengine/main/LICENSE
         run: ctest --preset ${{ matrix.preset }}
 
   sign-off:

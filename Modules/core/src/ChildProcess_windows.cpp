@@ -283,7 +283,9 @@ ChildProcess::~ChildProcess()
     if (theLink != nullptr)
         theLink->close();
 
-    kill();
+    if (!outlives)
+        kill();
+
     CloseHandle(native->process);
 }
 
@@ -482,7 +484,7 @@ std::unique_ptr<ChildProcess> ChildProcess::start(const std::filesystem::path& p
         return nullptr;
     }
 
-    if (const auto job = childrenJob())
+    if (const auto job = childrenJob(); job != nullptr && !options.outlives)
         AssignProcessToJobObject(job, made.hProcess);
 
     ResumeThread(made.hThread);
@@ -492,6 +494,7 @@ std::unique_ptr<ChildProcess> ChildProcess::start(const std::filesystem::path& p
     held->process = made.hProcess;
     held->id = made.dwProcessId;
     std::unique_ptr<ChildProcess> child(new ChildProcess(std::move(held)));
+    child->outlives = options.outlives;
 
     if (options.link)
     {

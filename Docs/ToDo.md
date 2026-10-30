@@ -51,6 +51,8 @@
 - [x] core: values and JSON, XML documents, UTF-8 text, paths and the system's folders, files written safely, settings files, SHA-256, speaker layouts, a lock-free fifo, a guard against denormal numbers, and a resampler.
 - [x] ui: the message loop, calls to the message thread from any other, and timers; and a call on the message thread that waits for what only the loop can bring (`messageLoop::runUntil`), with calls that reach it there (`messageLoop::callSoon`), as a Mac's main dispatch queue holds back others while one of its calls is under way.
 - [ ] core: threads and logging.
+- [x] core: gzip (`gzip::compress`, `gzip::decompress`, through miniz) and files read through memory (`MappedFile`).
+- [x] net: fetching from web servers through each system's own client (`http::get`), addresses for files. Fetching on Linux, after the first release.
 - [x] files: WAV, with RF64 and BW64 past 4 GB and WAVE_FORMAT_EXTENSIBLE, its broadcast extension, iXML and other chunks kept, and AIFF and AIFF-C, read and written a stretch at a time, checked against ffmpeg's and Apple's files.
 - [x] files: FLAC, Ogg Vorbis and Opus, with their tags, through Xiph.Org's libraries built into the module, checked against ffmpeg's and the flac tool's files and read back by them.
 - [x] files: MP3, read gaplessly where LAME's or Xing's information says where the audio lies, and M4A, AAC and CAF through the systems' decoders on Mac and Windows, checked against LAME's, Apple's and ffmpeg's files.

@@ -131,6 +131,16 @@ int main(int argc, [[maybe_unused]] char** narrowArguments)
         return 0;
     }
 
+    // Writes a file a little after it starts, to show it was still running by then.
+    if (mode == "write-later")
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(700));
+        std::FILE* file = std::fopen(argv[2], "w");
+        if (file != nullptr)
+            std::fclose(file);
+        return 0;
+    }
+
     if (mode == "hang")
         hang();
 

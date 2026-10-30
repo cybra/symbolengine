@@ -2,6 +2,8 @@
 #include <symbolengine/core/Files.h>
 #include <symbolengine/core/System.h>
 
+#include "symbolengine/core/Paths.h"
+
 #include "Scratch.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -616,4 +618,24 @@ TEST_CASE("A program started without a link has none to open")
 #else
     unsetenv("SYMBOLENGINE_LINK");
 #endif
+}
+
+TEST_CASE("A child asked to outlive what started it goes on after its object is gone")
+{
+    ScratchFolder scratch;
+    const auto left = scratch.path / "left.txt", killed = scratch.path / "killed.txt";
+
+    {
+        ChildProcess::Options options;
+        options.outlives = true;
+        startHelper({"write-later", paths::toUtf8(left)}, false, options);
+        startHelper({"write-later", paths::toUtf8(killed)});
+    }
+
+    for (int waited = 0; waited < 10000 && !std::filesystem::exists(left); waited += 20)
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    CHECK(std::filesystem::exists(left));
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    CHECK_FALSE(std::filesystem::exists(killed));
 }

@@ -41,8 +41,8 @@ struct ProcessEnding
     or nowhere, and it inherits nothing else of this program's: no open files, sockets or handles, and every signal at
     its default. Nothing about it waits on this program's other threads.
 
-    A child never outlives what started it. Destroying the object kills the child if it still runs and waits for it to
-    end. On Windows every child is in a job that the system ends with this program, however this program ends, and a
+    Unless it is asked to (Options::outlives), a child never outlives what started it. Destroying the object kills the
+    child if it still runs and waits for it to end. On Windows every child is in a job that the system ends with this program, however this program ends, and a
     crash in a child never shows the system's error dialog. A child that opened its link to this program also ends
     when this program goes, through the link (ProcessLink). */
 class ChildProcess
@@ -65,6 +65,10 @@ public:
 
         /** Whether to make a link to the child, which it opens with ProcessLink::toParent(). */
         bool link = false;
+
+        /** Whether the child goes on after this object and this program end, as one that opens a new version of it once
+            it has gone: destroying the object leaves it running, and on Windows it is in no job. */
+        bool outlives = false;
     };
 
     /** Starts the program, given by its full path, or gives nothing and sets the error. */
@@ -105,6 +109,7 @@ private:
     std::unique_ptr<Native> native;
     std::unique_ptr<ProcessLink> theLink;
     std::optional<ProcessEnding> ended;
+    bool outlives = false;
 };
 
 /** Messages both ways between a program and a child it started, over a channel of the system's that only those two

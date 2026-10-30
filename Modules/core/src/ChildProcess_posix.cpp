@@ -237,7 +237,8 @@ ChildProcess::~ChildProcess()
     if (theLink != nullptr)
         theLink->close();
 
-    kill();
+    if (!outlives)
+        kill();
 }
 
 std::unique_ptr<ChildProcess> ChildProcess::start(const std::filesystem::path& program, const Options& options,
@@ -398,6 +399,7 @@ std::unique_ptr<ChildProcess> ChildProcess::start(const std::filesystem::path& p
     auto made = std::make_unique<Native>();
     made->id = id;
     std::unique_ptr<ChildProcess> child(new ChildProcess(std::move(made)));
+    child->outlives = options.outlives;
 
     if (options.link)
     {
