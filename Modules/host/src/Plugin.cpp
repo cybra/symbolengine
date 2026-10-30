@@ -8,6 +8,7 @@
 #include "symbolengine/core/LockFreeFifo.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <bit>
 #include <cmath>
@@ -101,6 +102,56 @@ struct PluginHost::Shared : std::enable_shared_from_this<PluginHost::Shared>
     void enqueue(std::weak_ptr<Plugin::Inner> plugin, PluginFormat& format);
     void makeNext();
     void sweepNotices();
+
+    // Each plugin's description by its number, from when it is made until 64 more have gone after it.
+    std::mutex namesLock;
+    std::map<std::uint64_t, PluginDescription> names;
+    std::deque<std::uint64_t> gone;
+    std::uint64_t numbered = 0;
+
+    std::uint64_t number(const PluginDescription& description)
+    {
+        const std::lock_guard held(namesLock);
+        names.emplace(++numbered, description);
+        return numbered;
+    }
+
+    void forget(std::uint64_t plugin)
+    {
+        const std::lock_guard held(namesLock);
+        gone.push_back(plugin);
+
+        if (gone.size() > 64)
+        {
+            names.erase(gone.front());
+            gone.pop_front();
+        }
+    }
+
+    // The last thousand blocks that took a quarter of their time or more, from any audio thread: which plugin, when it
+    // began, how long it took and how long it lasts, each entry's sequence odd while it is written.
+    struct Slow
+    {
+        std::atomic<std::uint32_t> sequence{0};
+        std::atomic<std::uint64_t> plugin{0};
+        std::atomic<std::int64_t> began{0}, took{0}, lasts{0};
+    };
+
+    std::array<Slow, 1024> slow{};
+    std::atomic<std::uint64_t> slowWritten{0};
+
+    void noteSlow(std::uint64_t plugin, std::int64_t began, std::int64_t took, std::int64_t lasts) noexcept
+    {
+        auto& entry = slow[slowWritten.fetch_add(1, std::memory_order_relaxed) % slow.size()];
+        const auto sequence = entry.sequence.load(std::memory_order_relaxed);
+        entry.sequence.store(sequence + 1, std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_release);
+        entry.plugin.store(plugin, std::memory_order_relaxed);
+        entry.began.store(began, std::memory_order_relaxed);
+        entry.took.store(took, std::memory_order_relaxed);
+        entry.lasts.store(lasts, std::memory_order_relaxed);
+        entry.sequence.store(sequence + 2, std::memory_order_release);
+    }
 };
 
 struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::Inner>
@@ -112,7 +163,14 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     // Its place in the program's crash note, which every call into it is recorded against.
     int noteSlot = -1;
 
-    ~Inner() override { crashNote::release(host->note, noteSlot); }
+    // Its number in the host, which names it in a late block a while after it is gone.
+    std::uint64_t number = 0;
+
+    ~Inner() override
+    {
+        crashNote::release(host->note, noteSlot);
+        host->forget(number);
+    }
 
     // The main thread's.
     std::unique_ptr<PluginFormatInstance> instance;
@@ -209,6 +267,7 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
         if (taken.count() > lasts)
             lateBlocks.fetch_add(1, std::memory_order_relaxed);
 
+        const auto at = std::chrono::duration_cast<std::chrono::nanoseconds>(began.time_since_epoch()).count();
         const auto share = static_cast<float>(static_cast<double>(taken.count()) / static_cast<double>(lasts));
         const auto packed = (std::uint64_t{std::bit_cast<std::uint32_t>(share)} << 32) |
                             static_cast<std::uint32_t>(std::min<std::int64_t>(taken.count(), 0xFFFFFFFF));
@@ -216,10 +275,12 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
         for (auto current = worst.load(std::memory_order_relaxed); packed > current;)
             if (worst.compare_exchange_weak(current, packed, std::memory_order_relaxed))
             {
-                worstAt.store(std::chrono::duration_cast<std::chrono::nanoseconds>(began.time_since_epoch()).count(),
-                              std::memory_order_relaxed);
+                worstAt.store(at, std::memory_order_relaxed);
                 break;
             }
+
+        if (share >= 0.25f)
+            host->noteSlow(number, at, taken.count(), lasts);
     }
 
     PluginTiming timing(bool take) noexcept
@@ -1032,12 +1093,66 @@ void PluginHost::setCrashNote(PluginCrashNote* note)
     shared->note = note;
 }
 
+std::optional<PluginLate> PluginHost::slowestBetween(std::int64_t from, std::int64_t to) const
+{
+    struct Block
+    {
+        std::uint64_t plugin = 0;
+        std::int64_t began = 0, took = 0, lasts = 0;
+
+        double share() const { return static_cast<double>(took) / static_cast<double>(lasts); }
+    };
+
+    std::optional<Block> alone, longest;
+
+    for (const auto& entry : shared->slow)
+    {
+        const auto sequence = entry.sequence.load(std::memory_order_acquire);
+        const Block block{entry.plugin.load(std::memory_order_relaxed), entry.began.load(std::memory_order_relaxed),
+                          entry.took.load(std::memory_order_relaxed), entry.lasts.load(std::memory_order_relaxed)};
+        std::atomic_thread_fence(std::memory_order_acquire);
+
+        // Left out while it is written, never written, or outside the time.
+        if (sequence % 2 != 0 || entry.sequence.load(std::memory_order_relaxed) != sequence || block.plugin == 0 ||
+            block.began >= to || block.began + block.took <= from)
+            continue;
+
+        if (block.took > block.lasts)
+        {
+            if (!alone || block.share() > alone->share())
+                alone = block;
+        }
+        else if (!longest || block.took > longest->took)
+        {
+            longest = block;
+        }
+    }
+
+    const auto& chosen = alone ? alone : longest;
+
+    if (!chosen)
+        return std::nullopt;
+
+    PluginLate late;
+    late.alone = alone.has_value();
+    late.nanoseconds = chosen->took;
+    late.blockNanoseconds = chosen->lasts;
+    late.at = chosen->began;
+    const std::lock_guard held(shared->namesLock);
+
+    if (const auto found = shared->names.find(chosen->plugin); found != shared->names.end())
+        late.plugin = found->second;
+
+    return late;
+}
+
 std::shared_ptr<Plugin> PluginHost::make(PluginFormat& format, const PluginDescription& description)
 {
     auto inner = std::make_shared<Plugin::Inner>();
     inner->host = shared;
     inner->description = description;
     inner->noteSlot = crashNote::claim(shared->note, description);
+    inner->number = shared->number(description);
 
     // The last hold, let go of on any thread, hands its taking down to the main thread, which waits until no call into
     // the plugin is under way.

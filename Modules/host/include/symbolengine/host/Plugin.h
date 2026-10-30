@@ -78,6 +78,22 @@ struct PluginTiming
     std::int64_t worstAt = 0;
 };
 
+/** The plugin that made the audio late, as PluginHost::slowestBetween finds it. */
+struct PluginLate
+{
+    PluginDescription plugin;
+
+    /** Whether it alone took longer than its block lasts; otherwise it took the most of the time, which a moment the
+        system held the audio up can wrongly blame. */
+    bool alone = false;
+
+    /** How long it took over its block, how long the block lasts, and when it began in nanoseconds on the steady
+        clock. */
+    std::int64_t nanoseconds = 0;
+    std::int64_t blockNanoseconds = 0;
+    std::int64_t at = 0;
+};
+
 /** What every plugin a program hosts shares: the main thread they are made and called on, and the queue that makes
     them one per turn of its run loop, so a slow one never holds up the others or the program's windows. */
 class PluginHost
@@ -114,6 +130,13 @@ public:
     /** The program's crash note, which the host records each plugin it makes and each call into one in from then on,
         before any plugin is made; it outlives the host. */
     void setCrashNote(PluginCrashNote* note);
+
+    /** The plugin that made the audio late between two moments, in nanoseconds on the steady clock, as a device's late
+        block began and ended: of the plugins whose blocks fell in that time, the one that alone took longer over its
+        block than it lasts by the most, or else the one that took the longest over its block, if a quarter of the
+        block or more; none otherwise. From any thread but an audio thread, for the last thousand blocks that took a
+        quarter of their time or more. */
+    std::optional<PluginLate> slowestBetween(std::int64_t from, std::int64_t to) const;
 
     struct Shared;
 

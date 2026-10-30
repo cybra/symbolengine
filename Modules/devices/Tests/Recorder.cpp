@@ -36,6 +36,7 @@ const char* kindName(AudioEvent::Kind kind)
         case Kind::stalled: return "stalled";
         case Kind::resumed: return "resumed";
         case Kind::runaway: return "runaway";
+        case Kind::late: return "late";
         case Kind::noSound: return "no sound";
         case Kind::silentInput: return "silent input";
         case Kind::inputSound: return "input sound";

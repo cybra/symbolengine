@@ -165,6 +165,23 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
     std::atomic<std::int64_t> notesLost{0}, lastCycleEnds{-1};
     std::atomic<double> load{0.0};
 
+    // The worst late block since the control thread last told them, written by the audio thread: the count of late
+    // blocks it was, when it began, how long it took, its frames and its share of its time, its sequence odd while
+    // written. A block counted after the last told starts the record again.
+    struct Late
+    {
+        std::atomic<std::uint32_t> sequence{0};
+        std::atomic<std::int64_t> index{0}, began{0}, took{0};
+        std::atomic<int> frames{0};
+        std::atomic<double> share{0.0};
+    };
+
+    Late late;
+    std::atomic<std::int64_t> lateTold{0};
+
+    // The control thread's: when it last told late blocks.
+    std::int64_t lateToldAt = -1;
+
     // Set by the system's notifications, from any thread.
     std::atomic<bool> changePending{false}, reopenPending{false}, rebuilding{false};
     std::atomic<std::int64_t> changeAt{0};
@@ -844,6 +861,8 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
             tell({.kind = AudioEvent::Kind::resumed, .position = position});
         }
 
+        watchLate();
+
         const auto frames = framesThisStretch.load();
         const auto elapsed = now - windowAt;
         if (elapsed >= 500'000'000)
@@ -861,6 +880,50 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
                 runawaySaid = false;
             }
         }
+    }
+
+    // Late blocks told: the first after a second of none at once, and those within a second of the last told together,
+    // the worst of them described.
+    void watchLate()
+    {
+        const auto count = overruns.load();
+        const auto told = lateTold.load();
+        const auto now = steadyNanoseconds();
+
+        if (count <= told || (lateToldAt >= 0 && now - lateToldAt < 1'000'000'000))
+            return;
+
+        AudioEvent event{.kind = AudioEvent::Kind::late, .count = static_cast<int>(count - told)};
+
+        // The worst, read whole: tried again while the audio thread writes it, and left out if one counted since took
+        // its place.
+        for (int attempt = 0; attempt < 100; ++attempt)
+        {
+            const auto sequence = late.sequence.load(std::memory_order_acquire);
+            const auto index = late.index.load(std::memory_order_relaxed);
+            const auto began = late.began.load(std::memory_order_relaxed);
+            const auto took = late.took.load(std::memory_order_relaxed);
+            const auto frames = late.frames.load(std::memory_order_relaxed);
+            std::atomic_thread_fence(std::memory_order_acquire);
+
+            if (sequence % 2 != 0 || late.sequence.load(std::memory_order_relaxed) != sequence)
+                continue;
+
+            if (index > told && index <= count)
+            {
+                event.nanoseconds = took;
+                event.frames = frames;
+
+                if (options.describeLate)
+                    event.cause = options.describeLate(began, began + took);
+            }
+
+            break;
+        }
+
+        lateTold.store(count);
+        lateToldAt = now;
+        tell(std::move(event));
     }
 
     void drainNotes()
@@ -979,7 +1042,8 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
             {
                 const auto lasts = static_cast<double>(given.frames) / run.rate;
                 if (took > lasts)
-                    overruns.fetch_add(1, std::memory_order_relaxed);
+                    noteLate(overruns.fetch_add(1, std::memory_order_relaxed) + 1, began, took,
+                             static_cast<int>(given.frames), took / lasts);
                 load.store(load.load(std::memory_order_relaxed) * 0.95 + 0.05 * took / lasts,
                            std::memory_order_relaxed);
                 lastCycleEnds.store(system->now() + static_cast<std::int64_t>(std::llround(1e9 * lasts)));
@@ -988,6 +1052,25 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
             stretchCycles.fetch_add(1, std::memory_order_relaxed);
         }
         inCycle.store(false);
+    }
+
+    // Kept if it is the first late block since the last told, or worse than the worst since.
+    void noteLate(std::int64_t index, SteadyClock::time_point began, double took, int frames, double share) noexcept
+    {
+        if (late.index.load(std::memory_order_relaxed) > lateTold.load(std::memory_order_relaxed) &&
+            share <= late.share.load(std::memory_order_relaxed))
+            return;
+
+        const auto sequence = late.sequence.load(std::memory_order_relaxed);
+        late.sequence.store(sequence + 1, std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_release);
+        late.index.store(index, std::memory_order_relaxed);
+        late.began.store(std::chrono::duration_cast<std::chrono::nanoseconds>(began.time_since_epoch()).count(),
+                         std::memory_order_relaxed);
+        late.took.store(std::llround(took * 1e9), std::memory_order_relaxed);
+        late.frames.store(frames, std::memory_order_relaxed);
+        late.share.store(share, std::memory_order_relaxed);
+        late.sequence.store(sequence + 2, std::memory_order_release);
     }
 
     static void silence(const AudioSystemCycle& given) noexcept

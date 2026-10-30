@@ -8,6 +8,8 @@
 #include <atomic>
 #include <chrono>
 #include <stdexcept>
+#include <string>
+#include <utility>
 #include <vector>
 
 using namespace symbolengine;
@@ -22,8 +24,17 @@ std::int64_t nanosecondsNow()
         .count();
 }
 
-// A fake plugin that spends as long as it is told in each block, busy as a plugin working hard is, and throws from its
-// processing once told to.
+// Spends the time given, busy as a plugin working hard is.
+void spendBusy(std::chrono::microseconds time)
+{
+    const auto until = std::chrono::steady_clock::now() + time;
+    while (std::chrono::steady_clock::now() < until)
+    {
+    }
+}
+
+// A fake plugin that spends as long as it is told in each block and throws from its processing once told to, and others
+// in the same host.
 struct Rig
 {
     TestMainThread main;
@@ -40,14 +51,23 @@ struct Rig
             if (fail)
                 throw std::runtime_error("told to fail");
 
-            const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(spend.load());
-            while (std::chrono::steady_clock::now() < until)
-            {
-            }
+            spendBusy(std::chrono::microseconds(spend.load()));
         };
         fake.script("busy", script);
         plugin = host.make(fake, FakePluginFormat::describe("busy"));
         REQUIRE(main.turnUntil([&] { return plugin->state() != Plugin::State::making; }));
+    }
+
+    // Another, prepared for blocks of 10 ms, that spends as many microseconds in each as the value given says.
+    std::shared_ptr<Plugin> another(const std::string& id, std::atomic<std::int64_t>& spends)
+    {
+        FakePluginFormat::Script script;
+        script.onBlock = [&spends](const PluginBlock&) { spendBusy(std::chrono::microseconds(spends.load())); };
+        fake.script(id, script);
+        auto made = host.make(fake, FakePluginFormat::describe(id));
+        REQUIRE(main.turnUntil([&] { return made->state() != Plugin::State::making; }));
+        REQUIRE(made->prepare({48000.0, 480, false}));
+        return made;
     }
 
     void play(int blocks, std::chrono::microseconds each, int frames = 480)
@@ -136,4 +156,72 @@ TEST_CASE("Blocks that pass a plugin by, before it is prepared and once it has f
 
     // The block it failed in is counted, its processing having run.
     CHECK(rig.plugin->timing().blocks == 4);
+}
+
+TEST_CASE("The plugin that alone took longer than its block lasts is named for a time its block spans, or else the one "
+          "that took the most of it, a quarter of its block or more, and none where none did",
+          "[timing]")
+{
+    Rig rig;
+    std::atomic<std::int64_t> alpha{0}, beta{0}, gamma{0};
+    auto first = rig.another("Alpha", alpha);
+    const auto second = rig.another("Beta", beta);
+    const auto third = rig.another("Gamma", gamma);
+    std::vector<float> left(480), right(480);
+    float* channels[] = {left.data(), right.data()};
+
+    // A device's block playing the three in turn, as a chain does, each spending as many microseconds as given and
+    // Beta given as many frames; the time it spanned.
+    const auto cycle = [&](std::int64_t a, std::int64_t b, std::int64_t c, int betaFrames = 480) {
+        alpha = a;
+        beta = b;
+        gamma = c;
+        const auto began = nanosecondsNow();
+        first->process(channels, 2, 480);
+        second->process(channels, 2, betaFrames);
+        third->process(channels, 2, 480);
+        return std::pair{began, nanosecondsNow()};
+    };
+
+    CHECK_FALSE(rig.host.slowestBetween(0, nanosecondsNow()).has_value());
+
+    // Alpha alone takes longer than its 10 ms block.
+    const auto [began, ended] = cycle(12'000, 0, 0);
+    auto late = rig.host.slowestBetween(began, ended);
+    REQUIRE(late.has_value());
+    CHECK(late->plugin.name == "Alpha");
+    CHECK(late->alone);
+    CHECK(late->nanoseconds >= 12'000'000);
+    CHECK(late->blockNanoseconds == 10'000'000);
+    CHECK(late->at >= began);
+    CHECK(late->at < ended);
+
+    // None alone, the three together late, Gamma taking the most.
+    const auto together = cycle(1000, 4000, 7000);
+    late = rig.host.slowestBetween(together.first, together.second);
+    REQUIRE(late.has_value());
+    CHECK(late->plugin.name == "Gamma");
+    CHECK_FALSE(late->alone);
+    CHECK(late->nanoseconds >= 7'000'000);
+
+    // None taking a quarter of its block.
+    const auto spread = cycle(1000, 1000, 1000);
+    CHECK_FALSE(rig.host.slowestBetween(spread.first, spread.second).has_value());
+
+    // Beta alone late in its block of 5 ms is named before Gamma, which took longer but not its whole block.
+    const auto shorter = cycle(0, 6000, 8000, 240);
+    late = rig.host.slowestBetween(shorter.first, shorter.second);
+    REQUIRE(late.has_value());
+    CHECK(late->plugin.name == "Beta");
+    CHECK(late->alone);
+    CHECK(late->blockNanoseconds == 5'000'000);
+
+    // What was found before is still found, by its name once the plugin is gone, and a time with nothing in it names
+    // none.
+    first.reset();
+    rig.main.settle();
+    late = rig.host.slowestBetween(began, ended);
+    REQUIRE(late.has_value());
+    CHECK(late->plugin.name == "Alpha");
+    CHECK_FALSE(rig.host.slowestBetween(ended + 1, together.first - 1).has_value());
 }

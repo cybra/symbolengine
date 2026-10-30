@@ -498,6 +498,89 @@ TEST_CASE("A device calling back far faster than its rate is found running away"
     CHECK(rig.events.count(Kind::stalled) == 0);
 }
 
+TEST_CASE("A block the callbacks take longer over than it lasts is told as late, with how long, its frames and what "
+          "the program says made it late, and late blocks within a second of that counted into one event",
+          "[timing]")
+{
+    // A callback that spends as long as it is told in each block, busy as a program working hard is.
+    struct Slow : AudioCallback
+    {
+        std::atomic<std::int64_t> spend{1000};
+
+        void process(const AudioBlock&) noexcept override
+        {
+            const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(spend.load());
+            while (std::chrono::steady_clock::now() < until)
+            {
+            }
+        }
+    };
+
+    const auto now = [] {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    };
+
+    Rig rig;
+    Slow slow;
+    std::mutex askedLock;
+    std::vector<std::pair<std::int64_t, std::int64_t>> asked;
+    auto stream = rig.stream(stereo(), [&](AudioStream::Options& options) {
+        options.describeLate = [&](std::int64_t began, std::int64_t ended) {
+            const std::lock_guard hold(askedLock);
+            asked.emplace_back(began, ended);
+            return std::string("the slow callback");
+        };
+    });
+    REQUIRE(!stream->add(slow));
+    REQUIRE(!stream->start());
+
+    // Blocks of 512 frames at 48 kHz last 10.7 ms: ten taking 1 ms aren't late.
+    for (int i = 0; i < 10; ++i)
+        REQUIRE(rig.device.cycle());
+    std::this_thread::sleep_for(60ms);
+    CHECK(rig.events.count(Kind::late) == 0);
+
+    // One taking 15 ms is, told at once, the program asked about the time it spanned.
+    slow.spend = 15'000;
+    const auto before = now();
+    REQUIRE(rig.device.cycle());
+    const auto after = now();
+    slow.spend = 1000;
+    REQUIRE(rig.events.waitFor(Kind::late));
+    const auto first = rig.events.of(Kind::late).front();
+    CHECK(first.count == 1);
+    CHECK(first.frames == 512);
+    CHECK(first.nanoseconds >= 15'000'000);
+    CHECK(first.cause == "the slow callback");
+    {
+        const std::lock_guard hold(askedLock);
+        REQUIRE(asked.size() == 1);
+        CHECK(asked.front().first >= before);
+        CHECK(asked.front().second <= after);
+        CHECK(asked.front().second - asked.front().first >= 15'000'000);
+    }
+
+    // Five more at once are told together, a second after the first, the worst of them described.
+    for (int i = 0; i < 5; ++i)
+    {
+        slow.spend = i == 2 ? 30'000 : 15'000;
+        REQUIRE(rig.device.cycle());
+    }
+    slow.spend = 1000;
+    for (int i = 0; i < 5; ++i)
+        REQUIRE(rig.device.cycle());
+    std::this_thread::sleep_for(300ms);
+    CHECK(rig.events.count(Kind::late) == 1);
+    REQUIRE(rig.events.waitFor(Kind::late, 2, 3000ms));
+    const auto second = rig.events.of(Kind::late).back();
+    CHECK(second.count == 5);
+    CHECK(second.nanoseconds >= 30'000'000);
+    CHECK(stream->statistics().overruns == 6);
+    std::this_thread::sleep_for(100ms);
+    CHECK(rig.events.count(Kind::late) == 2);
+}
+
 TEST_CASE("A stream whose first block never comes is stopped, and says why")
 {
     Rig rig;

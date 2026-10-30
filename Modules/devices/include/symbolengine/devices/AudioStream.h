@@ -88,6 +88,12 @@ struct AudioEvent
         resumed,
         runaway,
 
+        /** The callbacks took longer over a block than it lasts, nanoseconds for its frames, whether or not the system
+            says sound was lost, as Windows never tells a program its output came too late; with what the program says
+            made it late, from Options::describeLate. The first after a second of none is told at once, and those that
+            follow within a second of it together, as one event counting them, the worst of them described. */
+        late,
+
         /** No block came after the stream started, as when a device has no clock; the stream is stopped. */
         noSound,
 
@@ -136,6 +142,9 @@ struct AudioEvent
     std::int64_t nanoseconds = -1;
     AudioError error{};
 
+    /** What the program says made a late block late; empty where it says nothing. */
+    std::string cause{};
+
     /** How many events this one stands for, when repeats were counted together. */
     int count = 1;
 };
@@ -178,6 +187,11 @@ public:
 
         /** How often the control thread looks at a running device. */
         std::chrono::milliseconds watchEvery{20};
+
+        /** Says what made a late block late, given when its cycle began and ended in nanoseconds on the steady clock,
+            as a host's slowest plugin in that time; asked on the control thread as the block is told, its answer
+            carried in the event. */
+        std::function<std::string(std::int64_t began, std::int64_t ended)> describeLate{};
     };
 
     enum class State
