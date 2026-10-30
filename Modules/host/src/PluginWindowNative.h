@@ -21,6 +21,9 @@ void* makeContainer(ui::Window& window, std::function<void(char32_t key, bool re
 /** Lets go of the view once the window has. */
 void releaseContainer(void* container);
 
+/** Hides the view, as for a plugin that can never be called again, so the system sends its code nothing more. */
+void hide(void* container);
+
 /** Settles the editor's view once it is in the container: on a Mac the container made a point larger each way and put
     back on the next turn of the run loop, while the window lives. */
 void settle(void* container, std::weak_ptr<bool> alive);

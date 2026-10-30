@@ -185,3 +185,9 @@ bool handUp(symbolengine::PluginWindow& pluginWindow, char32_t key)
         [container methodForSelector:@selector(keyDown:)] != [NSView instanceMethodForSelector:@selector(keyDown:)] &&
         ([container keyDown:event], true);
 }
+
+// Whether the window's view the plugin's editor is in shows.
+bool editorShown(symbolengine::PluginWindow& pluginWindow)
+{
+    return !editorView(pluginWindow.nativeHandle()).hidden;
+}

@@ -89,6 +89,11 @@ void releaseContainer(void* container)
     [view release];
 }
 
+void hide(void* container)
+{
+    static_cast<NSView*>(container).hidden = YES;
+}
+
 // Some views settle their scale only once their parent's frame changes after they are put in it.
 void settle(void* container, std::weak_ptr<bool> alive)
 {

@@ -80,6 +80,12 @@ struct PluginWindow::Impl final : PluginEditorFrame
 
     double scale() const override { return window->scale(); }
 
+    void lost() override
+    {
+        if (container != nullptr)
+            pluginWindowNative::hide(container);
+    }
+
     // The window resized by the user, or by the program, told to the editor when it isn't the editor's own size.
     void movedOrResized()
     {

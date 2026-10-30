@@ -163,6 +163,40 @@ TEST_CASE("A VST3 plugin's latency said from its process call on the audio threa
     CHECK(misuses().empty());
 }
 
+TEST_CASE(
+    "A message between a VST3 plugin's two parts reaches it as the host's own calls do: an exception from it, or "
+    "on Windows a crash, fails the plugin without reaching the program, and none reaches a plugin that has failed")
+{
+    Rig rig;
+
+    for (const double how : {0.5, 1.0})
+    {
+#if !defined(_WIN32)
+        // A crash ends any program but on Windows, where the host catches it.
+        if (how == 1.0)
+            continue;
+#endif
+        INFO(how);
+        rig.changes.clear();
+        auto plugin = rig.made(testIds::gain);
+        REQUIRE(plugin->prepare({48000.0, 64, false}));
+        REQUIRE(plugin->setParameter(testIds::messageParameter, how));
+
+        // Played on an audio thread, its processor sends its controller two messages, which the host hands over on
+        // the main thread.
+        std::thread([&] { through(*plugin, 64); }).join();
+        CHECK(rig.main.turnUntil([&] { return plugin->state() == Plugin::State::failed; }));
+        rig.main.settle();
+        CHECK(rig.heard(how == 1.0 ? PluginChange::crashed : PluginChange::failed));
+        CHECK(plugin->problem().step == "notify");
+        if (how == 0.5)
+            CHECK(plugin->problem().message.find("the controller's own exception") != std::string::npos);
+        CHECK(through(*plugin, 64) == std::vector<float>{1.0f, 2.0f});
+    }
+
+    CHECK(misuses().empty());
+}
+
 TEST_CASE("A VST3 plugin that throws from its state call fails, and nothing reaches the program")
 {
     Rig rig;
@@ -230,7 +264,7 @@ TEST_CASE("A VST3 plugin's parameters are listed in its order, known by their ID
     auto plugin = rig.made(testIds::gain);
     const auto parameters = plugin->parameters();
 
-    REQUIRE(parameters.size() == 9);
+    REQUIRE(parameters.size() == 10);
     CHECK(parameters[0].id == testIds::gainParameter);
     CHECK(parameters[0].name == "Gain");
     CHECK(parameters[0].units == "x");

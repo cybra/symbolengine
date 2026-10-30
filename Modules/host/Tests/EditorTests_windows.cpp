@@ -142,3 +142,10 @@ void stopTyping(void* field)
     SetFocus(nullptr);
     DestroyWindow(static_cast<HWND>(field));
 }
+
+// Whether the window's view the plugin's editor is in shows.
+bool editorShown(symbolengine::PluginWindow& pluginWindow)
+{
+    const auto container = GetWindow(static_cast<HWND>(pluginWindow.nativeHandle()), GW_CHILD);
+    return container != nullptr && (GetWindowLongPtrW(container, GWL_STYLE) & WS_VISIBLE) != 0;
+}

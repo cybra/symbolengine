@@ -168,43 +168,53 @@ TEST_CASE("A clean end, or one outside every call into a plugin, blames no plugi
     }
 }
 
-TEST_CASE("The note's record of each call costs a few billionths of a second, so it can stand around every block of "
-          "audio")
+TEST_CASE(
+    "The note's record of each call costs under a tenth of a call into the quickest plugin, so it can stand around "
+    "every block of audio",
+    "[timing]")
 {
     ScratchFolder folder;
     PluginError error;
     auto note = PluginCrashNote::open(folder.path / "Note", false, error);
     REQUIRE(note != nullptr);
 
-    // The same plugin played block after block, the host recording each call in a note and then not, the faster of
-    // three tries each.
-    const auto timeBlocks = [&](bool noted) {
-        TestMainThread main;
-        FakePluginFormat fake{main.isCurrent(), main.post()};
-        PluginHost host{{main.post(), main.isCurrent(), 2000ms, nullptr}};
-        if (noted)
-            host.setCrashNote(note.get());
+    // The same plugin played in a host that records each call in the note and in one that doesn't, short runs of
+    // blocks taken from each in turn, so a machine that slows down or speeds up as it runs slows both alike, and the
+    // fastest run of each kept.
+    TestMainThread main;
+    FakePluginFormat fake{main.isCurrent(), main.post()};
+    PluginHost plainHost{{main.post(), main.isCurrent(), 2000ms, nullptr}};
+    PluginHost notedHost{{main.post(), main.isCurrent(), 2000ms, nullptr}};
+    notedHost.setCrashNote(note.get());
+    const auto make = [&](PluginHost& host) {
         auto plugin = host.make(fake, FakePluginFormat::describe("quick"));
         REQUIRE(main.turnUntil([&] { return plugin->state() != Plugin::State::making; }));
         REQUIRE(plugin->prepare({48000.0, 16, false}));
-        float left[16] = {}, right[16] = {};
-        float* channels[] = {left, right};
-        constexpr int blocks = 200000;
-        auto fastest = std::chrono::nanoseconds::max();
-        for (int attempt = 0; attempt < 3; ++attempt)
-        {
-            const auto start = std::chrono::steady_clock::now();
-            for (int i = 0; i < blocks; ++i)
-                plugin->process(channels, 2, 16);
-            fastest = std::min(fastest, std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                            std::chrono::steady_clock::now() - start));
-        }
-        plugin->release();
-        return fastest / blocks;
+        return plugin;
     };
+    const auto plainPlugin = make(plainHost);
+    const auto notedPlugin = make(notedHost);
 
-    const auto plain = timeBlocks(false);
-    const auto noted = timeBlocks(true);
+    float left[16] = {}, right[16] = {};
+    float* channels[] = {left, right};
+    constexpr int blocks = 5000;
+    const auto timeRun = [&](Plugin& plugin) {
+        const auto start = std::chrono::steady_clock::now();
+        for (int i = 0; i < blocks; ++i)
+            plugin.process(channels, 2, 16);
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start) / blocks;
+    };
+    auto plain = std::chrono::nanoseconds::max(), noted = std::chrono::nanoseconds::max();
+    for (int attempt = 0; attempt < 100; ++attempt)
+    {
+        plain = std::min(plain, timeRun(*plainPlugin));
+        noted = std::min(noted, timeRun(*notedPlugin));
+    }
+    plainPlugin->release();
+    notedPlugin->release();
+
+    // Measured against the call itself, a few tens of billionths of a second to a call's thousand on a Mac, as a slower
+    // machine or the sanitizers slow both alike.
     INFO("a block takes " << plain.count() << " ns, " << noted.count() << " ns with the note");
-    CHECK(noted - plain < 200ns);
+    CHECK(noted - plain < plain / 10);
 }

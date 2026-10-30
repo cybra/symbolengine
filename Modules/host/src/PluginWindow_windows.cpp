@@ -68,6 +68,11 @@ void releaseContainer(void* container)
     DestroyWindow(static_cast<HWND>(container));
 }
 
+void hide(void* container)
+{
+    ShowWindow(static_cast<HWND>(container), SW_HIDE);
+}
+
 void settle(void*, std::weak_ptr<bool>) {}
 
 Awareness::Awareness() : previous(SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) {}

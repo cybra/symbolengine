@@ -42,6 +42,7 @@ bool holdsViews(void* window);
 void beginWindowMove(void* window);
 void endWindowMove(void* window);
 void rescaleWindow(void* window, double scale);
+bool editorShown(PluginWindow& window);
 bool floatsAbove(void* window);
 void* showOtherWindow();
 void closeOtherWindow(void* window);
@@ -968,6 +969,21 @@ TEST_CASE("Keys other than the program's are offered to a VST3 editor on Windows
     window.reset();
     rig.settle();
     CHECK(misuses().empty());
+}
+
+TEST_CASE("A plugin that crashes on Windows has its editor hidden at once, so the system sends its view nothing more",
+          "[windows]")
+{
+    Vst3Rig rig;
+    auto plugin = rig.made();
+    auto window = rig.open(plugin);
+    REQUIRE(editorShown(*window));
+
+    plugin->setParameter(testIds::crashOnMain, 1.0);
+    CHECK(plugin->hasCrashed());
+    CHECK_FALSE(editorShown(*window));
+    window.reset();
+    rig.settle();
 }
 
 TEST_CASE("A VST3 editor on Windows keeps its parent through a thousand moves and resizes of its window", "[windows]")

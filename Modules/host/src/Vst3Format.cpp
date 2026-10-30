@@ -211,13 +211,17 @@ private:
 class ConnectionProxy final : public IConnectionPoint, Counted
 {
 public:
-    ConnectionProxy(IConnectionPoint* to, std::shared_ptr<Vst3Format::Shared> owner);
+    ConnectionProxy(IConnectionPoint* to, std::shared_ptr<Vst3Format::Shared> owner, PluginFormatClient& told);
 
     tresult PLUGIN_API connect(IConnectionPoint*) override { return kResultFalse; }
     tresult PLUGIN_API disconnect(IConnectionPoint*) override { return kResultOk; }
     tresult PLUGIN_API notify(IMessage* message) override;
 
-    void undo() { linked = false; }
+    void undo()
+    {
+        linked = false;
+        client = nullptr;
+    }
 
     tresult PLUGIN_API queryInterface(const TUID wanted, void** object) override
     {
@@ -237,9 +241,13 @@ public:
     uint32 PLUGIN_API release() override { return releaseOne(this); }
 
 private:
+    // Handed over as the host's own calls into the plugin are made.
+    tresult deliver(IMessage* message);
+
     IPtr<IConnectionPoint> destination;
     std::shared_ptr<Vst3Format::Shared> shared;
     std::atomic<bool> linked{true};
+    std::atomic<PluginFormatClient*> client;
 };
 
 // The stream a plugin's state is written to and read from: it takes null out-pointers, counts exactly, never reads
@@ -658,9 +666,22 @@ struct Vst3Format::Shared : std::enable_shared_from_this<Vst3Format::Shared>
     }
 };
 
-ConnectionProxy::ConnectionProxy(IConnectionPoint* to, std::shared_ptr<Vst3Format::Shared> owner)
-    : destination(to), shared(std::move(owner))
+ConnectionProxy::ConnectionProxy(IConnectionPoint* to, std::shared_ptr<Vst3Format::Shared> owner,
+                                 PluginFormatClient& told)
+    : destination(to), shared(std::move(owner)), client(&told)
 {
+}
+
+tresult ConnectionProxy::deliver(IMessage* message)
+{
+    auto* const told = client.load();
+
+    if (!linked || told == nullptr)
+        return kResultFalse;
+
+    tresult result = kResultFalse;
+    told->deliver("notify", [&] { result = destination->notify(message); });
+    return result;
 }
 
 tresult PLUGIN_API ConnectionProxy::notify(IMessage* message)
@@ -669,15 +690,12 @@ tresult PLUGIN_API ConnectionProxy::notify(IMessage* message)
         return kResultFalse;
 
     if (shared->options.onMainThread())
-        return destination->notify(message);
+        return deliver(message);
 
     // Kept, and handed over on the main thread.
     IPtr<IMessage> kept(message);
     IPtr<ConnectionProxy> self(this);
-    shared->options.post([self, kept] {
-        if (self->linked)
-            self->destination->notify(kept);
-    });
+    shared->options.post([self, kept] { self->deliver(kept); });
     return kResultOk;
 }
 
@@ -1109,8 +1127,8 @@ public:
 
         if (componentPoint && controllerPoint)
         {
-            toController = owned(new ConnectionProxy(controllerPoint, shared));
-            toComponent = owned(new ConnectionProxy(componentPoint, shared));
+            toController = owned(new ConnectionProxy(controllerPoint, shared, client));
+            toComponent = owned(new ConnectionProxy(componentPoint, shared, client));
             componentPoint->connect(toController);
             controllerPoint->connect(toComponent);
         }

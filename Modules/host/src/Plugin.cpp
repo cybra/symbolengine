@@ -197,9 +197,11 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     std::atomic<const char*> audioReason{nullptr};
     std::atomic<std::uint32_t> audioFault{0};
 
-    // Whether it has an editor, once asked, and whether one of its editors is open, the main thread's.
+    // Whether it has an editor, once asked, and whether one of its editors is open, in the frame given, the main
+    // thread's.
     std::optional<bool> editorAnswer;
     bool editorOpen = false;
+    PluginEditorFrame* editorFrame = nullptr;
 
     // Notices, recorded from any thread and acted on from the main thread.
     std::atomic<std::uint32_t> pending{0};
@@ -330,6 +332,18 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
         fail(step, "It crashed, so it was switched off.");
         problem.code = fault;
         tell(PluginChange::crashed);
+
+        if (editorFrame != nullptr)
+            editorFrame->lost();
+    }
+
+    // A call its format makes of its own accord, as a message between its parts, made as the host's own are.
+    void deliver(const char* step, const std::function<void()>& delivered) override
+    {
+        if (state == State::failed || crashed)
+            return;
+
+        call(step, [&] { delivered(); });
     }
 
     // A call into the plugin on the audio thread: an exception from it, or on Windows a crash, takes the plugin out of
@@ -1469,6 +1483,7 @@ std::unique_ptr<PluginEditor> PluginEditor::open(std::shared_ptr<Plugin> plugin,
 
     inner.editorOpen = true;
     inner.editorAnswer = true;
+    inner.editorFrame = &frame;
     std::unique_ptr<PluginEditor> opened(new PluginEditor(std::move(plugin), std::move(made)));
     inner.call("resizable", [&] { opened->canResize = opened->editor->resizable(); });
     return opened;
@@ -1496,6 +1511,7 @@ PluginEditor::~PluginEditor()
             inner->call("closeEditor", [&] { kept->reset(); });
 
         inner->editorOpen = false;
+        inner->editorFrame = nullptr;
         inner->host->post([plugin = std::move(plugin)] {});
     };
 

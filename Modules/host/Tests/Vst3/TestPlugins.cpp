@@ -219,6 +219,18 @@ public:
 
                     if (changes->getParameterId() == testIds::gainParameter)
                         gainChanges = changes;
+
+                    int32 offset = 0;
+                    ParamValue value = 0.0;
+
+                    if (changes->getParameterId() == testIds::messageParameter && changes->getPointCount() > 0 &&
+                        changes->getPoint(changes->getPointCount() - 1, offset, value) == kResultTrue && value > 0.25)
+                        for (int i = 0; i < 2; ++i)
+                            if (IPtr<IMessage> message = owned(allocateMessage()))
+                            {
+                                message->setMessageID(value > 0.75 ? "crash" : "throw");
+                                sendMessage(message);
+                            }
                 }
 
         if (data.numSamples > 0 && data.numInputs > 0 && data.numOutputs > 0)
@@ -413,7 +425,36 @@ public:
         parameters.addParameter(STR16("Echo"), nullptr, 0, 0.0, ParameterInfo::kCanAutomate, testIds::echoParameter);
         parameters.addParameter(STR16("Rounded echo"), nullptr, 0, 0.0, ParameterInfo::kCanAutomate,
                                 testIds::roundedEchoParameter);
+        parameters.addParameter(STR16("Message"), nullptr, 0, 0.0, ParameterInfo::kIsHidden, testIds::messageParameter);
         return kResultOk;
+    }
+
+    // A message from its processor: one asking it to throw or crash does, as a controller that fails on what its
+    // processor sends; one reaching it after that is wrong, as nothing should reach a plugin that has failed.
+    tresult PLUGIN_API notify(IMessage* message) override
+    {
+        if (message == nullptr)
+            return kInvalidArgument;
+
+        if (failed)
+            misuse("Gain Controller", "given a message after it failed on one");
+
+        const std::string id = message->getMessageID() != nullptr ? message->getMessageID() : "";
+
+        if (id == "throw" || id == "crash")
+        {
+            failed = true;
+
+            if (id == "crash")
+            {
+                volatile int* volatile nowhere = nullptr;
+                *nowhere = 1;
+            }
+
+            throw std::runtime_error("the controller's own exception, from a message");
+        }
+
+        return EditController::notify(message);
     }
 
     tresult PLUGIN_API setParamNormalized(ParamID id, ParamValue value) override
@@ -470,6 +511,7 @@ public:
 
 private:
     std::atomic<int> echoes{0}, roundedEchoes{0};
+    bool failed = false;
 };
 
 // A plugin with a thousand parameters, all automatable, its processing the gain's.

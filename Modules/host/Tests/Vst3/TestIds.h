@@ -31,6 +31,10 @@ constexpr unsigned gainParameter = 100, hiddenParameter = 7, meterParameter = 30
 constexpr unsigned editParameter = 200, dirtyParameter = 201, echoParameter = 300, roundedEchoParameter = 301,
                    unlistedParameter = 999;
 
+// Set to 0.5, the gain plugins' processor sends their controller two messages from its next block, the controller
+// throwing from the first; set to 1, crashing from it instead. A message reaching the controller after that is wrong.
+constexpr unsigned messageParameter = 202;
+
 // Not a parameter: the gain plugins' text for it says what their controller has, as
 // "gain=0.500000 meter=0.000000 echo=0 rounded=0", where echo and rounded count the values it was given for those; the
 // timed plugin's says what it was last given, as
@@ -70,6 +74,9 @@ constexpr unsigned askWidth = 601, askHeight = 602, askResize = 603, requestEdit
 // Set while its view is open: the view holds up the main thread a moment later for as long as the value says, at
 // 1,000 ms to 1, as a view that redraws for too long does.
 constexpr unsigned holdMainThread = 605;
+
+// Set to 1, the editor plugin writes through a null pointer as it is shown the value.
+constexpr unsigned crashOnMain = 606;
 constexpr double editorPixels = 2000.0;
 
 // The editor plugin's text for queryParameter says what its views saw, as "made=1 live=1 attached=1 removed=0

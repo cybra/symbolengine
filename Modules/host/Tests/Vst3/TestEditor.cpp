@@ -414,6 +414,7 @@ public:
         parameters.addParameter(STR16("Ask resize"), nullptr, 2, 0.0, 0, testIds::askResize);
         parameters.addParameter(STR16("Request editor"), nullptr, 1, 0.0, 0, testIds::requestEditor);
         parameters.addParameter(STR16("Hold main thread"), nullptr, 0, 0.0, 0, testIds::holdMainThread);
+        parameters.addParameter(STR16("Crash on main"), nullptr, 1, 0.0, 0, testIds::crashOnMain);
         return result;
     }
 
@@ -457,6 +458,12 @@ public:
                           value > 0.75);
             else
                 misuse("told to ask to be resized with no view");
+        }
+
+        if (id == testIds::crashOnMain && value > 0.5)
+        {
+            volatile int* volatile nowhere = nullptr;
+            *nowhere = 1;
         }
 
         if (id == testIds::holdMainThread && value > 0.0)

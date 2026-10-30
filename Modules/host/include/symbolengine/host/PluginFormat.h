@@ -273,6 +273,16 @@ public:
     /** The plugin's own edit of a parameter, from its window or elsewhere: a gesture's begin, value or end. */
     virtual void edit(const PluginEdit& edit) noexcept = 0;
 
+    /** A call into the plugin its format makes of its own accord, as a message handed from one part of a plugin to
+        another: made as the host's own calls are, marked as a call into the plugin, what it changes of the process put
+        back, and an exception from it, or on Windows a crash, failing the plugin; never made once the plugin has
+        failed. On the main thread. */
+    virtual void deliver(const char* step, const std::function<void()>& call)
+    {
+        static_cast<void>(step);
+        call();
+    }
+
     virtual ~PluginFormatClient() = default;
 };
 
@@ -342,6 +352,10 @@ public:
     /** The scale of the screen the view is on, for a format whose editors are sized in pixels: its DPI over 96 on
         Windows. */
     virtual double scale() const { return 1.0; }
+
+    /** The plugin can never be called again, as one that crashed: its view is hidden at once, so the system sends the
+        plugin's code nothing more through it. */
+    virtual void lost() {}
 
     virtual ~PluginEditorFrame() = default;
 };
