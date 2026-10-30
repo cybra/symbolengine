@@ -117,7 +117,7 @@ static HWND keyTarget(symbolengine::PluginWindow& pluginWindow)
 }
 
 // A key pressed and let go of in the window, as Windows posts it there: the virtual key, and a press marked as a repeat
-// when it is one.
+// when it is one. The messages run as the test next turns the thread's loop, as the system's own would.
 void pressKey(symbolengine::PluginWindow& pluginWindow, char32_t key, bool repeat, bool)
 {
     const auto target = keyTarget(pluginWindow);
@@ -125,7 +125,6 @@ void pressKey(symbolengine::PluginWindow& pluginWindow, char32_t key, bool repea
     const auto scan = static_cast<LPARAM>(MapVirtualKeyW(static_cast<UINT>(virtualKey), MAPVK_VK_TO_VSC)) << 16;
     PostMessageW(target, WM_KEYDOWN, virtualKey, 1 | scan | (repeat ? LPARAM(1) << 30 : 0));
     PostMessageW(target, WM_KEYUP, virtualKey, 1 | scan | (LPARAM(1) << 30) | (LPARAM(1) << 31));
-    turnSystemLoop();
 }
 
 // A text field in the window being typed in.
