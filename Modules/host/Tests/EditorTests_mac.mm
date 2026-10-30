@@ -91,3 +91,97 @@ bool ownViewAtTopLeft(void* window)
     const auto frame = container.subviews.firstObject.frame;
     return frame.origin.x == 0 && NSMaxY(frame) == NSHeight(container.bounds);
 }
+
+bool floatsAbove(void* window)
+{
+    return static_cast<NSWindow*>(window).level == NSFloatingWindowLevel;
+}
+
+// A window of the process's own, as a question or a plugin's own window is, shown far off every display, where macOS
+// leaves a window without a title bar, never taking the keyboard.
+void* showOtherWindow()
+{
+    NSWindow* window = [[NSWindow alloc] initWithContentRect:NSMakeRect(-30000, -30000, 200, 100)
+                                                   styleMask:NSWindowStyleMaskBorderless
+                                                     backing:NSBackingStoreBuffered
+                                                       defer:NO];
+    window.releasedWhenClosed = NO;
+    [window orderFront:nil];
+    return window;
+}
+
+// A window at a menu's level, as a menu or a tooltip shows.
+void* showMenuWindow()
+{
+    auto* window = static_cast<NSWindow*>(showOtherWindow());
+    window.level = NSPopUpMenuWindowLevel;
+    return window;
+}
+
+void closeOtherWindow(void* window)
+{
+    [static_cast<NSWindow*>(window) close];
+    [static_cast<NSWindow*>(window) release];
+}
+
+// A key pressed and let go of in the window, as the system hands the program its events.
+void pressKey(symbolengine::PluginWindow& pluginWindow, char32_t key, bool repeat, bool command)
+{
+    NSWindow* window = static_cast<NSWindow*>(pluginWindow.nativeHandle());
+    NSString* characters =
+        [[[NSString alloc] initWithBytes:&key length:sizeof key encoding:NSUTF32LittleEndianStringEncoding]
+            autorelease];
+    for (const auto type : {NSEventTypeKeyDown, NSEventTypeKeyUp})
+        [NSApp sendEvent:[NSEvent keyEventWithType:type
+                                                location:NSZeroPoint
+                                           modifierFlags:command ? NSEventModifierFlagCommand : 0
+                                               timestamp:0
+                                            windowNumber:window.windowNumber
+                                                 context:nil
+                                              characters:characters
+                             charactersIgnoringModifiers:characters
+                                               isARepeat:repeat
+                                                 keyCode:key == U' ' ? 49 : 0]];
+}
+
+// A text field in the window being typed in.
+void* typeIn(symbolengine::PluginWindow& pluginWindow)
+{
+    NSWindow* window = static_cast<NSWindow*>(pluginWindow.nativeHandle());
+    NSTextView* field = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, 100, 20)];
+    [editorView(window) addSubview:field];
+    [window makeFirstResponder:field];
+    return field;
+}
+
+void stopTyping(void* field)
+{
+    NSTextView* view = static_cast<NSTextView*>(field);
+    [view.window makeFirstResponder:nil];
+    [view removeFromSuperview];
+    [view release];
+}
+
+// A key a plugin's view hands up to its superview, the window's own view, as views that don't use a key do: whether
+// that view took it rather than passing it on, as an NSView does, to be refused with a beep.
+bool handUp(symbolengine::PluginWindow& pluginWindow, char32_t key)
+{
+    NSWindow* window = static_cast<NSWindow*>(pluginWindow.nativeHandle());
+    NSView* container = editorView(window);
+    NSString* characters =
+        [[[NSString alloc] initWithBytes:&key length:sizeof key encoding:NSUTF32LittleEndianStringEncoding]
+            autorelease];
+    NSEvent* event = [NSEvent keyEventWithType:NSEventTypeKeyDown
+                                      location:NSZeroPoint
+                                 modifierFlags:0
+                                     timestamp:0
+                                  windowNumber:window.windowNumber
+                                       context:nil
+                                    characters:characters
+                   charactersIgnoringModifiers:characters
+                                     isARepeat:NO
+                                       keyCode:0];
+    return
+        [container methodForSelector:@selector(keyDown:)] != [NSView instanceMethodForSelector:@selector(keyDown:)] &&
+        ([container keyDown:event], true);
+}

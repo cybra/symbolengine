@@ -1,4 +1,5 @@
 #include "symbolengine/host/PluginWindow.h"
+#include "symbolengine/host/PluginWindows.h"
 
 #include "PluginWindowNative.h"
 
@@ -15,6 +16,7 @@ constexpr ui::Size smallest{100, 50};
 struct PluginWindow::Impl final : PluginEditorFrame
 {
     PluginWindow* owner = nullptr;
+    PluginWindows* group = nullptr;
     std::shared_ptr<Plugin> plugin;
     std::unique_ptr<ui::Window> window;
     void* container = nullptr;
@@ -88,7 +90,12 @@ std::unique_ptr<PluginWindow> PluginWindow::open(std::shared_ptr<Plugin> plugin,
         const pluginWindowNative::Awareness awareness;
         parts->window = std::make_unique<ui::Window>(
             ui::Window::Options{options.title, {400, 300}, smallest, true, false, options.background, true});
-        parts->container = pluginWindowNative::makeContainer(*parts->window);
+        parts->container =
+            pluginWindowNative::makeContainer(*parts->window, [state = parts.get()](char32_t key, bool repeat) {
+                // A key the plugin's view handed up, taken here: the program's, where the window has joined its others.
+                if (state->group != nullptr && state->owner != nullptr)
+                    state->group->handedUp(*state->owner, key, repeat);
+            });
     }
 
     if (parts->container == nullptr)
@@ -114,6 +121,7 @@ std::unique_ptr<PluginWindow> PluginWindow::open(std::shared_ptr<Plugin> plugin,
     std::unique_ptr<PluginWindow> made(new PluginWindow(std::move(parts)));
     auto* state = made->impl.get();
     state->owner = made.get();
+    state->group = options.windows;
     auto* window = made.get();
     state->window->onMovedOrResized = [state] { state->movedOrResized(); };
     state->window->onResizing = [state](ui::Size wanted) { return state->resizing(wanted); };
@@ -126,6 +134,10 @@ std::unique_ptr<PluginWindow> PluginWindow::open(std::shared_ptr<Plugin> plugin,
         if (window->onActiveChanged)
             window->onActiveChanged(active);
     };
+
+    if (state->group != nullptr)
+        state->group->join(*made);
+
     return made;
 }
 
@@ -133,6 +145,9 @@ PluginWindow::PluginWindow(std::unique_ptr<Impl> made) : impl(std::move(made)) {
 
 PluginWindow::~PluginWindow()
 {
+    if (impl->group != nullptr)
+        impl->group->leave(*this);
+
     std::shared_ptr<Impl> closing(std::move(impl));
     closing->owner = nullptr;
     closing->window->onCloseButton = nullptr;
@@ -155,6 +170,11 @@ const std::shared_ptr<Plugin>& PluginWindow::plugin() const
 PluginEditorSize PluginWindow::editorSize() const
 {
     return impl->editor->size();
+}
+
+PluginEditor* PluginWindow::editor() const
+{
+    return impl->editor.get();
 }
 
 bool PluginWindow::isResizable() const

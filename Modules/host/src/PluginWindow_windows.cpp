@@ -50,7 +50,8 @@ const wchar_t* viewClass()
 
 void prepare() {}
 
-void* makeContainer(ui::Window& window)
+// A plugin's view on Windows is offered keys before its window gets them, so none is handed up.
+void* makeContainer(ui::Window& window, std::function<void(char32_t key, bool repeat)>)
 {
     const auto parent = static_cast<HWND>(window.nativeHandle());
     RECT client{};

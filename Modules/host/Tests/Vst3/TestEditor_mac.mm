@@ -114,6 +114,11 @@ bool takesDrops(void*)
     return true;
 }
 
+int keysSent()
+{
+    return 0;
+}
+
 bool offscreenMoved(void* view)
 {
     auto* native = static_cast<Native*>(view);

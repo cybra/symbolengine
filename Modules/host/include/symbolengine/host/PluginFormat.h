@@ -285,6 +285,52 @@ struct PluginEditorSize
     bool operator==(const PluginEditorSize&) const = default;
 };
 
+/** A key pressed or let go of while a plugin's editor has the keyboard, as a format offers it to the editor: its
+    character, 0 for a key without one; the key, where it is one of those named; and the modifier keys held, command
+    being Command on a Mac and Control on Windows. */
+struct PluginKey
+{
+    enum class Named
+    {
+        none,
+        backspace,
+        tab,
+        enter,
+        escape,
+        space,
+        left,
+        up,
+        right,
+        down,
+        home,
+        end,
+        pageUp,
+        pageDown,
+        insert,
+        forwardDelete,
+        f1,
+        f2,
+        f3,
+        f4,
+        f5,
+        f6,
+        f7,
+        f8,
+        f9,
+        f10,
+        f11,
+        f12,
+    };
+
+    char32_t character = 0;
+    Named named = Named::none;
+    bool shift = false;
+    bool alt = false;
+    bool command = false;
+
+    bool operator==(const PluginKey&) const = default;
+};
+
 /** The native view a plugin's editor is open in, as the program holds it, which sizes itself and the window holding it
     as the plugin asks. Called on the main thread. */
 class PluginEditorFrame
@@ -323,6 +369,20 @@ public:
     /** Tells it the view it is in is on a screen of another scale, once the user's move there is over, for a format
         whose editors are sized in pixels. */
     virtual void rescaled(double scale) { static_cast<void>(scale); }
+
+    /** Offers it a key, for a format whose editors are offered keys before the system's own windows get them, as
+        VST3's are on Windows: whether it took it. */
+    virtual bool keyDown(const PluginKey& key)
+    {
+        static_cast<void>(key);
+        return false;
+    }
+
+    virtual bool keyUp(const PluginKey& key)
+    {
+        static_cast<void>(key);
+        return false;
+    }
 };
 
 /** One plugin as its format holds it, used by the host module alone. Every call is made on the main thread, one at a

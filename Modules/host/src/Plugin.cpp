@@ -1515,4 +1515,26 @@ void PluginEditor::rescaled(double scale)
         inner.call("rescaled", [&] { editor->rescaled(scale); });
 }
 
+bool PluginEditor::keyDown(const PluginKey& key)
+{
+    auto& inner = *held->inner;
+    bool taken = false;
+
+    if (inner.state != Plugin::State::failed && inner.busy == 0)
+        inner.call("keyDown", [&] { taken = editor->keyDown(key); });
+
+    return taken;
+}
+
+bool PluginEditor::keyUp(const PluginKey& key)
+{
+    auto& inner = *held->inner;
+    bool taken = false;
+
+    if (inner.state != Plugin::State::failed && inner.busy == 0)
+        inner.call("keyUp", [&] { taken = editor->keyUp(key); });
+
+    return taken;
+}
+
 }

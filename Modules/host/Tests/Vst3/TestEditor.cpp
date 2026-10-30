@@ -59,6 +59,7 @@ struct Record
     std::atomic<View*> view{nullptr};
     std::atomic<int> made{0}, live{0}, attached{0}, removed{0}, sized{0}, constraints{0}, scales{0}, offMain{0};
     std::atomic<int> width{0}, height{0}, ownWidth{0}, ownHeight{0}, nudges{0}, scalePercent{100}, scaleFirst{0};
+    std::atomic<int> keysOffered{0}, keysTaken{0};
     std::atomic<bool> offscreenMoved{false};
 };
 
@@ -158,10 +159,17 @@ public:
         return kResultFalse;
     }
 
-    tresult PLUGIN_API onKeyDown(char16, int16, int16) override
+    // Takes 'a' alone.
+    tresult PLUGIN_API onKeyDown(char16 key, int16, int16) override
     {
         check("onKeyDown");
-        return kResultFalse;
+        ++record->keysOffered;
+
+        if (key != u'a')
+            return kResultFalse;
+
+        ++record->keysTaken;
+        return kResultTrue;
     }
 
     tresult PLUGIN_API onKeyUp(char16, int16, int16) override
@@ -453,6 +461,14 @@ public:
 
     tresult PLUGIN_API getParamStringByValue(ParamID id, ParamValue value, String128 string) override
     {
+        if (id == testIds::keysQuery)
+        {
+            char text[64];
+            std::snprintf(text, sizeof text, "offered=%d taken=%d sent=%d", record->keysOffered.load(),
+                          record->keysTaken.load(), testEditor::keysSent());
+            return copy(text, string);
+        }
+
         if (id == testIds::scaleQuery)
         {
             char text[64];

@@ -12,6 +12,8 @@
 namespace symbolengine
 {
 
+class PluginWindows;
+
 /** A plugin's own window, as a DAW opens one: its editor in a window of the program's with the system's title bar,
     resizable only while the editor is and sized as the plugin asks, the editor in one view made with the window and
     kept for its life. It keeps its plugin while it is open. Made, used and destroyed on the main thread; built where
@@ -26,6 +28,10 @@ public:
 
         /** What shows where the editor hasn't drawn, as 0xRRGGBB. */
         std::uint32_t background = 0x000000;
+
+        /** The program's plugin windows this one joins, kept in their place among the program's windows and taking
+            the program's keys; none for a window left to the program alone. */
+        PluginWindows* windows = nullptr;
     };
 
     /** Opens the plugin's editor in a window of its own, hidden, in the middle of the main screen; nothing, with the
@@ -42,6 +48,9 @@ public:
 
     /** The editor's size, as it last said it or was told. */
     PluginEditorSize editorSize() const;
+
+    /** Its editor. */
+    PluginEditor* editor() const;
 
     /** Whether the user can resize it, as the editor says. */
     bool isResizable() const;

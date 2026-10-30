@@ -93,12 +93,26 @@ HMODULE thisModule()
     return module;
 }
 
+std::atomic<int> sent{0};
+
+// Counts each key the system sends it, and keeps them, as a view that takes every key does.
+LRESULT CALLBACK viewProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    if (message == WM_KEYDOWN || message == WM_SYSKEYDOWN)
+    {
+        ++sent;
+        return 0;
+    }
+
+    return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
 const wchar_t* viewClass()
 {
     static const wchar_t* name = [] {
         WNDCLASSEXW view{};
         view.cbSize = sizeof view;
-        view.lpfnWndProc = DefWindowProcW;
+        view.lpfnWndProc = viewProcedure;
         view.hInstance = thisModule();
         view.lpszClassName = L"SymbolEngineTestEditorView";
         RegisterClassExW(&view);
@@ -209,6 +223,11 @@ bool awareAsParent(void* parent)
 bool takesDrops(void* view)
 {
     return static_cast<Native*>(view)->dropping == S_OK;
+}
+
+int keysSent()
+{
+    return sent;
 }
 
 bool offscreenMoved(void* view)

@@ -248,6 +248,11 @@ public:
         sized in pixels, as on Windows, can take its size for that scale. */
     void rescaled(double scale);
 
+    /** Offers it a key pressed or let go of while it has the keyboard, for a format whose editors are offered keys
+        before the system's own windows get them, as VST3's are on Windows: whether it took it. */
+    bool keyDown(const PluginKey& key);
+    bool keyUp(const PluginKey& key);
+
     const std::shared_ptr<Plugin>& plugin() const { return held; }
 
 private:

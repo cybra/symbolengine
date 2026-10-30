@@ -5,6 +5,7 @@
 
 #if SYMBOLENGINE_PLUGIN_WINDOWS
     #include <symbolengine/host/PluginWindow.h>
+    #include <symbolengine/host/PluginWindows.h>
 #endif
 
 #include "TestMainThread.h"
@@ -38,8 +39,16 @@ bool holdsViews(void* window);
 void beginWindowMove(void* window);
 void endWindowMove(void* window);
 void rescaleWindow(void* window, double scale);
+bool floatsAbove(void* window);
+void* showOtherWindow();
+void closeOtherWindow(void* window);
+void pressKey(PluginWindow& window, char32_t key, bool repeat = false, bool command = false);
+void* typeIn(PluginWindow& window);
+void stopTyping(void* field);
 #endif
 #if SYMBOLENGINE_PLUGIN_WINDOWS && defined(__APPLE__)
+bool handUp(PluginWindow& window, char32_t key);
+void* showMenuWindow();
 int viewsInEditor(void* window);
 ui::Size ownViewSize(void* window);
 bool ownViewAtTopLeft(void* window);
@@ -277,6 +286,123 @@ TEST_CASE("A plugin window tells its editor when its screen's scale changes, onc
     #endif
     endWindowMove(window->nativeHandle());
     CHECK(rig.count("scaled", "rescaled") == 1);
+    window.reset();
+    rig.main.settle();
+    rig.checkNoMisuse();
+}
+
+TEST_CASE("Plugin windows float above the program's while it is in front, and step back while another window of its "
+          "process shows",
+          "[windows]")
+{
+    FakeRig rig;
+    ui::Window program({.title = "Program"});
+    bool front = true;
+    void* tool = nullptr;
+    PluginWindows group(
+        {&program, [&](void* window) { return window == tool; }, {U' '}, nullptr, [&] { return front; }});
+    auto first = rig.made("first");
+    auto second = rig.made("second");
+    PluginError error;
+    auto one = PluginWindow::open(first, {"One", 0, &group}, error);
+    auto two = PluginWindow::open(second, {"Two", 0, &group}, error);
+    REQUIRE(one != nullptr);
+    REQUIRE(two != nullptr);
+    const auto turnUntil = [&](auto condition) {
+        return rig.main.turnUntil([&] {
+            turnSystemLoop();
+            return condition();
+        });
+    };
+
+    CHECK(group.floating());
+    CHECK(floatsAbove(one->nativeHandle()));
+    CHECK(floatsAbove(two->nativeHandle()));
+
+    // Behind other programs' windows while the program isn't in front.
+    front = false;
+    group.arrange();
+    CHECK_FALSE(group.floating());
+    CHECK_FALSE(floatsAbove(one->nativeHandle()));
+    front = true;
+    group.arrange();
+    CHECK(floatsAbove(one->nativeHandle()));
+
+    // Another window of the process showing, as a question, a file chooser or a plugin's own window: they step back
+    // until it has gone, which the group sees itself.
+    auto other = showOtherWindow();
+    CHECK(turnUntil([&] { return !group.floating(); }));
+    CHECK_FALSE(floatsAbove(one->nativeHandle()));
+    CHECK_FALSE(floatsAbove(two->nativeHandle()));
+    closeOtherWindow(other);
+    CHECK(turnUntil([&] { return group.floating(); }));
+    CHECK(floatsAbove(two->nativeHandle()));
+
+    // A window of the program's own leaves them floating, as does a menu or a tooltip, which lies above them.
+    tool = showOtherWindow();
+    group.arrange();
+    CHECK(group.floating());
+    closeOtherWindow(tool);
+    tool = nullptr;
+    #if defined(__APPLE__)
+    auto menu = showMenuWindow();
+    group.arrange();
+    CHECK(group.floating());
+    closeOtherWindow(menu);
+    #endif
+
+    one.reset();
+    two.reset();
+    rig.main.settle();
+    rig.checkNoMisuse();
+}
+
+TEST_CASE("The program's keys reach it from a plugin window whatever the plugin does with keys, once a press and after "
+          "the key's event, unless text is being typed there",
+          "[windows]")
+{
+    FakeRig rig;
+    ui::Window program({.title = "Program"});
+    std::vector<char32_t> taken;
+    PluginWindows group({&program, nullptr, {U' '}, [&](char32_t key) { taken.push_back(key); }, [] { return true; }});
+    auto plugin = rig.made("keys");
+    PluginError error;
+    auto window = PluginWindow::open(plugin, {"Keys", 0, &group}, error);
+    REQUIRE(window != nullptr);
+    const auto settle = [&] {
+        for (int i = 0; i < 5; ++i)
+        {
+            turnSystemLoop();
+            rig.main.settle();
+        }
+    };
+
+    pressKey(*window, U' ');
+    CHECK(taken.empty());
+    settle();
+    CHECK(taken == std::vector<char32_t>{U' '});
+
+    // Held down, it repeats: taken once. Another key isn't the program's, nor is it with a modifier key, which a Mac's
+    // test can press as Windows' can't, as Windows reads modifier keys from the keyboard itself.
+    pressKey(*window, U' ', true);
+    pressKey(*window, U'a');
+    #if defined(__APPLE__)
+    pressKey(*window, U' ', false, true);
+    #endif
+    settle();
+    CHECK(taken.size() == 1);
+
+    // Typed in a text field there, it is the field's.
+    auto field = typeIn(*window);
+    pressKey(*window, U' ');
+    settle();
+    CHECK(taken.size() == 1);
+    stopTyping(field);
+
+    pressKey(*window, U' ');
+    settle();
+    CHECK(taken.size() == 2);
+
     window.reset();
     rig.main.settle();
     rig.checkNoMisuse();
@@ -660,6 +786,29 @@ TEST_CASE("A VST3 editor on Windows takes the size it gives at its screen's new 
     CHECK(misuses().empty());
 }
 
+TEST_CASE("Keys other than the program's are offered to a VST3 editor on Windows first, and sent to its window only "
+          "when it doesn't take them, never twice",
+          "[windows]")
+{
+    Vst3Rig rig;
+    auto plugin = rig.made();
+    PluginWindows group({nullptr, nullptr, {U' '}, nullptr, [] { return true; }});
+    PluginError error;
+    auto window = PluginWindow::open(plugin, {"Keys", 0, &group}, error);
+    REQUIRE(window != nullptr);
+    const auto before = plugin->parameterText(testIds::keysQuery, 0.0);
+    REQUIRE(before == "offered=0 taken=0 sent=0");
+
+    // Taken by the editor: never sent to its window. Not taken: sent once.
+    pressKey(*window, U'a');
+    pressKey(*window, U'b');
+    rig.settle();
+    CHECK(plugin->parameterText(testIds::keysQuery, 0.0) == "offered=2 taken=1 sent=1");
+    window.reset();
+    rig.settle();
+    CHECK(misuses().empty());
+}
+
 TEST_CASE("A VST3 editor on Windows keeps its parent through a thousand moves and resizes of its window", "[windows]")
 {
     Vst3Rig rig;
@@ -779,6 +928,29 @@ std::unique_ptr<PluginWindow> openWindow(const std::shared_ptr<Plugin>& plugin, 
     return PluginWindow::open(plugin, {"Audio Unit editor test"}, error);
 }
 
+}
+
+TEST_CASE("Keys a plugin's view hands up to its window's view are taken there quietly, the program's for the program",
+          "[windows]")
+{
+    FakeRig rig;
+    ui::Window program({.title = "Program"});
+    std::vector<char32_t> taken;
+    PluginWindows group({&program, nullptr, {U' '}, [&](char32_t key) { taken.push_back(key); }, [] { return true; }});
+    auto plugin = rig.made("handsUp");
+    PluginError error;
+    auto window = PluginWindow::open(plugin, {"Hands up", 0, &group}, error);
+    REQUIRE(window != nullptr);
+
+    // Taken by the window's view, rather than passed on to be refused with a beep.
+    CHECK(handUp(*window, U'a'));
+    CHECK(handUp(*window, U' '));
+    for (int i = 0; i < 5; ++i)
+    {
+        turnSystemLoop();
+        rig.main.settle();
+    }
+    CHECK(taken == std::vector<char32_t>{U' '});
 }
 
 TEST_CASE("An Audio Unit says whether it has a view, asked without one being made", "[windows]")

@@ -72,4 +72,8 @@ constexpr double editorPixels = 2000.0;
 // resizes, size is the last it was told and own is its own native view's; and for scaleQuery the scale it was last
 // given, in percent, and whether the first scale came before its size was first asked for, as "scale=150 first=1".
 constexpr unsigned scaleQuery = 4001;
+
+// And for keysQuery the keys offered to its view, those it took, which are 'a' alone, and those its own window was
+// sent, as "offered=2 taken=1 sent=1".
+constexpr unsigned keysQuery = 4002;
 }

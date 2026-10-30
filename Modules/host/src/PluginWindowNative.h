@@ -2,6 +2,7 @@
 
 #include <symbolengine/ui/Window.h>
 
+#include <functional>
 #include <memory>
 
 /** What a plugin's window does with each system's own views. Main thread only. */
@@ -12,8 +13,10 @@ namespace symbolengine::pluginWindowNative
 void prepare();
 
 /** The view the editor is put in, made for the window and kept for its life: on a Mac an NSView that isn't flipped and
-    clips to its bounds, on Windows a plain child window the program never paints over. */
-void* makeContainer(ui::Window& window);
+    clips to its bounds, taking quietly the keys a plugin's view hands up to it and telling handedUp of each pressed
+    with no modifier key while no text is being typed, and on Windows a plain child window the program never paints
+    over. */
+void* makeContainer(ui::Window& window, std::function<void(char32_t key, bool repeat)> handedUp);
 
 /** Lets go of the view once the window has. */
 void releaseContainer(void* container);

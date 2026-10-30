@@ -49,6 +49,11 @@ bool takesDrops(void*)
     return true;
 }
 
+int keysSent()
+{
+    return 0;
+}
+
 bool offscreenMoved(void*)
 {
     return false;

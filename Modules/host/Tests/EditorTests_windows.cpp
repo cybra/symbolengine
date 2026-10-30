@@ -84,3 +84,62 @@ void rescaleWindow(void* window, double scale)
                          outer.top + edgesHigh + MulDiv(client.bottom, static_cast<int>(dpi), before)};
     SendMessageW(handle, WM_DPICHANGED, MAKEWPARAM(dpi, dpi), reinterpret_cast<LPARAM>(&suggested));
 }
+
+bool floatsAbove(void* window)
+{
+    return (GetWindowLongPtrW(static_cast<HWND>(window), GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+}
+
+// A window of the process's own, as a question or a plugin's own window is, shown far off every display without
+// taking the keyboard.
+void* showOtherWindow()
+{
+    const auto window = CreateWindowExW(0, L"STATIC", L"Other", WS_POPUP | WS_CAPTION, -30000, -30000, 200, 100,
+                                        nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    ShowWindow(window, SW_SHOWNOACTIVATE);
+    return window;
+}
+
+void closeOtherWindow(void* window)
+{
+    DestroyWindow(static_cast<HWND>(window));
+}
+
+// The window the plugin's view is in, or the plugin's own view there, which a key pressed in the plugin goes to.
+static HWND keyTarget(symbolengine::PluginWindow& pluginWindow)
+{
+    const auto container = GetWindow(static_cast<HWND>(pluginWindow.nativeHandle()), GW_CHILD);
+    const auto own = container != nullptr ? GetWindow(container, GW_CHILD) : nullptr;
+    const auto focus = GetFocus();
+    if (focus != nullptr && container != nullptr && IsChild(container, focus))
+        return focus;
+    return own != nullptr ? own : container;
+}
+
+// A key pressed and let go of in the window, as Windows posts it there: the virtual key, and a press marked as a repeat
+// when it is one.
+void pressKey(symbolengine::PluginWindow& pluginWindow, char32_t key, bool repeat, bool)
+{
+    const auto target = keyTarget(pluginWindow);
+    const auto virtualKey = static_cast<WPARAM>(key == U' ' ? VK_SPACE : LOBYTE(VkKeyScanW(static_cast<wchar_t>(key))));
+    const auto scan = static_cast<LPARAM>(MapVirtualKeyW(static_cast<UINT>(virtualKey), MAPVK_VK_TO_VSC)) << 16;
+    PostMessageW(target, WM_KEYDOWN, virtualKey, 1 | scan | (repeat ? LPARAM(1) << 30 : 0));
+    PostMessageW(target, WM_KEYUP, virtualKey, 1 | scan | (LPARAM(1) << 30) | (LPARAM(1) << 31));
+    turnSystemLoop();
+}
+
+// A text field in the window being typed in.
+void* typeIn(symbolengine::PluginWindow& pluginWindow)
+{
+    const auto container = GetWindow(static_cast<HWND>(pluginWindow.nativeHandle()), GW_CHILD);
+    const auto field = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_VISIBLE, 0, 0, 100, 20, container, nullptr,
+                                       GetModuleHandleW(nullptr), nullptr);
+    SetFocus(field);
+    return field;
+}
+
+void stopTyping(void* field)
+{
+    SetFocus(nullptr);
+    DestroyWindow(static_cast<HWND>(field));
+}

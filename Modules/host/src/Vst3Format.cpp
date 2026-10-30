@@ -13,6 +13,7 @@
 
 #include "pluginterfaces/base/ibstream.h"
 #include "pluginterfaces/base/ipluginbase.h"
+#include "pluginterfaces/base/keycodes.h"
 #include "pluginterfaces/base/smartpointer.h"
 #include "pluginterfaces/gui/iplugview.h"
 #include "pluginterfaces/gui/iplugviewcontentscalesupport.h"
@@ -692,13 +693,57 @@ const FIDString platformType = kPlatformTypeHWND;
 const FIDString platformType = nullptr;
 #endif
 
-// Whether its editors are sized in pixels, and given the scale of the screen they are on: on Windows. On a Mac they are
-// sized in points, and a view given a scale there draws at the wrong size.
+// Whether its editors are sized in pixels, given the scale of the screen they are on and offered each key before
+// their windows get it: on Windows. On a Mac they are sized in points, a view given a scale there draws at the wrong
+// size, and keys reach a view through the system's own chain of views.
 #if defined(_WIN32)
-constexpr bool givenScale = true;
+constexpr bool givenScale = true, offeredKeys = true;
 #else
-constexpr bool givenScale = false;
+constexpr bool givenScale = false, offeredKeys = false;
 #endif
+
+// A key as VST3 gives it to a view: its character, its virtual key code where it is one of those named, and the
+// modifier keys held.
+struct ViewKey
+{
+    char16 character = 0;
+    int16 code = 0;
+    int16 modifiers = 0;
+};
+
+ViewKey viewKeyOf(const PluginKey& key)
+{
+    using Named = PluginKey::Named;
+    ViewKey made;
+    made.character = key.character <= 0xFFFF ? static_cast<char16>(key.character) : 0;
+
+    switch (key.named)
+    {
+        case Named::backspace: made.code = KEY_BACK; break;
+        case Named::tab: made.code = KEY_TAB; break;
+        case Named::enter: made.code = KEY_RETURN; break;
+        case Named::escape: made.code = KEY_ESCAPE; break;
+        case Named::space: made.code = KEY_SPACE; break;
+        case Named::left: made.code = KEY_LEFT; break;
+        case Named::up: made.code = KEY_UP; break;
+        case Named::right: made.code = KEY_RIGHT; break;
+        case Named::down: made.code = KEY_DOWN; break;
+        case Named::home: made.code = KEY_HOME; break;
+        case Named::end: made.code = KEY_END; break;
+        case Named::pageUp: made.code = KEY_PAGEUP; break;
+        case Named::pageDown: made.code = KEY_PAGEDOWN; break;
+        case Named::insert: made.code = KEY_INSERT; break;
+        case Named::forwardDelete: made.code = KEY_DELETE; break;
+        case Named::none: break;
+        default:
+            made.code = static_cast<int16>(KEY_F1 + (static_cast<int>(key.named) - static_cast<int>(Named::f1)));
+            break;
+    }
+
+    made.modifiers = static_cast<int16>((key.shift ? kShiftKey : 0) | (key.alt ? kAlternateKey : 0) |
+                                        (key.command ? kCommandKey : 0));
+    return made;
+}
 
 // The smallest size an editor is given, raising one that asks for less.
 constexpr int smallestWidth = 100, smallestHeight = 50;
@@ -861,6 +906,27 @@ public:
         if (ViewRect rect{}; view->getSize(&rect) == kResultTrue)
             if (const auto size = raised({rect.getWidth(), rect.getHeight()}); size != current)
                 tell(size, true);
+    }
+
+    // A key offered to the view, which says whether it took it.
+    bool keyDown(const PluginKey& key) override
+    {
+        if (!offeredKeys || !attached)
+            return false;
+
+        const vst3View::ParentAwareness awareness(parent);
+        const auto given = viewKeyOf(key);
+        return view->onKeyDown(given.character, given.code, given.modifiers) == kResultTrue;
+    }
+
+    bool keyUp(const PluginKey& key) override
+    {
+        if (!offeredKeys || !attached)
+            return false;
+
+        const vst3View::ParentAwareness awareness(parent);
+        const auto given = viewKeyOf(key);
+        return view->onKeyUp(given.character, given.code, given.modifiers) == kResultTrue;
     }
 
     // A resize the view asked for, on the main thread.

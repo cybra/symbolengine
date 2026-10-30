@@ -55,8 +55,9 @@ endif()
 # A plugin's own window, built where the ui module's windows are.
 set(dependencies core)
 if(TARGET symbolengine_ui)
-    list(APPEND sources src/PluginWindow.cpp
-                        $<IF:$<BOOL:${APPLE}>,src/PluginWindow_mac.mm,src/PluginWindow_windows.cpp>)
+    list(APPEND sources src/PluginWindow.cpp src/PluginWindows.cpp
+                        $<IF:$<BOOL:${APPLE}>,src/PluginWindow_mac.mm,src/PluginWindow_windows.cpp>
+                        $<IF:$<BOOL:${APPLE}>,src/PluginWindows_mac.mm,src/PluginWindows_windows.cpp>)
     list(APPEND dependencies ui)
 endif()
 

@@ -42,6 +42,9 @@ bool awareAsParent(void* parent);
 // for OLE can; elsewhere it does.
 bool takesDrops(void* view);
 
+// How many keys the system has sent views' own native views since the module was loaded: on Windows; elsewhere none.
+int keysSent();
+
 // Whether the host has moved or resized the off-screen view.
 bool offscreenMoved(void* view);
 
