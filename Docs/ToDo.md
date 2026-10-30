@@ -49,7 +49,7 @@
 ## Phase 2: Core, files and the app
 
 - [x] core: values and JSON, XML documents, UTF-8 text, paths and the system's folders, files written safely, settings files, SHA-256, speaker layouts, a lock-free fifo, a guard against denormal numbers, and a resampler.
-- [x] ui: the message loop, calls to the message thread from any other, and timers.
+- [x] ui: the message loop, calls to the message thread from any other, and timers; and a call on the message thread that waits for what only the loop can bring (`messageLoop::runUntil`), with calls that reach it there (`messageLoop::callSoon`), as a Mac's main dispatch queue holds back others while one of its calls is under way.
 - [ ] core: threads and logging.
 - [x] files: WAV, with RF64 and BW64 past 4 GB and WAVE_FORMAT_EXTENSIBLE, its broadcast extension, iXML and other chunks kept, and AIFF and AIFF-C, read and written a stretch at a time, checked against ffmpeg's and Apple's files.
 - [x] files: FLAC, Ogg Vorbis and Opus, with their tags, through Xiph.Org's libraries built into the module, checked against ffmpeg's and the flac tool's files and read back by them.

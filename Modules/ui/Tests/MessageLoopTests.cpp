@@ -59,3 +59,55 @@ TEST_CASE("A call timed from inside the loop waits its time, and what is posted 
     ui::messageLoop::run();
     CHECK(order == std::vector<int>{1, 2, 3});
 }
+
+TEST_CASE("A call that waits on the message thread gets what is given to callSoon, even inside a call from callAsync")
+{
+    ui::messageLoop::initialize();
+
+    bool held = false, late = true, stoppedWaiting = false;
+    std::vector<int> order;
+    std::thread other;
+    std::chrono::steady_clock::duration waited{};
+
+    ui::messageLoop::callAsync([&] {
+        // Given from another thread while this call is under way, as a plugin's completion is.
+        other = std::thread([&] {
+            for (int i = 1; i <= 3; ++i)
+                ui::messageLoop::callSoon([&order, i] { order.push_back(i); });
+        });
+
+        held = ui::messageLoop::runUntil([&] { return order.size() == 3; }, std::chrono::seconds(10));
+
+        // The limit ends a wait for what never comes, in about the time it says.
+        const auto began = std::chrono::steady_clock::now();
+        late = ui::messageLoop::runUntil([] { return false; }, std::chrono::milliseconds(100));
+        waited = std::chrono::steady_clock::now() - began;
+        stoppedWaiting = true;
+        ui::messageLoop::stop();
+    });
+    ui::messageLoop::run();
+    other.join();
+
+    CHECK(held);
+    CHECK(order == std::vector<int>{1, 2, 3});
+    CHECK(stoppedWaiting);
+    CHECK_FALSE(late);
+    CHECK(waited >= std::chrono::milliseconds(100));
+    CHECK(waited < std::chrono::seconds(5));
+}
+
+TEST_CASE("callSoon runs from any thread while the loop runs, on the message thread")
+{
+    ui::messageLoop::initialize();
+
+    bool onMessageThread = false;
+    std::thread other([&] {
+        ui::messageLoop::callSoon([&] {
+            onMessageThread = ui::messageLoop::isMessageThread();
+            ui::messageLoop::stop();
+        });
+    });
+    ui::messageLoop::run();
+    other.join();
+    CHECK(onMessageThread);
+}

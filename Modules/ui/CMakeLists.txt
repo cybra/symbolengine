@@ -21,10 +21,10 @@ FetchContent_Declare(symbolengine_choc
 FetchContent_MakeAvailable(symbolengine_choc)
 
 if(APPLE)
-    set(sources src/Dialogs_mac.mm src/MenuBar_mac.mm src/Native_mac.mm src/Snapshot_mac.mm src/Window_mac.mm)
+    set(sources src/Dialogs_mac.mm src/MenuBar_mac.mm src/MessageLoop_mac.mm src/Native_mac.mm src/Snapshot_mac.mm src/Window_mac.mm)
     set(libraries "-framework WebKit" "-framework AppKit" "-framework Foundation" "-framework UniformTypeIdentifiers")
 else()
-    set(sources src/Dialogs_windows.cpp src/MenuBar_other.cpp src/Native_windows.cpp src/Window_windows.cpp)
+    set(sources src/Dialogs_windows.cpp src/MenuBar_other.cpp src/MessageLoop_windows.cpp src/Native_windows.cpp src/Window_windows.cpp)
     set(libraries ole32 oleaut32 user32 shell32 version dwmapi advapi32)
 endif()
 
