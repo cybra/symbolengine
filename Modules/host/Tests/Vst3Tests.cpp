@@ -197,6 +197,19 @@ TEST_CASE(
     CHECK(misuses().empty());
 }
 
+TEST_CASE("A VST3 plugin's parts are taken apart with nothing of the host's holding them as they end")
+{
+    Rig rig;
+    {
+        auto plugin = rig.made(testIds::gain);
+        REQUIRE(plugin->prepare({48000.0, 64, false}));
+        std::thread([&] { through(*plugin, 64); }).join();
+        plugin->release();
+    }
+    rig.main.settle();
+    CHECK(misuses().empty());
+}
+
 TEST_CASE("A VST3 plugin that throws from its state call fails, and nothing reaches the program")
 {
     Rig rig;

@@ -217,10 +217,12 @@ public:
     tresult PLUGIN_API disconnect(IConnectionPoint*) override { return kResultOk; }
     tresult PLUGIN_API notify(IMessage* message) override;
 
+    // On the main thread, where the destination alone is used, so nothing of the host's holds that part any more.
     void undo()
     {
         linked = false;
         client = nullptr;
+        destination = nullptr;
     }
 
     tresult PLUGIN_API queryInterface(const TUID wanted, void** object) override
@@ -1155,6 +1157,10 @@ public:
             toComponent->undo();
             componentPoint->disconnect(toController);
             controllerPoint->disconnect(toComponent);
+            toController = nullptr;
+            toComponent = nullptr;
+            componentPoint = nullptr;
+            controllerPoint = nullptr;
         }
 
         if (component && initialized)

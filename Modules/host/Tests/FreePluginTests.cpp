@@ -17,7 +17,6 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <random>
@@ -36,10 +35,10 @@ namespace
 
 std::optional<std::filesystem::path> freePlugins()
 {
-    const auto* folder = std::getenv("SYMBOLENGINE_FREE_PLUGINS");
-    if (folder == nullptr || *folder == '\0')
+    const auto folder = system::environmentVariable("SYMBOLENGINE_FREE_PLUGINS");
+    if (!folder || folder->empty())
         return std::nullopt;
-    return paths::fromUtf8(folder);
+    return paths::fromUtf8(*folder);
 }
 
 struct Rig

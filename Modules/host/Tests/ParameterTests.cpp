@@ -356,6 +356,89 @@ TEST_CASE("Values a plugin's processing reports reach the program and are shown 
     rig.checkNoMisuse();
 }
 
+TEST_CASE("A plugin's values are read again once it takes a state, so the program sees what it holds now")
+{
+    Rig rig;
+    FakePluginFormat::Script script;
+    script.parameters = {{1, "Gain", "", 1.0, 0, true, false, false, false, false},
+                         {3, "Mode", "", 0.0, 3, true, false, false, false, false}};
+    script.gainParameter = 1;
+    script.stateValues = {{1, 0.25}, {3, 0.5}};
+    rig.fake.script("plugin", script);
+
+    SECTION("While it isn't prepared")
+    {
+        auto plugin = rig.made();
+        CHECK(plugin->parameter(1) == 1.0);
+        REQUIRE(plugin->loadState("fake state", PluginStateUse::document));
+        CHECK(plugin->parameter(1) == 0.25);
+        CHECK(plugin->parameter(3) == 0.5);
+    }
+    SECTION("While it plays")
+    {
+        auto plugin = rig.made();
+        REQUIRE(plugin->prepare({48000.0, 64, false}));
+        CHECK(through(*plugin) == 1.0f);
+        REQUIRE(plugin->loadState("fake state", PluginStateUse::document));
+        CHECK(plugin->parameter(1) == 0.25);
+        CHECK(plugin->parameter(3) == 0.5);
+        CHECK(through(*plugin) == 0.25f);
+    }
+    SECTION("Taken only once it is next prepared")
+    {
+        auto script2 = script;
+        script2.takesStateWhenActivated = true;
+        rig.fake.script("plugin", script2);
+        auto plugin = rig.made();
+        REQUIRE(plugin->loadState("fake state", PluginStateUse::document));
+        CHECK(plugin->parameter(1) == 1.0);
+        REQUIRE(plugin->prepare({48000.0, 64, false}));
+        CHECK(plugin->parameter(1) == 0.25);
+        CHECK(plugin->parameter(3) == 0.5);
+    }
+    rig.checkNoMisuse();
+}
+
+TEST_CASE("Values set before a plugin takes a state give way to it, never reaching it after the state")
+{
+    Rig rig;
+    FakePluginFormat::Script script;
+    script.parameters = {{1, "Gain", "", 1.0, 0, true, false, false, false, false}};
+    script.gainParameter = 1;
+    script.stateValues = {{1, 0.25}};
+    rig.fake.script("plugin", script);
+
+    SECTION("Set while it wasn't prepared, which it would hear as it is")
+    {
+        auto plugin = rig.made();
+        REQUIRE(plugin->setParameter(1, 0.75));
+        REQUIRE(plugin->loadState("fake state", PluginStateUse::document));
+        REQUIRE(plugin->prepare({48000.0, 64, false}));
+        CHECK(plugin->parameter(1) == 0.25);
+        CHECK(through(*plugin) == 0.25f);
+    }
+    SECTION("Set while it played, waiting for its next block")
+    {
+        auto plugin = rig.made();
+        REQUIRE(plugin->prepare({48000.0, 64, false}));
+        CHECK(through(*plugin) == 1.0f);
+        REQUIRE(plugin->setParameter(1, 0.75));
+        REQUIRE(plugin->loadState("fake state", PluginStateUse::document));
+        CHECK(plugin->parameter(1) == 0.25);
+        CHECK(through(*plugin) == 0.25f);
+    }
+    SECTION("Set after the state, which it hears")
+    {
+        auto plugin = rig.made();
+        REQUIRE(plugin->loadState("fake state", PluginStateUse::document));
+        REQUIRE(plugin->setParameter(1, 0.75));
+        REQUIRE(plugin->prepare({48000.0, 64, false}));
+        CHECK(plugin->parameter(1) == 0.75);
+        CHECK(through(*plugin) == 0.75f);
+    }
+    rig.checkNoMisuse();
+}
+
 TEST_CASE("Edits within 250 ms of a plugin's state being given aren't the user's, nor is its state changing then")
 {
     Rig rig;

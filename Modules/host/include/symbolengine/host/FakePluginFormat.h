@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -31,6 +32,11 @@ public:
             each parameter's value as its processing has heard it. */
         std::vector<PluginParameter> parameters;
         std::uint32_t gainParameter = 0xFFFFFFFF;
+
+        /** The values a state given to it sets, by parameter, and whether it takes a state given while it isn't active
+            only once it next is, as an Audio Unit given one before it is initialized may. */
+        std::map<std::uint32_t, double> stateValues;
+        bool takesStateWhenActivated = false;
 
         /** Whether its own edits leave the value it shows as it was, as some plugins' do. */
         bool forgetsOwnEdits = false;

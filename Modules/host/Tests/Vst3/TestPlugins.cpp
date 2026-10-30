@@ -134,6 +134,11 @@ public:
         if (active)
             misuse(plugin, "terminated while active");
 
+        // Whatever else of the host's held it, its links to the controller above all, has let go by now, and the one
+        // hold left is what is ending it.
+        if (getRefCount() != 1)
+            misuse(plugin, "terminated while the host held it " + std::to_string(getRefCount()) + " times");
+
         return AudioEffect::terminate();
     }
 

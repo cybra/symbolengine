@@ -8,6 +8,7 @@
 #include <atomic>
 #include <map>
 #include <mutex>
+#include <utility>
 
 namespace symbolengine
 {
@@ -132,6 +133,10 @@ public:
         delayAt = 0;
         maximumFrames = setup.maximumFrames;
         active = true;
+
+        if (std::exchange(stateWaiting, false))
+            takeStateValues();
+
         return true;
     }
 
@@ -343,7 +348,25 @@ public:
         if (processing)
             misuse("given its state while processing");
 
+        if (script.takesStateWhenActivated && !active)
+            stateWaiting = true;
+        else
+            takeStateValues();
+
         return true;
+    }
+
+    void takeStateValues()
+    {
+        const std::lock_guard held(shownLock);
+
+        for (const auto& [parameter, value] : script.stateValues)
+        {
+            shown[parameter] = value;
+
+            if (parameter == script.gainParameter)
+                script.gain = static_cast<float>(value);
+        }
     }
 
     bool hasEditor() override
@@ -514,6 +537,7 @@ private:
     std::size_t delayAt = 0;
     std::map<std::uint32_t, double> heard, shown;
     std::mutex shownLock;
+    bool stateWaiting = false;
     bool editorOpen = false;
 };
 

@@ -22,6 +22,7 @@
 #include <semaphore>
 #include <thread>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace symbolengine
@@ -193,6 +194,9 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     std::vector<PluginParameter> parameterList;
     std::map<std::uint32_t, double> values;
     std::vector<PluginParameterChange> unheard;
+
+    // Whether it took a state while it wasn't prepared, which it may apply only once it is.
+    bool readValuesOncePrepared = false;
 
     // The parameter being shown a value, an edit of which the plugin makes meanwhile being an echo of it, and until
     // when its own edits aren't the user's, after its state is given.
@@ -611,15 +615,22 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
         return call("flush", [&] { instance->flush(changes.data(), static_cast<int>(changes.size())); });
     }
 
+    // The values it holds now.
+    void readValues()
+    {
+        call("parameters", [this] {
+            for (const auto& parameter : parameterList)
+                values[parameter.id] = instance->parameterValue(parameter.id);
+        });
+    }
+
     void readParameters()
     {
         call("parameters", [this] {
             parameterList = instance->parameters();
             values.clear();
-
-            for (const auto& parameter : parameterList)
-                values[parameter.id] = instance->parameterValue(parameter.id);
         });
+        readValues();
 
         showAudioValues();
         auto made = std::make_unique<Table>();
@@ -1260,6 +1271,9 @@ bool Plugin::prepare(const PluginSetup& setup)
         return false;
     }
 
+    if (std::exchange(inner->readValuesOncePrepared, false))
+        inner->readValues();
+
     inner->open();
     return true;
 }
@@ -1354,6 +1368,9 @@ bool Plugin::loadState(std::string_view state, PluginStateUse use)
     if (active && !inner->hold())
         return false;
 
+    // What the audio thread kept from before the state comes before it.
+    inner->showAudioValues();
+
     PluginError error;
     bool loaded = false;
 
@@ -1367,6 +1384,13 @@ bool Plugin::loadState(std::string_view state, PluginStateUse use)
 
     if (!loaded)
         inner->problem = error ? error : PluginError{"It didn't take the state.", "loadState", 0};
+    else
+    {
+        // It says what the plugin holds now, so values set before it give way to it.
+        inner->unheard.clear();
+        inner->readValues();
+        inner->readValuesOncePrepared = !active;
+    }
 
     // A plugin's latency can follow its state.
     if (active)
