@@ -32,6 +32,16 @@ set_target_properties(symbolengine_test_audio_units_twin PROPERTIES
     OUTPUT_NAME "SymbolEngine Twin Test Units"
     MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/TwinInfo.plist.in)
 
+# Units written straight against AudioToolbox, for what Apple's SDK never lets a unit do.
+add_library(symbolengine_test_audio_units_raw MODULE RawUnits.cpp)
+target_link_libraries(symbolengine_test_audio_units_raw PRIVATE ${frameworks})
+symbolengine_set_warnings(symbolengine_test_audio_units_raw)
+set_target_properties(symbolengine_test_audio_units_raw PROPERTIES
+    BUNDLE TRUE
+    BUNDLE_EXTENSION component
+    OUTPUT_NAME "SymbolEngine Raw Test Units"
+    MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/RawInfo.plist.in)
+
 # The same units built only for Intel under a maker code of their own, for the test of a unit the system runs through
 # Rosetta, which installs them in the user's Components folder while it runs: only on a machine made for the purpose.
 if(SYMBOLENGINE_TEST_INTEL_AUDIO_UNITS)

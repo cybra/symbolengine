@@ -877,3 +877,71 @@ TEST_CASE("Resets at discontinuities while an Audio Unit plays on never overlap 
     CHECK(plugin->state() == Plugin::State::active);
     CHECK(misuses().empty());
 }
+
+TEST_CASE("A unit's output is taken from wherever it gave it back, whatever it says of it, and what it left out is "
+          "silence")
+{
+    const std::filesystem::path raw = SYMBOLENGINE_TEST_RAW_AUDIO_UNITS;
+    REQUIRE(testAudioUnits::registerAll(raw));
+    Rig rig;
+    PluginError error;
+    const auto declared = rig.format.pluginsIn(raw, error);
+    REQUIRE_FALSE(error);
+    REQUIRE(declared.size() == 5);
+
+    const auto played = [&](const char* name) {
+        const auto found = std::find_if(declared.begin(), declared.end(),
+                                        [&](const PluginDescription& plugin) { return plugin.name == name; });
+        REQUIRE(found != declared.end());
+        auto plugin = rig.host.make(rig.format, *found);
+        REQUIRE(rig.main.turnUntil([&] { return plugin->state() != Plugin::State::making; }));
+        INFO(plugin->problem().message);
+        REQUIRE(plugin->state() == Plugin::State::inactive);
+        REQUIRE(plugin->prepare({48000.0, 64, false}));
+        const auto out = play(*plugin, 64, 2);
+        CHECK(plugin->state() == Plugin::State::active);
+        plugin->release();
+        return out;
+    };
+    const auto silentFrom = [](std::vector<float> samples, std::size_t from) {
+        std::fill(samples.begin() + static_cast<std::ptrdiff_t>(from), samples.end(), 0.0f);
+        return samples;
+    };
+    const auto left = numbered(128), right = numbered(128, 1.0f, -1.0f);
+
+    SECTION("Its own buffers, the host's left untouched")
+    {
+        const auto out = played("OwnBuffers");
+        CHECK(out[0] == left);
+        CHECK(out[1] == right);
+    }
+    SECTION("Sound it flags as silent, which is still heard")
+    {
+        const auto out = played("SaysSilent");
+        CHECK(out[0] == left);
+        CHECK(out[1] == right);
+    }
+    SECTION("Half a block it says is all it wrote, the rest silence")
+    {
+        const auto out = played("ShortCount");
+        REQUIRE(out[0].size() == 128);
+        for (std::size_t block = 0; block < 2; ++block)
+            for (std::size_t i = 32; i < 64; ++i)
+                CHECK(out[0][block * 64 + i] == 0.0f);
+        CHECK(out[0][31] == left[31]);
+        CHECK(out[1][95] == right[95]);
+    }
+    SECTION("One buffer given back, the other channel silence")
+    {
+        const auto out = played("NoRight");
+        CHECK(out[0] == left);
+        CHECK(out[1] == silentFrom(right, 0));
+    }
+    SECTION("A null pointer for a channel, which is silence")
+    {
+        const auto out = played("NullRight");
+        CHECK(out[0] == left);
+        CHECK(out[1] == silentFrom(right, 0));
+    }
+    CHECK(rig.wrong.empty());
+}

@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <key>CFBundleExecutable</key><string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
+    <key>CFBundleIdentifier</key><string>dev.symbolengine.test.units.raw</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>CFBundleName</key><string>SymbolEngine Raw Test Units</string>
+    <key>CFBundlePackageType</key><string>BNDL</string>
+    <key>CFBundleShortVersionString</key><string>1.2.3</string>
+    <key>CFBundleVersion</key><string>1.2.3</string>
+    <key>AudioComponents</key>
+    <array>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>Ownb</string>
+            <key>manufacturer</key><string>SyRw</string>
+            <key>name</key><string>SymbolEngine Raw Tests: OwnBuffers</string>
+            <key>description</key><string>SymbolEngine's raw test unit OwnBuffers</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>OwnBuffersFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>Slnt</string>
+            <key>manufacturer</key><string>SyRw</string>
+            <key>name</key><string>SymbolEngine Raw Tests: SaysSilent</string>
+            <key>description</key><string>SymbolEngine's raw test unit SaysSilent</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>SaysSilentFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>Shrt</string>
+            <key>manufacturer</key><string>SyRw</string>
+            <key>name</key><string>SymbolEngine Raw Tests: ShortCount</string>
+            <key>description</key><string>SymbolEngine's raw test unit ShortCount</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>ShortCountFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>NoRt</string>
+            <key>manufacturer</key><string>SyRw</string>
+            <key>name</key><string>SymbolEngine Raw Tests: NoRight</string>
+            <key>description</key><string>SymbolEngine's raw test unit NoRight</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>NoRightFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>NlRt</string>
+            <key>manufacturer</key><string>SyRw</string>
+            <key>name</key><string>SymbolEngine Raw Tests: NullRight</string>
+            <key>description</key><string>SymbolEngine's raw test unit NullRight</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>NullRightFactory</string>
+        </dict>
+    </array>
+</dict>
+</plist>
