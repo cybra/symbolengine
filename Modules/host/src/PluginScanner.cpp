@@ -412,7 +412,6 @@ PluginScanner::~PluginScanner()
 PluginWalk PluginScanner::walk(const std::vector<PluginScanFolder>& folders, PluginList& list)
 {
     PluginWalk walked;
-    const auto native = system::architecture();
 
     // Each file found, with the folder it was found in, in the scan's order once sorted.
     struct Found
@@ -471,10 +470,11 @@ PluginWalk PluginScanner::walk(const std::vector<PluginScanFolder>& folders, Plu
                 file.architectures = facts->architectures;
             }
 
-            // What can't be read, or isn't built for this program's architecture, is listed as that without a worker.
+            // What can't be read, or isn't built for anything that can run here, is listed as that without a worker.
             const bool foreign =
                 facts && !file.architectures.empty() &&
-                std::find(file.architectures.begin(), file.architectures.end(), native) == file.architectures.end();
+                std::none_of(file.architectures.begin(), file.architectures.end(),
+                             [&](const std::string& architecture) { return format->runs(architecture); });
             if (!facts || foreign)
             {
                 if (list.needsScan(path, file.stamp))

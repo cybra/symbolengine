@@ -57,6 +57,12 @@ public:
     /** The stamp of the binary its Info.plist names, its version from its Info.plist, and its binary's architectures. */
     std::optional<PluginFileFacts> examine(const std::filesystem::path& file, PluginError& error) const override;
 
+    /** The program's own architecture, and Intel's on Apple Silicon, which the system runs through Rosetta. */
+    bool runs(std::string_view architecture) const override;
+
+    /** The binary its Info.plist names, and the libraries it links. */
+    std::optional<std::filesystem::path> changedAfterSigning(const std::filesystem::path& file) const override;
+
     /** The units its Info.plist declares, read without loading its code: each one's codes, its name, split at its first
         colon into maker and name, its version and its kind. */
     std::vector<PluginDescription> pluginsIn(const std::filesystem::path& file, PluginError& error) override;

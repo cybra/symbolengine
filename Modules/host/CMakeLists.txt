@@ -42,7 +42,7 @@ if(APPLE)
                         src/ProcessState_mac.mm src/ScanWorkerCrash_posix.cpp src/ScanWorkerLoop_mac.mm
                         src/Vst3Module_mac.cpp src/Vst3View_mac.mm)
     list(APPEND libraries "-framework AppKit" "-framework AudioToolbox" "-framework CoreAudio" "-framework CoreFoundation"
-                          "-framework CoreGraphics")
+                          "-framework CoreGraphics" "-framework Security")
 elseif(WIN32)
     list(APPEND sources src/MainThread_windows.cpp src/PluginCrashNote_windows.cpp src/ScanWorkerCrash_windows.cpp
                         src/ScanWorkerLoop_windows.cpp src/Vst3Module_windows.cpp src/Vst3View_windows.cpp)
@@ -93,7 +93,14 @@ if(SYMBOLENGINE_TESTS)
                      Tests/Vst3Tests.cpp Tests/WalkTests.cpp)
     if(APPLE)
         add_subdirectory(Tests/AudioUnits)
-        list(APPEND test_sources Tests/AudioUnitTests.cpp Tests/ScanWorkerTests_mac.mm)
+        list(APPEND test_sources Tests/AudioUnitTests.cpp Tests/ScanWorkerTests_mac.mm Tests/SignatureTests.cpp)
+
+        # A library built for both of a Mac's architectures, which the signature tests sign and damage, without the
+        # sanitizers, as nothing loads it.
+        add_library(symbolengine_signed_library SHARED Tests/SignedLibrary.cpp)
+        set_target_properties(symbolengine_signed_library PROPERTIES OSX_ARCHITECTURES "arm64;x86_64")
+        target_compile_options(symbolengine_signed_library PRIVATE -fno-sanitize=all)
+        target_link_options(symbolengine_signed_library PRIVATE -fno-sanitize=all)
     endif()
     if(TARGET symbolengine_ui)
         list(APPEND test_sources $<IF:$<BOOL:${APPLE}>,Tests/EditorTests_mac.mm,Tests/EditorTests_windows.cpp>)
@@ -111,8 +118,10 @@ if(SYMBOLENGINE_TESTS)
         target_compile_definitions(symbolengine_host_tests PRIVATE
             "SYMBOLENGINE_TEST_AUDIO_UNITS=\"$<TARGET_BUNDLE_DIR:symbolengine_test_audio_units>\""
             "SYMBOLENGINE_TEST_TWIN_AUDIO_UNITS=\"$<TARGET_BUNDLE_DIR:symbolengine_test_audio_units_twin>\""
-            "SYMBOLENGINE_TEST_AU_LOG=\"${CMAKE_CURRENT_BINARY_DIR}/test-au-log.txt\"")
-        add_dependencies(symbolengine_host_tests symbolengine_test_audio_units symbolengine_test_audio_units_twin)
+            "SYMBOLENGINE_TEST_AU_LOG=\"${CMAKE_CURRENT_BINARY_DIR}/test-au-log.txt\""
+            "SYMBOLENGINE_SIGNED_LIBRARY=\"$<TARGET_FILE:symbolengine_signed_library>\"")
+        add_dependencies(symbolengine_host_tests symbolengine_test_audio_units symbolengine_test_audio_units_twin
+                         symbolengine_signed_library)
         if(SYMBOLENGINE_TEST_INTEL_AUDIO_UNITS)
             target_compile_definitions(symbolengine_host_tests PRIVATE
                 "SYMBOLENGINE_TEST_INTEL_AUDIO_UNITS=\"$<TARGET_BUNDLE_DIR:symbolengine_test_audio_units_intel>\"")

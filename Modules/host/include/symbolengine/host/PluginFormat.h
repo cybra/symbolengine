@@ -487,6 +487,17 @@ public:
         holds no binary to read. From any thread. */
     virtual std::optional<PluginFileFacts> examine(const std::filesystem::path& file, PluginError& error) const = 0;
 
+    /** Whether a plugin of this format built for the architecture, named as a file's facts name it, can run here: built
+        for the program's own, or for one the system runs in a process of its own for this format, as it runs an Audio
+        Unit built only for Intel on Apple Silicon through Rosetta. */
+    virtual bool runs(std::string_view architecture) const;
+
+    /** The file of a plugin's code that no longer matches its signature, which the system stops whatever runs it for:
+        its binary, or a library it links outside the system, in the code the system would run, found without loading
+        any of it; nothing where all of it matches or has no signature, or on a system that stops nothing for this. A
+        bundle's other files are no part of it, as the system checks only code, as it is used. From any thread. */
+    virtual std::optional<std::filesystem::path> changedAfterSigning(const std::filesystem::path& file) const;
+
     /** The plugins a file of the format holds, each as it declares itself, without making any, in the order the file
         gives them; called on the main thread, loading the file's code where the format has to, so a scan calls it in
         a worker. Nothing, with the error set, if the file can't be read or its code won't load. */

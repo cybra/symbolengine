@@ -108,7 +108,8 @@ struct PluginFile
 
     Outcome outcome = Outcome::found;
 
-    /** Why it was set aside, with Outcome::setAside. */
+    /** Why it was set aside, with Outcome::setAside, and which of its code was found changed, with
+        Outcome::changedAfterSigning where a check found it. */
     std::optional<PluginFailure> failure{};
 
     /** The plugins in it the scan found, each located at this file, and those it set aside. */

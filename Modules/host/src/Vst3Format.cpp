@@ -1753,6 +1753,40 @@ namespace
 #endif
 }
 
+#if defined(__APPLE__)
+// The binary a Mac loads from a bundle: the executable its Info.plist names, else one named as the bundle is, else the
+// one file there; nothing where it holds none.
+std::filesystem::path bundledBinary(const std::filesystem::path& file)
+{
+    std::error_code ignored;
+    const auto folder = file / "Contents" / "MacOS";
+    auto named = folder / file.stem();
+    const auto plist = files::read(file / "Contents" / "Info.plist", ignored);
+    if (const auto at = plist.find("<key>CFBundleExecutable</key>"); at != std::string::npos)
+        if (const auto open = plist.find("<string>", at), close = plist.find("</string>", at);
+            open != std::string::npos && close != std::string::npos && open < close)
+            named = folder / paths::fromUtf8(plist.substr(open + 8, close - open - 8));
+    if (std::filesystem::is_regular_file(named, ignored))
+        return named;
+    std::filesystem::path found;
+    for (const auto& entry : std::filesystem::directory_iterator(folder, ignored))
+        if (entry.is_regular_file(ignored))
+            found = entry.path();
+    return found;
+}
+#endif
+
+}
+
+std::optional<std::filesystem::path> Vst3Format::changedAfterSigning(const std::filesystem::path& file) const
+{
+#if defined(__APPLE__)
+    if (const auto binary = bundledBinary(file); !binary.empty())
+        return pluginFiles::changedAfterSigning(binary);
+#else
+    static_cast<void>(file);
+#endif
+    return std::nullopt;
 }
 
 std::optional<PluginFileFacts> Vst3Format::examine(const std::filesystem::path& file, PluginError& error) const
@@ -1765,20 +1799,7 @@ std::optional<PluginFileFacts> Vst3Format::examine(const std::filesystem::path& 
     if (std::filesystem::is_directory(file, ignored))
     {
 #if defined(__APPLE__)
-        // The executable its Info.plist names, else one named as the bundle is, else the one file there.
-        const auto folder = file / "Contents" / "MacOS";
-        auto named = folder / file.stem();
-        const auto plist = files::read(file / "Contents" / "Info.plist", ignored);
-        if (const auto at = plist.find("<key>CFBundleExecutable</key>"); at != std::string::npos)
-            if (const auto open = plist.find("<string>", at), close = plist.find("</string>", at);
-                open != std::string::npos && close != std::string::npos && open < close)
-                named = folder / paths::fromUtf8(plist.substr(open + 8, close - open - 8));
-        if (std::filesystem::is_regular_file(named, ignored))
-            loaded = named;
-        else
-            for (const auto& entry : std::filesystem::directory_iterator(folder, ignored))
-                if (entry.is_regular_file(ignored))
-                    loaded = entry.path();
+        loaded = bundledBinary(file);
         if (!loaded.empty())
             binaries.push_back(loaded);
 #else

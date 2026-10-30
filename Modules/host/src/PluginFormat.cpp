@@ -1,9 +1,21 @@
 #include "symbolengine/host/PluginFormat.h"
 
+#include <symbolengine/core/System.h>
+
 #include <vector>
 
 namespace symbolengine
 {
+
+bool PluginFormat::runs(std::string_view architecture) const
+{
+    return architecture == system::architecture();
+}
+
+std::optional<std::filesystem::path> PluginFormat::changedAfterSigning(const std::filesystem::path&) const
+{
+    return std::nullopt;
+}
 
 PluginIdentity PluginIdentity::audioUnit(std::uint32_t type, std::uint32_t subtype, std::uint32_t manufacturer)
 {

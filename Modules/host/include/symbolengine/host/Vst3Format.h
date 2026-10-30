@@ -55,6 +55,9 @@ public:
         of every binary the bundle holds for this system's kind of binary. */
     std::optional<PluginFileFacts> examine(const std::filesystem::path& file, PluginError& error) const override;
 
+    /** The binary a Mac loads from the bundle, and the libraries it links. */
+    std::optional<std::filesystem::path> changedAfterSigning(const std::filesystem::path& file) const override;
+
     /** The module's effect classes, in its factory's order: each class's name, maker, version, SDK and kind, an
         instrument where its subcategories say so. Its code is loaded to read them, and stays loaded. */
     std::vector<PluginDescription> pluginsIn(const std::filesystem::path& file, PluginError& error) override;

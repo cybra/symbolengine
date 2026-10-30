@@ -228,14 +228,26 @@ private:
             number = current.number;
         }
 
-        say("loading the code");
         format = nullptr;
         for (auto* one : formats)
             if (one->name() == current.format)
                 format = one;
         if (format == nullptr)
+        {
+            say("loading the code");
             return refuseFile("This worker has no format called " + current.format + ".");
+        }
 
+        // Before anything of it is loaded, since the system would stop this worker for loading it.
+        say("checking its signature");
+        if (const auto changed = format->changedAfterSigning(current.file))
+            return done(PluginFile::Outcome::changedAfterSigning,
+                        PluginFailure{PluginFailure::Kind::refused, currentStep(), 0,
+                                      "The code of " + paths::toUtf8(*changed) +
+                                          " no longer matches its signature, which the system stops whatever runs it "
+                                          "for. Reinstalling the plugin mends it."});
+
+        say("loading the code");
         PluginError error;
         plugins = format->pluginsIn(current.file, error);
         if (error)

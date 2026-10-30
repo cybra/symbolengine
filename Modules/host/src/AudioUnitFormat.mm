@@ -1677,6 +1677,22 @@ bool AudioUnitFormat::isPluginFile(const std::filesystem::path& path) const
            std::filesystem::is_directory(path, error);
 }
 
+bool AudioUnitFormat::runs(std::string_view architecture) const
+{
+    return PluginFormat::runs(architecture) || (system::architecture() == "arm64" && architecture == "x86_64");
+}
+
+std::optional<std::filesystem::path> AudioUnitFormat::changedAfterSigning(const std::filesystem::path& file) const
+{
+    const auto info = infoOf(file);
+    const auto executable = info != nullptr ? textOf(CFDictionaryGetValue(info, CFSTR("CFBundleExecutable"))) : "";
+    if (info != nullptr)
+        CFRelease(info);
+    if (executable.empty())
+        return std::nullopt;
+    return pluginFiles::changedAfterSigning(file / "Contents" / "MacOS" / paths::fromUtf8(executable));
+}
+
 std::optional<PluginFileFacts> AudioUnitFormat::examine(const std::filesystem::path& file, PluginError& error) const
 {
     error = {};

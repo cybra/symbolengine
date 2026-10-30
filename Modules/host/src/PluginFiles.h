@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -24,5 +25,12 @@ std::int64_t nanosecondsOf(std::filesystem::file_time_type time);
     CFBundleShortVersionString and CFBundleVersion; a Windows binary's version resource; nothing on Linux. Empty where
     it declares none. */
 std::string declaredVersion(const std::filesystem::path& bundle, const std::filesystem::path& binary);
+
+/** The first file of a binary's code and the libraries it links, found as the system would find them and leaving out
+    the system's own, whose code no longer matches its signature, read without loading any of it; each by its real
+    path. Only the code the system would run counts: the program's own architecture where the binary holds it, or else
+    the architecture it was built for. A file with no signature counts for nothing, as nothing changed it after signing,
+    and neither do a bundle's other files. Always nothing but on a Mac, the one system that stops a program for this. */
+std::optional<std::filesystem::path> changedAfterSigning(const std::filesystem::path& binary);
 
 }
