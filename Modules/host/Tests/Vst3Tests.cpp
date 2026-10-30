@@ -297,8 +297,14 @@ TEST_CASE("Each of a program's VST3 modules exits as it ends, before its own sta
     CHECK(ending->kind == ProcessEnding::Kind::exited);
     CHECK(ending->code == 0);
     std::error_code ignored;
+#if defined(_WIN32)
+    // A library's static objects are taken down as it is detached, once the program's end has run everything else.
+    CHECK(files::read(lifeLog, ignored) ==
+          "entered\nentered\nentered\nexited\nexited\nexited\ntaken down\ntaken down\ntaken down\n");
+#else
     CHECK(files::read(lifeLog, ignored) ==
           "entered\nentered\nentered\nexited\ntaken down\nexited\ntaken down\nexited\ntaken down\n");
+#endif
 }
 
 TEST_CASE("A VST3 plugin's parameters are listed in its order, known by their IDs, with their names, steps and flags")
