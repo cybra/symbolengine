@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -135,9 +136,7 @@ int main(int argc, [[maybe_unused]] char** narrowArguments)
     if (mode == "write-later")
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(700));
-        std::FILE* file = std::fopen(argv[2], "w");
-        if (file != nullptr)
-            std::fclose(file);
+        std::ofstream(argv[2]).put('\n');
         return 0;
     }
 
