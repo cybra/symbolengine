@@ -127,6 +127,61 @@ add_custom_command(TARGET symbolengine_misbehaving_vst3 POST_BUILD
     VERBATIM)
 set_target_properties(symbolengine_misbehaving_vst3 PROPERTIES SYMBOLENGINE_FOLDER "${misbehaving_folder}")
 
+# Steinberg's host checker, its processor built as Steinberg wrote it from a copy beside a header holding only the part
+# of its controller's it uses, as the rest of that needs VSTGUI, with a controller of the module's own.
+set(checker ${sdk}/public.sdk/samples/vst/hostchecker/source)
+set(checker_copy ${CMAKE_CURRENT_BINARY_DIR}/HostCheckerSource)
+file(READ ${checker}/hostcheckercontroller.h checker_controller)
+string(FIND "${checker_controller}" "namespace HostChecker" checker_from)
+string(FIND "${checker_controller}" "class EditorSizeController;" checker_to)
+math(EXPR checker_length "${checker_to} - ${checker_from}")
+string(SUBSTRING "${checker_controller}" ${checker_from} ${checker_length} checker_ids)
+file(WRITE ${checker_copy}/hostcheckercontroller.h "#pragma once\n#include \"pluginterfaces/base/ftypes.h\"\nnamespace Steinberg {\n${checker_ids}\n}\n}\n")
+configure_file(${checker}/hostcheckerprocessor.cpp ${checker_copy}/hostcheckerprocessor.cpp COPYONLY)
+set(checker_sources
+    ${checker_copy}/hostcheckerprocessor.cpp
+    ${checker}/eventlistcheck.cpp
+    ${checker}/eventlogger.cpp
+    ${checker}/hostcheck.cpp
+    ${checker}/parameterchangescheck.cpp
+    ${checker}/processcontextcheck.cpp
+    ${checker}/processsetupcheck.cpp
+    ${sdk}/public.sdk/source/vst/utility/dataexchange.cpp)
+if(APPLE)
+    list(APPEND checker_sources ${sdk}/public.sdk/source/common/threadchecker_mac.mm)
+elseif(WIN32)
+    list(APPEND checker_sources ${sdk}/public.sdk/source/common/threadchecker_win32.cpp)
+else()
+    list(APPEND checker_sources ${sdk}/public.sdk/source/common/threadchecker_linux.cpp)
+endif()
+set_source_files_properties(${checker_sources} PROPERTIES COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/W0,-w>")
+add_library(symbolengine_host_checker MODULE HostChecker.cpp ${checker_sources}
+            $<TARGET_OBJECTS:symbolengine_test_vst3_sdk>)
+target_include_directories(symbolengine_host_checker SYSTEM PRIVATE ${checker_copy} ${checker} ${sdk})
+target_compile_definitions(symbolengine_host_checker PRIVATE $<IF:$<CONFIG:Debug>,DEVELOPMENT=1,RELEASE=1>
+    PROJECT_INCLUDES_VSTEDITCONTROLLER=1 $<$<CXX_COMPILER_ID:MSVC>:_CRT_SECURE_NO_WARNINGS>)
+set_source_files_properties(HostChecker.cpp PROPERTIES COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/W0,-w>")
+target_link_libraries(symbolengine_host_checker PRIVATE Threads::Threads)
+set(checker_name "SymbolEngine Host Checker")
+if(APPLE)
+    target_link_libraries(symbolengine_host_checker PRIVATE "-framework CoreFoundation" "-framework Foundation")
+    set_target_properties(symbolengine_host_checker PROPERTIES
+        BUNDLE TRUE
+        BUNDLE_EXTENSION vst3
+        OUTPUT_NAME "${checker_name}"
+        MACOSX_BUNDLE_GUI_IDENTIFIER dev.symbolengine.test.hostchecker
+        MACOSX_BUNDLE_BUNDLE_NAME "${checker_name}"
+        SYMBOLENGINE_BUNDLE "$<TARGET_BUNDLE_DIR:symbolengine_host_checker>")
+else()
+    set(checker_bundle "${CMAKE_CURRENT_BINARY_DIR}/${checker_name}.vst3")
+    set_target_properties(symbolengine_host_checker PROPERTIES
+        PREFIX ""
+        SUFFIX ${suffix}
+        OUTPUT_NAME "${checker_name}"
+        LIBRARY_OUTPUT_DIRECTORY "$<1:${checker_bundle}/Contents/${architecture}>"
+        SYMBOLENGINE_BUNDLE "${checker_bundle}")
+endif()
+
 # A program that loads the module and ends, for the test of the module's entry and exit.
 add_executable(symbolengine_host_module_life ModuleLife.cpp)
 target_link_libraries(symbolengine_host_module_life PRIVATE SymbolEngine::host)

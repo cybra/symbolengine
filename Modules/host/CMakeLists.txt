@@ -88,7 +88,7 @@ if(SYMBOLENGINE_TESTS)
     symbolengine_set_warnings(symbolengine_host_scan_worker)
 
     set(test_sources Tests/Allocations.cpp Tests/CrashNoteTests.cpp Tests/EditorTests.cpp Tests/FreePluginTests.cpp
-                     Tests/LateBlockTests.cpp
+                     Tests/HostCheckerTests.cpp Tests/LateBlockTests.cpp
                      Tests/ParameterTests.cpp Tests/PluginLifeTests.cpp Tests/PluginListTests.cpp
                      Tests/PluginTimingTests.cpp Tests/ScanTests.cpp Tests/ScanWorkerTests.cpp Tests/TimeTests.cpp
                      Tests/Vst3Tests.cpp Tests/WalkTests.cpp)
@@ -134,9 +134,11 @@ if(SYMBOLENGINE_TESTS)
         "SYMBOLENGINE_MISBEHAVING=\"$<TARGET_PROPERTY:symbolengine_misbehaving_vst3,SYMBOLENGINE_FOLDER>\""
         "SYMBOLENGINE_TEST_VST3=\"$<TARGET_GENEX_EVAL:symbolengine_test_vst3,$<TARGET_PROPERTY:symbolengine_test_vst3,SYMBOLENGINE_BUNDLE>>\""
         "SYMBOLENGINE_TEST_VST3_LOG=\"${CMAKE_CURRENT_BINARY_DIR}/test-vst3-log.txt\""
+        "SYMBOLENGINE_HOST_CHECKER=\"$<TARGET_GENEX_EVAL:symbolengine_host_checker,$<TARGET_PROPERTY:symbolengine_host_checker,SYMBOLENGINE_BUNDLE>>\""
         "SYMBOLENGINE_MODULE_LIFE=\"$<TARGET_FILE:symbolengine_host_module_life>\""
         "SYMBOLENGINE_CRASH_NOTE=\"$<TARGET_FILE:symbolengine_host_crash_note>\"")
-    add_dependencies(symbolengine_host_tests symbolengine_test_vst3 symbolengine_host_module_life
+    add_dependencies(symbolengine_host_tests symbolengine_test_vst3 symbolengine_host_checker
+                     symbolengine_host_module_life
                      symbolengine_host_crash_note
                      symbolengine_host_scan_worker symbolengine_misbehaving_vst3)
 endif()
