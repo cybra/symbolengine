@@ -88,8 +88,9 @@ struct PluginLate
 {
     PluginDescription plugin;
 
-    /** Whether it alone took longer than its block lasts; otherwise it took the most of the time, which a moment the
-        system held the audio up can wrongly blame. */
+    /** Whether it alone took longer than its block lasts; otherwise it took the most of the time. Both are timed by the
+        clock, so a moment the system held the audio thread up during its call counts against it, which blames one that
+        only took the most far more easily. */
     bool alone = false;
 
     /** How long it took over its block, how long the block lasts, and when it began in nanoseconds on the steady
