@@ -33,6 +33,10 @@ struct PluginFailure
         /** A step failed and the plugin, its code or the system said why, as when its code won't load or it can't be
             made or set up. */
         refused,
+
+        /** The system stopped its worker because code it ran no longer matches its signature, as the system's crash
+            report says, with the signal's number; which comes though the file on disk may show nothing wrong. */
+        codeSignature,
     };
 
     Kind kind = Kind::crashed;

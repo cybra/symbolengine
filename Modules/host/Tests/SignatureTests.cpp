@@ -5,6 +5,7 @@
 #include <symbolengine/core/Paths.h>
 #include <symbolengine/core/System.h>
 #include <symbolengine/host/AudioUnitFormat.h>
+#include <symbolengine/host/PluginScanWorker.h>
 #include <symbolengine/host/PluginScanner.h>
 #include <symbolengine/host/Vst3Format.h>
 
@@ -16,6 +17,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <map>
+#include <memory>
 #include <optional>
 #include <random>
 #include <string>
@@ -493,4 +495,318 @@ TEST_CASE("Damaged binaries end the check without harm, whatever their headers s
     CHECK(rig.vst3.changedAfterSigning(bundle) == real(changed));
     files::writeSafely(file, machO({{loadDylib, name}}));
     CHECK(rig.vst3.changedAfterSigning(bundle) == real(changed));
+}
+
+namespace
+{
+
+// A report as the system writes one: a line of its header, then the report, with the first image's address where the
+// system stopped it, in the second image's range.
+std::string reportOf(std::int64_t process, const std::string& space)
+{
+    return R"({"bug_type":"309","name":"worker"})"
+           "\n"
+           R"({"pid":)" +
+           std::to_string(process) + R"(,"termination":{"flags":0,"code":2,"namespace":")" + space +
+           R"(","indicator":"Invalid Page"},"exception":{"type":"EXC_BAD_ACCESS",)"
+           R"("subtype":"UNKNOWN_0x32 at 0x0000000000002000"},"usedImages":[{"base":4096,"size":4096,)"
+           R"("path":"/Other.dylib"},{"base":8192,"size":4096,"path":"/At fault.dylib"}]})";
+}
+
+// A worker scanning a test plugin that ends the way its name says, with crash reports in a folder of the test's own.
+struct Stopping : Rig
+{
+    std::filesystem::path reports = scratch.path / "Reports";
+    std::filesystem::path bundle;
+    std::unique_ptr<PluginScanWorker> worker;
+    std::vector<PluginFailure> failed;
+    std::vector<std::optional<PluginDescription>> inHand;
+
+    Stopping(const std::string& name, std::chrono::milliseconds wait)
+    {
+        std::filesystem::create_directories(reports);
+        bundle = plugins / (name + ".vst3");
+        std::filesystem::copy(bundles / "Good A.vst3", bundle, std::filesystem::copy_options::recursive);
+        std::error_code error;
+        worker = PluginScanWorker::start(
+            {SYMBOLENGINE_SCAN_WORKER, {}, scratch.path / "worker.txt", 20s, main.post(), reports, wait}, error);
+        REQUIRE(worker);
+        worker->onFailed = [this](const PluginFailure& failure, const std::optional<PluginDescription>& plugin) {
+            failed.push_back(failure);
+            inHand.push_back(plugin);
+        };
+    }
+
+    void report(const std::string& text, const std::string& name = "worker.ips")
+    {
+        files::writeSafely(reports / name, text);
+    }
+
+    void scan() { REQUIRE(worker->scan({"VST3", bundle, PluginSetup{48000.0, 256, false}, {}})); }
+
+    // Scans and waits to be told how it failed, giving how long that took.
+    std::chrono::steady_clock::duration fail()
+    {
+        const auto began = std::chrono::steady_clock::now();
+        scan();
+        REQUIRE(main.turnUntil([&] { return !failed.empty(); }, 30s));
+        return std::chrono::steady_clock::now() - began;
+    }
+};
+
+}
+
+TEST_CASE("A worker the system kills for its code says so, from the system's crash report")
+{
+    SECTION("With its report there already")
+    {
+        Stopping rig("Killed when made", 5s);
+        rig.report(reportOf(rig.worker->processId(), "CODESIGNING"));
+        CHECK(rig.fail() < 4s);
+        CHECK(rig.failed[0].kind == PluginFailure::Kind::codeSignature);
+        CHECK(rig.failed[0].code == 9);
+        CHECK(rig.failed[0].detail.find("/At fault.dylib") != std::string::npos);
+        CHECK(rig.failed[0].detail.find("/Other.dylib") == std::string::npos);
+        CHECK(rig.failed[0].step.find("making plugin") == 0);
+        CHECK(rig.inHand[0].has_value());
+    }
+    SECTION("With its report coming a moment later")
+    {
+        Stopping rig("Killed when made", 10s);
+        rig.scan();
+        REQUIRE(rig.main.turnUntil([&] { return rig.worker->hasEnded(); }, 20s));
+        CHECK(rig.failed.empty());
+        rig.report(reportOf(rig.worker->processId(), "CODESIGNING"));
+        REQUIRE(rig.main.turnUntil([&] { return !rig.failed.empty(); }, 8s));
+        CHECK(rig.failed[0].kind == PluginFailure::Kind::codeSignature);
+    }
+    SECTION("With its report written in two goes, read once it is whole")
+    {
+        Stopping rig("Killed when made", 10s);
+        const auto whole = reportOf(rig.worker->processId(), "CODESIGNING");
+        rig.report(whole.substr(0, whole.size() / 2));
+        rig.scan();
+        REQUIRE(rig.main.turnUntil([&] { return rig.worker->hasEnded(); }, 20s));
+        rig.main.turnUntil([] { return false; }, 300ms);
+        CHECK(rig.failed.empty());
+        rig.report(whole);
+        REQUIRE(rig.main.turnUntil([&] { return !rig.failed.empty(); }, 8s));
+        CHECK(rig.failed[0].kind == PluginFailure::Kind::codeSignature);
+    }
+    SECTION("A report that names no file of its code still says what stopped it")
+    {
+        Stopping rig("Killed when made", 5s);
+        rig.report(R"({"bug_type":"309"})"
+                   "\n"
+                   R"({"pid":)" +
+                   std::to_string(rig.worker->processId()) + R"(,"termination":{"namespace":"CODESIGNING"}})");
+        rig.fail();
+        CHECK(rig.failed[0].kind == PluginFailure::Kind::codeSignature);
+    }
+}
+
+TEST_CASE("A worker killed for anything else, or with no report of its own, is told as before")
+{
+    const auto crashed = [](Stopping& rig) {
+        CHECK(rig.failed[0].kind == PluginFailure::Kind::crashed);
+        CHECK(rig.failed[0].code == 9);
+    };
+    SECTION("No report at all, once the wait is over")
+    {
+        Stopping rig("Killed when made", 400ms);
+        CHECK(rig.fail() >= 400ms);
+        crashed(rig);
+    }
+    SECTION("Another process's report")
+    {
+        Stopping rig("Killed when made", 400ms);
+        rig.report(reportOf(rig.worker->processId() + 1, "CODESIGNING"));
+        rig.fail();
+        crashed(rig);
+    }
+    SECTION("Its report saying something else stopped it")
+    {
+        Stopping rig("Killed when made", 400ms);
+        rig.report(reportOf(rig.worker->processId(), "SIGNAL"));
+        rig.fail();
+        crashed(rig);
+    }
+    SECTION("A report written before it started, of another process with its number")
+    {
+        Stopping rig("Killed when made", 400ms);
+        rig.report(reportOf(rig.worker->processId(), "CODESIGNING"));
+        std::filesystem::last_write_time(rig.reports / "worker.ips",
+                                         std::filesystem::file_time_type::clock::now() - std::chrono::hours(1));
+        rig.fail();
+        crashed(rig);
+    }
+    SECTION("A file that isn't a report")
+    {
+        Stopping rig("Killed when made", 400ms);
+        rig.report(reportOf(rig.worker->processId(), "CODESIGNING"), "worker.txt");
+        rig.report("not a report at all", "other.ips");
+        rig.report("", "empty.ips");
+        rig.report("{}\n[1, 2]", "array.ips");
+        rig.fail();
+        crashed(rig);
+    }
+    SECTION("A worker that crashed isn't waited for, whatever is in the folder")
+    {
+        Stopping rig("Crash when made", 20s);
+        rig.report(reportOf(rig.worker->processId(), "CODESIGNING"));
+        CHECK(rig.fail() < 10s);
+        CHECK(rig.failed[0].kind == PluginFailure::Kind::crashed);
+        CHECK(rig.failed[0].code != 9);
+    }
+    SECTION("Closing the worker ends the wait, and tells nothing")
+    {
+        Stopping rig("Killed when made", 60s);
+        rig.scan();
+        REQUIRE(rig.main.turnUntil([&] { return rig.worker->hasEnded(); }, 20s));
+        const auto began = std::chrono::steady_clock::now();
+        rig.worker->close();
+        CHECK(std::chrono::steady_clock::now() - began < 5s);
+        rig.main.turnUntil([] { return false; }, 100ms);
+        CHECK(rig.failed.empty());
+    }
+}
+
+TEST_CASE("A file whose worker the system kills for its code is listed as changed after signing")
+{
+    Rig rig;
+    const auto reports = rig.scratch.path / "Reports";
+    std::filesystem::create_directories(reports);
+    for (const auto& name : {"A good one", "B killed for its code when made", "C killed when made", "D good one",
+                             "E many 3 with 2 killed for its code when made"})
+        std::filesystem::copy(bundles / "Good A.vst3", rig.plugins / (std::string(name) + ".vst3"),
+                              std::filesystem::copy_options::recursive);
+
+    const auto settings = rig.scratch.path / "Settings" / "Plugins.json";
+    PluginList list{{settings, "1.0", nullptr, nullptr, nullptr}};
+    PluginScanner scanner(list, PluginScanner::Options{{SYMBOLENGINE_SCAN_WORKER,
+                                                        {{"SYMBOLENGINE_TEST_REPORTS", paths::toUtf8(reports)}},
+                                                        rig.scratch.path / "workers.txt",
+                                                        20s,
+                                                        rig.main.post(),
+                                                        reports,
+                                                        1s},
+                                                       PluginSetup{48000.0, 256, false},
+                                                       50,
+                                                       std::int64_t(2) * 1024 * 1024 * 1024,
+                                                       10s});
+    std::optional<PluginScanEnd> end;
+    scanner.onFinished = [&](const PluginScanEnd& how) { end = how; };
+    const auto walked = PluginScanner::walk({{&rig.vst3, {rig.plugins, false}}}, list);
+    REQUIRE(walked.files.size() == 5);
+    REQUIRE(scanner.scan(walked.files));
+    REQUIRE(rig.main.turnUntil([&] { return end.has_value(); }, 60s));
+
+    const auto recorded = [&](const std::string& name) { return list.file(real(rig.plugins / (name + ".vst3"))); };
+    CHECK(recorded("A good one")->outcome == PluginFile::Outcome::found);
+    CHECK(recorded("D good one")->outcome == PluginFile::Outcome::found);
+
+    const auto stopped = recorded("B killed for its code when made");
+    REQUIRE(stopped);
+    CHECK(stopped->outcome == PluginFile::Outcome::changedAfterSigning);
+    CHECK(stopped->complete);
+    CHECK(stopped->plugins.empty());
+    CHECK(stopped->setAside.empty());
+    REQUIRE(stopped->failure);
+    CHECK(stopped->failure->kind == PluginFailure::Kind::codeSignature);
+    CHECK(stopped->failure->detail.find("/At fault.dylib") != std::string::npos);
+    CHECK_FALSE(list.needsScan(stopped->path, stopped->stamp));
+
+    // What was found of a file before its code was stopped goes with it, as all of it is that code.
+    const auto many = recorded("E many 3 with 2 killed for its code when made");
+    REQUIRE(many);
+    CHECK(many->outcome == PluginFile::Outcome::changedAfterSigning);
+    CHECK(many->plugins.empty());
+    CHECK(many->setAside.empty());
+
+    // Each was in a worker that scanned a file before, so a fresh one was asked first: two reports each.
+    int written = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(reports))
+        written += entry.path().extension() == ".ips" ? 1 : 0;
+    CHECK(written == 4);
+
+    // One with no report is a crash of its plugin, as before.
+    const auto crashed = recorded("C killed when made");
+    REQUIRE(crashed);
+    CHECK(crashed->outcome == PluginFile::Outcome::found);
+    REQUIRE(crashed->setAside.size() == 1);
+    CHECK(crashed->setAside[0].failure.kind == PluginFailure::Kind::crashed);
+
+    // The list keeps it.
+    std::error_code error;
+    list.save(error);
+    REQUIRE_FALSE(error);
+    PluginList again{{settings, "1.0", nullptr, nullptr, nullptr}};
+    const auto kept = again.file(stopped->path);
+    REQUIRE(kept);
+    CHECK(kept->outcome == PluginFile::Outcome::changedAfterSigning);
+    REQUIRE(kept->failure);
+    CHECK(kept->failure->kind == PluginFailure::Kind::codeSignature);
+}
+
+TEST_CASE("A fault the check can't see is stopped by the system, and its crash report says so")
+{
+    if (system::architecture() != "arm64")
+        SKIP("Only Apple Silicon stops every process for this.");
+
+    Rig rig;
+    const auto bundle = rig.plugins / "Unseen.vst3";
+    std::filesystem::copy(bundles / "Good A.vst3", bundle, std::filesystem::copy_options::recursive);
+    sign(bundle);
+
+    // Code changed after signing, in a bundle whose Info.plist changed too, which Apple's check stops at.
+    const auto binary = bundle / "Contents" / "MacOS" / "SymbolEngine Misbehaving";
+    damage(binary);
+    std::error_code error;
+    auto info = files::read(bundle / "Contents" / "Info.plist", error);
+    REQUIRE_FALSE(error);
+    files::writeSafely(bundle / "Contents" / "Info.plist", info + "\n");
+    REQUIRE(rig.vst3.changedAfterSigning(bundle) == std::nullopt);
+
+    // The worker under a name of its own, as the system stops writing reports of a name it has written many of, which
+    // the other tests' crashes soon are.
+    std::random_device random;
+    const auto name = "symbolengine_unseen_" + std::to_string(random());
+    const auto program = rig.scratch.path / name;
+    std::filesystem::copy_file(SYMBOLENGINE_SCAN_WORKER, program);
+
+    PluginList list{{rig.scratch.path / "Settings" / "Plugins.json", "1.0", nullptr, nullptr, nullptr}};
+    PluginScanner scanner(list,
+                          PluginScanner::Options{{program, {}, rig.scratch.path / "workers.txt", 20s, rig.main.post()},
+                                                 PluginSetup{48000.0, 256, false},
+                                                 50,
+                                                 std::int64_t(2) * 1024 * 1024 * 1024,
+                                                 10s});
+    std::optional<PluginScanEnd> end;
+    scanner.onFinished = [&](const PluginScanEnd& how) { end = how; };
+    REQUIRE(scanner.scan(PluginScanner::walk({{&rig.vst3, {rig.plugins, false}}}, list).files));
+    REQUIRE(rig.main.turnUntil([&] { return end.has_value(); }, 60s));
+
+    // What the system wrote of this test's worker is the test's to take away.
+    const auto folder = paths::systemFolder(paths::Folder::home) / "Library" / "Logs" / "DiagnosticReports";
+    int removed = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(folder, error))
+        if (paths::toUtf8(entry.path().filename()).starts_with(name))
+        {
+            std::filesystem::remove(entry.path(), error);
+            ++removed;
+        }
+
+    const auto listed = list.file(real(bundle));
+    REQUIRE(listed);
+    INFO("reports of this test's workers: " << removed);
+    INFO("outcome " << static_cast<int>(listed->outcome) << " plugins " << listed->plugins.size() << " aside "
+                    << listed->setAside.size() << " detail "
+                    << (listed->failure ? listed->failure->step + ": " + listed->failure->detail : std::string("none"))
+                    << (listed->setAside.empty() ? std::string() : listed->setAside[0].failure.detail));
+    CHECK(removed > 0);
+    CHECK(listed->outcome == PluginFile::Outcome::changedAfterSigning);
+    REQUIRE(listed->failure);
+    CHECK(listed->failure->kind == PluginFailure::Kind::codeSignature);
+    CHECK(listed->failure->detail.find("Unseen.vst3") != std::string::npos);
+    CHECK(listed->plugins.empty());
 }

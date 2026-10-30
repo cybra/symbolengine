@@ -53,6 +53,7 @@ inline constexpr Named<PluginFailure::Kind> failureKinds[] = {
     {PluginFailure::Kind::timedOut, "timedOut"},
     {PluginFailure::Kind::noAnswer, "noAnswer"},
     {PluginFailure::Kind::refused, "refused"},
+    {PluginFailure::Kind::codeSignature, "codeSignature"},
 };
 
 inline constexpr Named<PluginKind> pluginKinds[] = {

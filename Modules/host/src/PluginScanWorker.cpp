@@ -5,6 +5,10 @@
 #include "ScanWorkerLoop.h"
 #include "symbolengine/host/Plugin.h"
 
+#if defined(__APPLE__)
+    #include "SystemCrashReports.h"
+#endif
+
 #include <symbolengine/core/Files.h>
 #include <symbolengine/core/Json.h>
 #include <symbolengine/core/Paths.h>
@@ -29,6 +33,7 @@
     #include <windows.h>
 #else
     #include <pthread.h>
+    #include <signal.h>
     #include <unistd.h>
 #endif
 
@@ -448,6 +453,9 @@ struct PluginScanWorker::Shared : std::enable_shared_from_this<PluginScanWorker:
     std::int64_t id = 0;
     std::filesystem::path note;
 
+    // When it started, a little early, which a crash report of it can't be older than.
+    std::filesystem::file_time_type began = std::filesystem::file_time_type::clock::now() - std::chrono::seconds(2);
+
     // The program's object, while it wants to be told anything: the main thread's alone.
     PluginScanWorker* owner = nullptr;
 
@@ -572,6 +580,38 @@ struct PluginScanWorker::Shared : std::enable_shared_from_this<PluginScanWorker:
         }
     }
 
+#if defined(__APPLE__)
+    // Looks for the worker's crash report for as long as the options say or until it is closed, and if it says the
+    // system stopped code that no longer matches its signature, makes that the failure.
+    void fromReport(PluginFailure& failure, std::unique_lock<std::mutex>& held)
+    {
+        systemCrashReports::Reader reports(
+            options.crashReports.empty() ? systemCrashReports::systemFolder() : options.crashReports, began);
+        const auto until = Steady::now() + options.crashReportWait;
+        while (!stopping)
+        {
+            held.unlock();
+            const auto report = reports.find(child->id());
+            held.lock();
+            if (report)
+            {
+                if (report->codeSignature)
+                {
+                    failure.kind = PluginFailure::Kind::codeSignature;
+                    failure.detail = "The system stopped it because " +
+                                     (report->file.empty() ? "its code" : "the code of " + report->file) +
+                                     " no longer matches its signature. Restarting the computer or reinstalling the "
+                                     "plugin usually mends it.";
+                }
+                return;
+            }
+            if (Steady::now() >= until)
+                return;
+            wake.wait_for(held, std::chrono::milliseconds(50));
+        }
+    }
+#endif
+
     // Follows the worker from a thread of its own: kills it once it has gone too long without progress, and says it
     // failed once it has ended before answering, after what it sent before it ended has all arrived.
     void watch()
@@ -615,6 +655,11 @@ struct PluginScanWorker::Shared : std::enable_shared_from_this<PluginScanWorker:
                 if (underway)
                 {
                     auto failure = failureFrom(*ending, underway->step);
+#if defined(__APPLE__)
+                    // Nothing here killed it, so the system did, and its crash report, written a moment on, says why.
+                    if (ending->kind == ProcessEnding::Kind::signal && ending->code == SIGKILL && !ending->killed)
+                        fromReport(failure, held);
+#endif
                     std::error_code missing;
                     if (const auto noted = files::read(note, missing); !missing && !noted.empty())
                         failure.detail += "\n" + noted;

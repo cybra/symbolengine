@@ -91,6 +91,13 @@ public:
         /** Runs a function on the program's main thread, where the callbacks are told: ui::messageLoop::callAsync in
             a program with one. */
         std::function<void(std::function<void()>)> post;
+
+        /** The folder the system writes its crash reports to, which says why a worker nothing here killed was killed;
+            empty for the system's own, on a Mac the user's DiagnosticReports. */
+        std::filesystem::path crashReports{};
+
+        /** How long to look there for a worker's report, which the system writes a moment after the worker has gone. */
+        std::chrono::milliseconds crashReportWait{10'000};
     };
 
     /** Starts a worker, or gives nothing with the error set, which blames no plugin. */

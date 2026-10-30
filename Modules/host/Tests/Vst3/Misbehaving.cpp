@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -34,6 +35,8 @@
     #include <windows.h>
 #else
     #include <dlfcn.h>
+    #include <signal.h>
+    #include <unistd.h>
 #endif
 
 using namespace Steinberg;
@@ -227,6 +230,25 @@ void onMake(int number)
         std::exit(0);
     if (says("hang when made"))
         hang();
+
+    // Killed as the system kills what runs code that no longer matches its signature, for which it writes a report.
+    if (says("killed") && (numberBefore(" killed") == 0 || numberBefore(" killed") == number))
+    {
+#if !defined(_WIN32)
+        const auto* reports = std::getenv("SYMBOLENGINE_TEST_REPORTS");
+        if (reports != nullptr && says("for its code"))
+        {
+            const auto id = std::to_string(getpid());
+            std::ofstream((std::filesystem::path(reports) / ("worker-" + id + ".ips")).string())
+                << R"({"bug_type":"309","name":"worker"})" << '\n'
+                << R"({"pid":)" << id << R"(,"termination":{"flags":0,"code":2,"namespace":"CODESIGNING",)"
+                << R"("indicator":"Invalid Page"},"exception":{"type":"EXC_BAD_ACCESS",)"
+                << R"("subtype":"UNKNOWN_0x32 at 0x0000000000002000"},"usedImages":[{"base":4096,"size":4096,)"
+                << R"("path":"/Other.dylib"},{"base":8192,"size":4096,"path":"/At fault.dylib"}]})";
+        }
+        kill(getpid(), SIGKILL);
+#endif
+    }
 
     // A crash on a thread of its own, where no call the host made is under way to catch it.
     if (says("crash on a thread when made"))

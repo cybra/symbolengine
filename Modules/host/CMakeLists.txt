@@ -40,7 +40,7 @@ set(libraries Threads::Threads)
 if(APPLE)
     list(APPEND sources src/AudioUnitFormat.mm src/MainThread_other.cpp src/PluginCrashNote_posix.cpp
                         src/ProcessState_mac.mm src/ScanWorkerCrash_posix.cpp src/ScanWorkerLoop_mac.mm
-                        src/Vst3Module_mac.cpp src/Vst3View_mac.mm)
+                        src/SystemCrashReports.cpp src/Vst3Module_mac.cpp src/Vst3View_mac.mm)
     list(APPEND libraries "-framework AppKit" "-framework AudioToolbox" "-framework CoreAudio" "-framework CoreFoundation"
                           "-framework CoreGraphics" "-framework Security")
 elseif(WIN32)

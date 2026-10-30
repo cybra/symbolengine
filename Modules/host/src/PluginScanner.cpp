@@ -311,13 +311,21 @@ struct PluginScanner::Inner : std::enable_shared_from_this<PluginScanner::Inner>
             return post([](Inner& self) { self.request(); });
         }
 
-        if (plugin)
+        if (plugin && failure.kind != PluginFailure::Kind::codeSignature)
         {
             record.setAside.push_back({*plugin, failure});
             return post([](Inner& self) { self.request(); });
         }
 
-        record.outcome = PluginFile::Outcome::setAside;
+        // The file's code at fault, whichever of its plugins the system stopped it in, or the file itself.
+        if (failure.kind == PluginFailure::Kind::codeSignature)
+        {
+            record.plugins.clear();
+            record.setAside.clear();
+            record.outcome = PluginFile::Outcome::changedAfterSigning;
+        }
+        else
+            record.outcome = PluginFile::Outcome::setAside;
         record.failure = failure;
         record.complete = true;
         recordFile(record);
