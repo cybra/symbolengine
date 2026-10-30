@@ -15,6 +15,7 @@ namespace symbolengine
 {
 
 class Plugin;
+class PluginCrashNote;
 
 /** What happened to a hosted plugin, told on the main thread. */
 enum class PluginChange
@@ -92,6 +93,10 @@ public:
         PluginChange::made once it is made or has failed. The last hold on it can be let go of on any thread, and it
         is taken down on the main thread. */
     std::shared_ptr<Plugin> make(PluginFormat& format, const PluginDescription& plugin);
+
+    /** The program's crash note, which the host records each plugin it makes and each call into one in from then on,
+        before any plugin is made; it outlives the host. */
+    void setCrashNote(PluginCrashNote* note);
 
     struct Shared;
 

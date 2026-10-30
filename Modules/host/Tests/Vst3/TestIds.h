@@ -38,8 +38,9 @@ constexpr unsigned editParameter = 200, dirtyParameter = 201, echoParameter = 30
 constexpr unsigned queryParameter = 4000;
 
 // The faulting plugin's parameters, set to 1 to make it write through a null pointer in its next process call or as it
-// is shown the value, or throw from its next process call.
-constexpr unsigned faultInProcess = 500, faultOnMain = 501, throwInProcess = 502;
+// is shown the value, or throw from its next process call; or hang for a minute as it is shown the value or in its
+// next process call.
+constexpr unsigned faultInProcess = 500, faultOnMain = 501, throwInProcess = 502, hangOnMain = 503, hangInProcess = 504;
 
 // The many plugin's parameters, 1 to this.
 constexpr unsigned manyParameters = 1000;

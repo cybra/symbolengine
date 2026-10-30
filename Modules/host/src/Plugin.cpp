@@ -1,5 +1,6 @@
 #include "symbolengine/host/Plugin.h"
 
+#include "CrashNoteRecords.h"
 #include "Guard.h"
 #include "MainThread.h"
 #include "ProcessState.h"
@@ -57,6 +58,7 @@ std::int64_t ticksIn(std::chrono::milliseconds wait)
 struct PluginHost::Shared : std::enable_shared_from_this<PluginHost::Shared>
 {
     Options options;
+    PluginCrashNote* note = nullptr;
 
     std::mutex lock;
     std::deque<std::pair<std::weak_ptr<Plugin::Inner>, PluginFormat*>> queue;
@@ -105,6 +107,11 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     std::shared_ptr<PluginHost::Shared> host;
     PluginDescription description;
     Plugin* owner = nullptr;
+
+    // Its place in the program's crash note, which every call into it is recorded against.
+    int noteSlot = -1;
+
+    ~Inner() override { crashNote::release(host->note, noteSlot); }
 
     // The main thread's.
     std::unique_ptr<PluginFormatInstance> instance;
@@ -273,6 +280,7 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     template <typename Call>
     bool call(const char* step, Call&& body)
     {
+        const crashNote::InCall noted(host->note, noteSlot, step, false);
         const bool outermost = busy++ == 0;
         const auto before = outermost ? ProcessState::now() : ProcessState{};
         bool fine = true;
@@ -329,6 +337,7 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     template <typename Call>
     bool audioCall(const char* step, Call&& body) noexcept
     {
+        const crashNote::InCall noted(host->note, noteSlot, step, true);
         std::uint32_t fault = 0;
 
         try
@@ -950,11 +959,17 @@ PluginHost::~PluginHost()
         shared->watcher.join();
 }
 
+void PluginHost::setCrashNote(PluginCrashNote* note)
+{
+    shared->note = note;
+}
+
 std::shared_ptr<Plugin> PluginHost::make(PluginFormat& format, const PluginDescription& description)
 {
     auto inner = std::make_shared<Plugin::Inner>();
     inner->host = shared;
     inner->description = description;
+    inner->noteSlot = crashNote::claim(shared->note, description);
 
     // The last hold, let go of on any thread, hands its taking down to the main thread, which waits until no call into
     // the plugin is under way.

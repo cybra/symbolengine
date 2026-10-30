@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -584,6 +585,8 @@ public:
         parameters.addParameter(STR16("Fault in process"), nullptr, 1, 0.0, 0, testIds::faultInProcess);
         parameters.addParameter(STR16("Fault on main"), nullptr, 1, 0.0, 0, testIds::faultOnMain);
         parameters.addParameter(STR16("Throw in process"), nullptr, 1, 0.0, 0, testIds::throwInProcess);
+        parameters.addParameter(STR16("Hang on main"), nullptr, 1, 0.0, 0, testIds::hangOnMain);
+        parameters.addParameter(STR16("Hang in process"), nullptr, 1, 0.0, 0, testIds::hangInProcess);
         return result;
     }
 
@@ -591,6 +594,9 @@ public:
     {
         if (id == testIds::faultOnMain && value > 0.5)
             crash();
+
+        if (id == testIds::hangOnMain && value > 0.5)
+            std::this_thread::sleep_for(std::chrono::minutes(1));
 
         return SingleComponentEffect::setParamNormalized(id, value);
     }
@@ -611,6 +617,9 @@ public:
 
                     if (value > 0.5 && changes->getParameterId() == testIds::throwInProcess)
                         throw std::runtime_error("told to throw while processing");
+
+                    if (value > 0.5 && changes->getParameterId() == testIds::hangInProcess)
+                        std::this_thread::sleep_for(std::chrono::minutes(1));
                 }
 
         const int32 channels = data.numOutputs > 0 && data.numInputs > 0 ? data.outputs[0].numChannels : 0;

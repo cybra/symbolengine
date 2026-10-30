@@ -23,6 +23,7 @@ set_source_files_properties(${sdk_sources} PROPERTIES COMPILE_OPTIONS "$<IF:$<CX
 
 set(sources
     src/FakePluginFormat.cpp
+    src/PluginCrashNote.cpp
     src/Guard.cpp
     src/Plugin.cpp
     src/PluginFiles.cpp
@@ -37,18 +38,18 @@ set(sources
 set(libraries Threads::Threads)
 
 if(APPLE)
-    list(APPEND sources src/AudioUnitFormat.mm src/MainThread_other.cpp src/ProcessState_mac.mm
-                        src/ScanWorkerCrash_posix.cpp src/ScanWorkerLoop_mac.mm src/Vst3Module_mac.cpp
-                        src/Vst3View_mac.mm)
+    list(APPEND sources src/AudioUnitFormat.mm src/MainThread_other.cpp src/PluginCrashNote_posix.cpp
+                        src/ProcessState_mac.mm src/ScanWorkerCrash_posix.cpp src/ScanWorkerLoop_mac.mm
+                        src/Vst3Module_mac.cpp src/Vst3View_mac.mm)
     list(APPEND libraries "-framework AppKit" "-framework AudioToolbox" "-framework CoreAudio" "-framework CoreFoundation"
                           "-framework CoreGraphics")
 elseif(WIN32)
-    list(APPEND sources src/MainThread_windows.cpp src/ScanWorkerCrash_windows.cpp src/ScanWorkerLoop_windows.cpp
-                        src/Vst3Module_windows.cpp src/Vst3View_windows.cpp)
+    list(APPEND sources src/MainThread_windows.cpp src/PluginCrashNote_windows.cpp src/ScanWorkerCrash_windows.cpp
+                        src/ScanWorkerLoop_windows.cpp src/Vst3Module_windows.cpp src/Vst3View_windows.cpp)
     list(APPEND libraries ole32 user32 version)
 else()
-    list(APPEND sources src/MainThread_other.cpp src/ScanWorkerCrash_posix.cpp src/ScanWorkerLoop_other.cpp
-                        src/Vst3Module_linux.cpp src/Vst3View_other.cpp)
+    list(APPEND sources src/MainThread_other.cpp src/PluginCrashNote_posix.cpp src/ScanWorkerCrash_posix.cpp
+                        src/ScanWorkerLoop_other.cpp src/Vst3Module_linux.cpp src/Vst3View_other.cpp)
     list(APPEND libraries ${CMAKE_DL_LIBS})
 endif()
 
@@ -72,6 +73,11 @@ target_include_directories(symbolengine_host SYSTEM PRIVATE ${sdk})
 if(SYMBOLENGINE_TESTS)
     add_subdirectory(Tests/Vst3)
 
+    # The program the crash note tests start, which ends in the middle of a call into a test plugin, or cleanly.
+    add_executable(symbolengine_host_crash_note Tests/CrashNote.cpp)
+    target_link_libraries(symbolengine_host_crash_note PRIVATE SymbolEngine::host)
+    symbolengine_set_warnings(symbolengine_host_crash_note)
+
     # The program the scan worker tests start as a worker, and as a program with a worker of its own.
     add_executable(symbolengine_host_scan_worker Tests/ScanWorker.cpp)
     target_link_libraries(symbolengine_host_scan_worker PRIVATE SymbolEngine::host)
@@ -81,9 +87,9 @@ if(SYMBOLENGINE_TESTS)
     endif()
     symbolengine_set_warnings(symbolengine_host_scan_worker)
 
-    set(test_sources Tests/Allocations.cpp Tests/EditorTests.cpp Tests/ParameterTests.cpp Tests/PluginLifeTests.cpp
-                     Tests/PluginListTests.cpp Tests/ScanTests.cpp Tests/ScanWorkerTests.cpp Tests/TimeTests.cpp
-                     Tests/Vst3Tests.cpp Tests/WalkTests.cpp)
+    set(test_sources Tests/Allocations.cpp Tests/CrashNoteTests.cpp Tests/EditorTests.cpp Tests/ParameterTests.cpp
+                     Tests/PluginLifeTests.cpp Tests/PluginListTests.cpp Tests/ScanTests.cpp Tests/ScanWorkerTests.cpp
+                     Tests/TimeTests.cpp Tests/Vst3Tests.cpp Tests/WalkTests.cpp)
     if(APPLE)
         add_subdirectory(Tests/AudioUnits)
         list(APPEND test_sources Tests/AudioUnitTests.cpp Tests/ScanWorkerTests_mac.mm)
@@ -114,7 +120,9 @@ if(SYMBOLENGINE_TESTS)
         "SYMBOLENGINE_MISBEHAVING=\"$<TARGET_PROPERTY:symbolengine_misbehaving_vst3,SYMBOLENGINE_FOLDER>\""
         "SYMBOLENGINE_TEST_VST3=\"$<TARGET_GENEX_EVAL:symbolengine_test_vst3,$<TARGET_PROPERTY:symbolengine_test_vst3,SYMBOLENGINE_BUNDLE>>\""
         "SYMBOLENGINE_TEST_VST3_LOG=\"${CMAKE_CURRENT_BINARY_DIR}/test-vst3-log.txt\""
-        "SYMBOLENGINE_MODULE_LIFE=\"$<TARGET_FILE:symbolengine_host_module_life>\"")
+        "SYMBOLENGINE_MODULE_LIFE=\"$<TARGET_FILE:symbolengine_host_module_life>\""
+        "SYMBOLENGINE_CRASH_NOTE=\"$<TARGET_FILE:symbolengine_host_crash_note>\"")
     add_dependencies(symbolengine_host_tests symbolengine_test_vst3 symbolengine_host_module_life
+                     symbolengine_host_crash_note
                      symbolengine_host_scan_worker symbolengine_misbehaving_vst3)
 endif()
