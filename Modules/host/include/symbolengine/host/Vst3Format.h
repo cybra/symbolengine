@@ -40,6 +40,10 @@ public:
     static PluginDescription describe(const std::filesystem::path& module, const std::string& classId,
                                       std::string name = {});
 
+    /** The state of a plugin from its two parts' own states, as another program kept them, in the form a plugin of this
+        format is given and gives its state in; either part may be missing. */
+    static std::string packedState(const std::string* component, const std::string* controller);
+
     std::string name() const override;
 
     /** VST3's folders on this system, as Steinberg's documentation names them: on a Mac /Library/Audio/Plug-Ins/VST3

@@ -211,6 +211,28 @@ TEST_CASE("A VST3 plugin's parts are taken apart with nothing of the host's hold
     CHECK(misuses().empty());
 }
 
+TEST_CASE("A VST3 plugin takes a state put together from its two parts' own states, as another program kept them")
+{
+    Rig rig;
+    const std::int32_t value = 42;
+    const std::string component(reinterpret_cast<const char*>(&value), sizeof value), controller;
+
+    auto plugin = rig.made(testIds::gain);
+    REQUIRE(plugin->loadState(Vst3Format::packedState(&component, &controller), PluginStateUse::document));
+
+    // The form it gives its own state in, which holds what its component was given.
+    const auto saved = plugin->saveState(PluginStateUse::document);
+    REQUIRE(saved);
+    CHECK(saved->find(component) != std::string::npos);
+    CHECK(saved->starts_with(Vst3Format::packedState(nullptr, nullptr).substr(0, 4)));
+
+    // With only its component's, which is all a plugin of one object keeps.
+    auto other = rig.made(testIds::gain);
+    REQUIRE(other->loadState(Vst3Format::packedState(&component, nullptr), PluginStateUse::document));
+    CHECK(other->saveState(PluginStateUse::document) == saved);
+    CHECK(misuses().empty());
+}
+
 TEST_CASE("A VST3 plugin that throws from its state call fails, and nothing reaches the program")
 {
     Rig rig;
@@ -713,6 +735,7 @@ TEST_CASE("A VST3 module's plugins are listed as each declares itself, without m
     CHECK(plugins[0].location == module);
     CHECK(plugins[0].name == "Gain");
     CHECK(plugins[0].maker == "SymbolEngine");
+    CHECK(plugins[0].categories == "Fx");
     CHECK(plugins[0].version == "1.0.0");
     CHECK(plugins[0].kind == PluginKind::effect);
     CHECK(plugins[0].sdk.starts_with("VST 3."));

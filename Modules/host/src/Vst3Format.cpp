@@ -1840,9 +1840,14 @@ std::vector<PluginDescription> instrumentsDeclaredBy(const std::filesystem::path
             continue;
 
         bool instrument = false;
+        std::string categories;
         if (one["Sub Categories"].isArray())
             for (const auto& category : one["Sub Categories"].asArray())
-                instrument = instrument || category.stringOr("") == PlugType::kInstrument;
+            {
+                const auto word = category.stringOr("");
+                instrument = instrument || word == PlugType::kInstrument;
+                categories += (categories.empty() ? "" : "|") + word;
+            }
 
         auto id = one["CID"].stringOr("");
         const bool isId = id.size() == 32 && std::all_of(id.begin(), id.end(), [](char c) {
@@ -1863,6 +1868,7 @@ std::vector<PluginDescription> instrumentsDeclaredBy(const std::filesystem::path
             plugin.maker = (*manifest)["Factory Info"]["Vendor"].stringOr("");
         plugin.version = one["Version"].stringOr("");
         plugin.sdk = one["SDKVersion"].stringOr("");
+        plugin.categories = std::move(categories);
         plugin.kind = PluginKind::instrument;
         plugins.push_back(std::move(plugin));
     }
@@ -1993,6 +1999,11 @@ std::optional<PluginFileFacts> Vst3Format::examine(const std::filesystem::path& 
     return facts;
 }
 
+std::string Vst3Format::packedState(const std::string* component, const std::string* controller)
+{
+    return packState(component, controller);
+}
+
 std::string Vst3Format::name() const
 {
     return "VST3";
@@ -2051,6 +2062,7 @@ std::vector<PluginDescription> Vst3Format::pluginsIn(const std::filesystem::path
             plugin.version = fieldText(more.version);
             plugin.sdk = fieldText(more.sdkVersion);
             const auto categories = fieldText(more.subCategories);
+            plugin.categories = categories;
             for (const auto category : symbolengine::text::split(categories, "|"))
                 if (category == PlugType::kInstrument)
                     plugin.kind = PluginKind::instrument;

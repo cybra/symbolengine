@@ -596,6 +596,7 @@ TEST_CASE("A module whose manifest declares only instruments is listed from it, 
     CHECK(listed->plugins[0].version == "1.2.3");
     CHECK(listed->plugins[0].sdk == "VST 3.7.12");
     CHECK(listed->plugins[0].kind == PluginKind::instrument);
+    CHECK(listed->plugins[0].categories == "Instrument|Synth");
     CHECK(listed->plugins[1].identity.id == "0123456789ABCDEF0123456789ABCDEF");
     CHECK(listed->plugins[1].maker == "Class Maker");
     CHECK(listed->plugins[1].kind == PluginKind::instrument);
@@ -603,6 +604,12 @@ TEST_CASE("A module whose manifest declares only instruments is listed from it, 
     CHECK(rig.list.file(real(older))->plugins.size() == 1);
     CHECK(rig.list.file(real(both))->plugins.size() == 1);
     CHECK(rig.list.file(real(emptyFirst))->plugins.size() == 1);
+
+    // What it says it is stays with it in the list's file.
+    rig.list.save();
+    PluginList kept{{rig.settings / "Plugins.json", "1.0", nullptr, nullptr, nullptr}};
+    REQUIRE(kept.file(real(bundle)));
+    CHECK(kept.file(real(bundle))->plugins[0].categories == "Instrument|Synth");
 }
 
 TEST_CASE("A module's code is loaded as ever unless its manifest clearly declares only instruments")

@@ -69,6 +69,9 @@ struct PluginDescription
     /** The version of its format's SDK it says it was built with, where it says. */
     std::string sdk{};
 
+    /** What it says it is, in its format's own words, as a VST3's subcategories "Fx|Delay", where it says. */
+    std::string categories{};
+
     bool operator==(const PluginDescription&) const = default;
 };
 

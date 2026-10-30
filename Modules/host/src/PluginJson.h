@@ -147,7 +147,8 @@ inline Object writePlugin(const PluginDescription& plugin)
                   {"kind", nameOf(plugin.kind, pluginKinds)},
                   {"layouts", std::move(layouts)},
                   {"editor", plugin.editor},
-                  {"sdk", plugin.sdk}};
+                  {"sdk", plugin.sdk},
+                  {"categories", plugin.categories}};
 }
 
 inline PluginDescription readPlugin(const Value& value, const std::string& format,
@@ -178,6 +179,7 @@ inline PluginDescription readPlugin(const Value& value, const std::string& forma
         }
     plugin.editor = flagOr(object, "editor", false);
     plugin.sdk = textOr(object, "sdk");
+    plugin.categories = textOr(object, "categories");
     return plugin;
 }
 
