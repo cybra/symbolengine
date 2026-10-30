@@ -61,6 +61,23 @@ enum class PluginChange
     processState,
 };
 
+/** How long a plugin's processing takes, measured around each block it plays on the audio thread, against the time the
+    block lasts: its frames at the rate it was prepared for. */
+struct PluginTiming
+{
+    /** The blocks it has played since it was made, and those of them it alone took longer over than the block lasts. */
+    std::int64_t blocks = 0;
+    std::int64_t lateBlocks = 0;
+
+    /** Since its timing was last taken: the share of its blocks' time it took, 0.25 for a quarter; and its worst block,
+        the share of that block's time it took, over 1 for a late one, how long that was, and when it began in
+        nanoseconds on the steady clock; all 0 where it played none. */
+    double load = 0.0;
+    double worstShare = 0.0;
+    std::int64_t worstNanoseconds = 0;
+    std::int64_t worstAt = 0;
+};
+
 /** What every plugin a program hosts shares: the main thread they are made and called on, and the queue that makes
     them one per turn of its run loop, so a slow one never holds up the others or the program's windows. */
 class PluginHost
@@ -213,6 +230,11 @@ public:
         at a position that counts the frames it has played. */
     void process(float* const* channels, int channelCount, int frames, const PluginParameterChange* changes,
                  int changeCount, const PluginTime* time = nullptr) noexcept;
+
+    /** How long its processing takes, from any thread; taken, its load and worst block start again from then, as for a
+        meter showing the worst block since it last looked. */
+    PluginTiming timing() const;
+    PluginTiming takeTiming();
 
     struct Inner;
 

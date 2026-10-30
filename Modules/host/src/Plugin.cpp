@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -189,6 +190,59 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     std::vector<PluginParameterChange> reportedRoom = std::vector<PluginParameterChange>(256);
     std::atomic<std::uint64_t> blocksPlayed{0};
     std::int64_t framesPlayed = 0;
+
+    // How long its processing takes, kept by the audio thread: the blocks it played and those it was late in; since its
+    // timing was last taken, the nanoseconds it took and those its blocks lasted, and its worst block, its share as a
+    // float above its nanoseconds, so a larger share is a larger number, with when it began.
+    std::atomic<std::int64_t> blocksTimed{0}, lateBlocks{0}, took{0}, lasted{0}, worstAt{0};
+    std::atomic<std::uint64_t> worst{0};
+
+    void timed(std::chrono::steady_clock::time_point began, int frames) noexcept
+    {
+        const auto taken =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - began);
+        const auto lasts = std::llround(frames * 1e9 / setup.rate);
+        blocksTimed.fetch_add(1, std::memory_order_relaxed);
+        took.fetch_add(taken.count(), std::memory_order_relaxed);
+        lasted.fetch_add(lasts, std::memory_order_relaxed);
+
+        if (taken.count() > lasts)
+            lateBlocks.fetch_add(1, std::memory_order_relaxed);
+
+        const auto share = static_cast<float>(static_cast<double>(taken.count()) / static_cast<double>(lasts));
+        const auto packed = (std::uint64_t{std::bit_cast<std::uint32_t>(share)} << 32) |
+                            static_cast<std::uint32_t>(std::min<std::int64_t>(taken.count(), 0xFFFFFFFF));
+
+        for (auto current = worst.load(std::memory_order_relaxed); packed > current;)
+            if (worst.compare_exchange_weak(current, packed, std::memory_order_relaxed))
+            {
+                worstAt.store(std::chrono::duration_cast<std::chrono::nanoseconds>(began.time_since_epoch()).count(),
+                              std::memory_order_relaxed);
+                break;
+            }
+    }
+
+    PluginTiming timing(bool take) noexcept
+    {
+        PluginTiming measured;
+        measured.blocks = blocksTimed.load(std::memory_order_relaxed);
+        measured.lateBlocks = lateBlocks.load(std::memory_order_relaxed);
+        const auto spent = take ? took.exchange(0) : took.load();
+        const auto blocksLasted = take ? lasted.exchange(0) : lasted.load();
+        const auto worstBlock = take ? worst.exchange(0) : worst.load();
+
+        if (blocksLasted > 0)
+            measured.load = static_cast<double>(spent) / static_cast<double>(blocksLasted);
+
+        if (worstBlock != 0)
+        {
+            measured.worstShare = std::bit_cast<float>(static_cast<std::uint32_t>(worstBlock >> 32));
+            measured.worstNanoseconds = static_cast<std::int64_t>(worstBlock & 0xFFFFFFFF);
+            measured.worstAt = worstAt.load(std::memory_order_relaxed);
+        }
+
+        return measured;
+    }
 
     // Whether it crashed, after which nothing calls it again, not even to take it down; and what failed on the audio
     // thread, with the fault if it crashed, for the main thread to say.
@@ -1277,6 +1331,7 @@ void Plugin::process(float* const* channels, int channelCount, int frames, const
     }
 
     insideProcess = true;
+    const auto began = std::chrono::steady_clock::now();
     auto* plugin = held.audioInstance;
     const auto modes = floatingPointModes();
 
@@ -1398,9 +1453,20 @@ void Plugin::process(float* const* channels, int channelCount, int frames, const
         held.host->audioNotices = true;
     }
 
+    held.timed(began, frames);
     ++held.blocksPlayed;
     insideProcess = false;
     held.inProcess = false;
+}
+
+PluginTiming Plugin::timing() const
+{
+    return inner->timing(false);
+}
+
+PluginTiming Plugin::takeTiming()
+{
+    return inner->timing(true);
 }
 
 bool Plugin::hasEditor()

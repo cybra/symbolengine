@@ -577,6 +577,28 @@ TEST_CASE(
     CHECK(through(*plugin, 64) == std::vector<float>{1.0f, 2.0f});
 }
 
+TEST_CASE(
+    "A VST3 plugin that sleeps in every hundredth block has those blocks, and only those, counted late, its worst "
+    "block one of them",
+    "[timing]")
+{
+    Rig rig;
+    auto plugin = rig.made(testIds::faulting);
+    REQUIRE(plugin->prepare({48000.0, 1024, false}));
+    REQUIRE(plugin->setParameter(testIds::slowInProcess, 1.0));
+
+    for (int i = 0; i < 250; ++i)
+        through(*plugin, 1024);
+
+    // Its 50 ms against a block of 21.3 ms.
+    const auto timing = plugin->timing();
+    CHECK(timing.blocks == 250);
+    CHECK(timing.lateBlocks == 2);
+    CHECK(timing.worstNanoseconds >= 50'000'000);
+    CHECK(timing.worstShare >= 50.0 / 21.34);
+    CHECK(misuses().empty());
+}
+
 #if defined(_MSC_VER)
 
 TEST_CASE("A VST3 plugin that crashes in its processing on Windows is switched off and never called again, and the "

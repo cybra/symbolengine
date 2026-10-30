@@ -629,6 +629,7 @@ public:
         parameters.addParameter(STR16("Throw in process"), nullptr, 1, 0.0, 0, testIds::throwInProcess);
         parameters.addParameter(STR16("Hang on main"), nullptr, 1, 0.0, 0, testIds::hangOnMain);
         parameters.addParameter(STR16("Hang in process"), nullptr, 1, 0.0, 0, testIds::hangInProcess);
+        parameters.addParameter(STR16("Slow in process"), nullptr, 1, 0.0, 0, testIds::slowInProcess);
         return result;
     }
 
@@ -662,7 +663,13 @@ public:
 
                     if (value > 0.5 && changes->getParameterId() == testIds::hangInProcess)
                         std::this_thread::sleep_for(std::chrono::minutes(1));
+
+                    if (changes->getParameterId() == testIds::slowInProcess)
+                        slow = value > 0.5;
                 }
+
+        if (slow && ++calls % 100 == 0)
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
         const int32 channels = data.numOutputs > 0 && data.numInputs > 0 ? data.outputs[0].numChannels : 0;
 
@@ -679,6 +686,10 @@ private:
         volatile int* volatile nowhere = nullptr;
         *nowhere = 1;
     }
+
+    // Whether it sleeps in every hundredth process call, counted from the one it is told in.
+    bool slow = false;
+    int calls = 0;
 };
 
 // One object with both parts that asks for the context it needs, and keeps what it was given, which the text of the

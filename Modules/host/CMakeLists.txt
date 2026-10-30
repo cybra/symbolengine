@@ -88,7 +88,8 @@ if(SYMBOLENGINE_TESTS)
     symbolengine_set_warnings(symbolengine_host_scan_worker)
 
     set(test_sources Tests/Allocations.cpp Tests/CrashNoteTests.cpp Tests/EditorTests.cpp Tests/ParameterTests.cpp
-                     Tests/PluginLifeTests.cpp Tests/PluginListTests.cpp Tests/ScanTests.cpp Tests/ScanWorkerTests.cpp
+                     Tests/PluginLifeTests.cpp Tests/PluginListTests.cpp Tests/PluginTimingTests.cpp Tests/ScanTests.cpp
+                     Tests/ScanWorkerTests.cpp
                      Tests/TimeTests.cpp Tests/Vst3Tests.cpp Tests/WalkTests.cpp)
     if(APPLE)
         add_subdirectory(Tests/AudioUnits)
