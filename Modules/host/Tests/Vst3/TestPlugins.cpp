@@ -63,6 +63,13 @@ void life(const char* what)
 const ModuleInitializer entered([] { life("entered"); });
 const ModuleTerminator exited([] { life("exited"); });
 
+// A static object of its own, which the module's exit may use, so it is to go only after that.
+struct OwnStatic
+{
+    ~OwnStatic() { life("taken down"); }
+};
+const OwnStatic ownStatic;
+
 // What a processor checks of its host: every call but process and setProcessing on the thread it was started on, in
 // the order the SDK's call sequence allows, and every block's buffers as its buses say.
 // What the host checker asks of a process call's context: one in every call, at the rate the plugin was set up at, its

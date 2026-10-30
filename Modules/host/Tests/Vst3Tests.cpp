@@ -4,6 +4,7 @@
 #include <symbolengine/host/Vst3Format.h>
 
 #include "Allocations.h"
+#include "Scratch.h"
 #include "TestMainThread.h"
 #include "Vst3/TestIds.h"
 
@@ -268,7 +269,36 @@ TEST_CASE("A VST3 module is entered once, however many of its plugins are made, 
     CHECK(ending->kind == ProcessEnding::Kind::exited);
     CHECK(ending->code == 0);
     CHECK(misuses().empty());
-    CHECK(files::read(lifeLog, ignored) == "entered\nexited\n");
+    CHECK(files::read(lifeLog, ignored) == "entered\nexited\ntaken down\n");
+}
+
+TEST_CASE("Each of a program's VST3 modules exits as it ends, before its own static objects are taken down")
+{
+    ScratchFolder folder;
+    std::vector<std::string> modules{module.string()};
+    for (const auto* name : {"Second", "Third"})
+    {
+        const auto copy = folder.path / name / module.filename();
+        std::filesystem::create_directories(copy.parent_path());
+        std::filesystem::copy(module, copy, std::filesystem::copy_options::recursive);
+        modules.push_back(copy.string());
+    }
+
+    const auto lifeLog = folder.path / "life.txt";
+    ChildProcess::Options options;
+    options.arguments = modules;
+    options.environment = {{"SYMBOLENGINE_TEST_VST3_LIFE", lifeLog.string()}};
+    std::error_code error;
+    auto program = ChildProcess::start(SYMBOLENGINE_MODULE_LIFE, options, error);
+    REQUIRE(program != nullptr);
+    const auto ending = program->wait(30s);
+
+    REQUIRE(ending.has_value());
+    CHECK(ending->kind == ProcessEnding::Kind::exited);
+    CHECK(ending->code == 0);
+    std::error_code ignored;
+    CHECK(files::read(lifeLog, ignored) ==
+          "entered\nentered\nentered\nexited\ntaken down\nexited\ntaken down\nexited\ntaken down\n");
 }
 
 TEST_CASE("A VST3 plugin's parameters are listed in its order, known by their IDs, with their names, steps and flags")

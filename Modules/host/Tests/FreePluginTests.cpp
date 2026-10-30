@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 #include <random>
@@ -227,15 +228,18 @@ TEST_CASE("Free plugins by other makers are made, played at two rates, changed, 
         const auto moved = std::find_if(parameters.begin(), parameters.end(), [](const PluginParameter& one) {
             return !one.readOnly && !one.hidden && !one.bypass && !one.programChange && one.automatable;
         });
-        std::optional<double> value;
         if (moved != parameters.end())
-        {
-            value = plugin->parameter(moved->id) > 0.5 ? 0.25 : 0.75;
-            CHECK(plugin->setParameter(moved->id, *value));
-        }
+            CHECK(plugin->setParameter(moved->id, plugin->parameter(moved->id) > 0.5 ? 0.25 : 0.75));
         play(*plugin, 512);
         const auto state = plugin->saveState(PluginStateUse::document);
         REQUIRE(state);
+
+        // Its values as it holds them, read from it by giving it what it just saved, as a plugin may keep a value to
+        // steps of its own, which it needn't say.
+        REQUIRE(plugin->loadState(*state, PluginStateUse::document));
+        std::map<std::uint32_t, double> saved;
+        for (const auto& parameter : parameters)
+            saved[parameter.id] = plugin->parameter(parameter.id);
         plugin->release();
         REQUIRE(rig.main.turnUntil([&] { return !plugin->isBusy(); }, 10s));
 
@@ -243,11 +247,17 @@ TEST_CASE("Free plugins by other makers are made, played at two rates, changed, 
         REQUIRE(restored->loadState(*state, PluginStateUse::document));
         REQUIRE(restored->prepare({48000.0, 512, false}));
         CHECK(std::isfinite(play(*restored, 512)));
-        if (value)
+        for (const auto& parameter : parameters)
+            if (!parameter.readOnly && !parameter.hidden)
+            {
+                INFO(parameter.name);
+                const auto steps = parameter.steps > 0 ? 1.0 / parameter.steps : 0.02;
+                CHECK(std::abs(restored->parameter(parameter.id) - saved[parameter.id]) <= steps);
+            }
+        if (moved != parameters.end())
         {
-            // Read back as the plugin has it, which a stepped parameter keeps to its nearest step.
-            const auto steps = moved->steps > 0 ? 1.0 / moved->steps : 0.02;
-            CHECK(std::abs(restored->parameter(moved->id) - plugin->parameter(moved->id)) <= steps);
+            INFO("Moved: " << moved->name << ", " << saved[moved->id] << " from " << moved->defaultValue);
+            CHECK(std::abs(saved[moved->id] - moved->defaultValue) > 0.02);
         }
         restored->release();
         REQUIRE(rig.main.turnUntil([&] { return !restored->isBusy(); }, 10s));

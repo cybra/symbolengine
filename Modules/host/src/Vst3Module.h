@@ -37,7 +37,7 @@ private:
     static std::shared_ptr<Native> load(const std::filesystem::path& location, Steinberg::IPluginFactory*& factory,
                                         PluginError& error);
     static void exit(Native& native);
-    static void exitAll();
+    static void exitNewest();
 
     std::shared_ptr<Native> native;
     Steinberg::IPluginFactory* pluginFactory = nullptr;

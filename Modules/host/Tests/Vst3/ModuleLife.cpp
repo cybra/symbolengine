@@ -1,5 +1,5 @@
-// A program that loads the test module, makes and lets go of one of its plugins three times, and ends, for the test of
-// a module's entry and exit coming once each.
+// A program that loads the test modules it is given, makes and lets go of one of each one's plugins three times, and
+// ends, for the test of a module's entry and exit coming once each.
 
 #include <symbolengine/host/Plugin.h>
 #include <symbolengine/host/Vst3Format.h>
@@ -21,18 +21,19 @@ int main(int argc, char** argv)
     PluginHost host{{main.post(), main.isCurrent(), std::chrono::seconds(2),
                      [](const std::string& what) { std::fprintf(stderr, "%s\n", what.c_str()); }}};
 
-    for (int i = 0; i < 3; ++i)
-    {
-        auto plugin = host.make(format, Vst3Format::describe(argv[1], testIds::gain));
+    for (int module = 1; module < argc; ++module)
+        for (int i = 0; i < 3; ++i)
+        {
+            auto plugin = host.make(format, Vst3Format::describe(argv[module], testIds::gain));
 
-        if (!main.turnUntil([&] { return plugin->state() != Plugin::State::making; }) ||
-            !plugin->prepare({48000.0, 64, false}))
-            return 3;
+            if (!main.turnUntil([&] { return plugin->state() != Plugin::State::making; }) ||
+                !plugin->prepare({48000.0, 64, false}))
+                return 3;
 
-        plugin->release();
-        plugin.reset();
-        main.settle();
-    }
+            plugin->release();
+            plugin.reset();
+            main.settle();
+        }
 
     return 0;
 }

@@ -1157,8 +1157,6 @@ public:
             toComponent->undo();
             componentPoint->disconnect(toController);
             controllerPoint->disconnect(toComponent);
-            toController = nullptr;
-            toComponent = nullptr;
             componentPoint = nullptr;
             controllerPoint = nullptr;
         }

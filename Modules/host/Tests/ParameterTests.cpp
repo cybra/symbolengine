@@ -427,6 +427,18 @@ TEST_CASE("Values set before a plugin takes a state give way to it, never reachi
         CHECK(plugin->parameter(1) == 0.25);
         CHECK(through(*plugin) == 0.25f);
     }
+    SECTION("Automation from before it, not yet shown to the plugin when it took the state")
+    {
+        auto plugin = rig.made();
+        REQUIRE(plugin->prepare({48000.0, 64, false}));
+        played(*plugin, 64, {{1, 0, 0.75}});
+        REQUIRE(plugin->loadState("fake state", PluginStateUse::document));
+        CHECK(plugin->parameter(1) == 0.25);
+
+        // The look at what the audio thread kept, which comes every 10 ms, finds nothing of it left.
+        rig.main.turnUntil([] { return false; }, 50ms);
+        CHECK(plugin->parameter(1) == 0.25);
+    }
     SECTION("Set after the state, which it hears")
     {
         auto plugin = rig.made();
