@@ -86,7 +86,8 @@ struct PluginFile
             signature until then. */
         changedAfterSigning,
 
-        /** The system refuses it as not notarized by its maker. */
+        /** The system refuses it as not notarized by its maker, with the file it refuses in failure; it is looked at
+            again at every scan, as the user's allowing it changes nothing else a scan can see. */
         notNotarized,
 
         /** Loading it failed before it named any plugin, as failure says. */
@@ -112,8 +113,8 @@ struct PluginFile
 
     Outcome outcome = Outcome::found;
 
-    /** Why it was set aside, with Outcome::setAside, and which of its code was found changed, with
-        Outcome::changedAfterSigning where a check found it. */
+    /** Why it was set aside, with Outcome::setAside, and which of its code was found changed or is refused, with
+        Outcome::changedAfterSigning where a check found it and Outcome::notNotarized. */
     std::optional<PluginFailure> failure{};
 
     /** The plugins in it the scan found, each located at this file, and those it set aside. */

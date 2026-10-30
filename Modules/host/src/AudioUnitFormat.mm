@@ -1682,15 +1682,26 @@ bool AudioUnitFormat::runs(std::string_view architecture) const
     return PluginFormat::runs(architecture) || (system::architecture() == "arm64" && architecture == "x86_64");
 }
 
-std::optional<std::filesystem::path> AudioUnitFormat::changedAfterSigning(const std::filesystem::path& file) const
+// The binary a unit's Info.plist names, or nothing where it names none.
+static std::filesystem::path binaryNamedBy(const std::filesystem::path& file)
 {
     const auto info = infoOf(file);
     const auto executable = info != nullptr ? textOf(CFDictionaryGetValue(info, CFSTR("CFBundleExecutable"))) : "";
     if (info != nullptr)
         CFRelease(info);
-    if (executable.empty())
-        return std::nullopt;
-    return pluginFiles::changedAfterSigning(file / "Contents" / "MacOS" / paths::fromUtf8(executable));
+    return executable.empty() ? std::filesystem::path{} : file / "Contents" / "MacOS" / paths::fromUtf8(executable);
+}
+
+std::optional<std::filesystem::path> AudioUnitFormat::changedAfterSigning(const std::filesystem::path& file) const
+{
+    const auto binary = binaryNamedBy(file);
+    return binary.empty() ? std::nullopt : pluginFiles::changedAfterSigning(binary);
+}
+
+std::optional<std::filesystem::path> AudioUnitFormat::notNotarized(const std::filesystem::path& file) const
+{
+    const auto binary = binaryNamedBy(file);
+    return binary.empty() ? std::nullopt : pluginFiles::notNotarized(binary);
 }
 
 std::optional<PluginFileFacts> AudioUnitFormat::examine(const std::filesystem::path& file, PluginError& error) const

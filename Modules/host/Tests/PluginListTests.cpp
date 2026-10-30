@@ -420,6 +420,24 @@ TEST_CASE("A file the system doesn't know yet is kept as that and looked at agai
     CHECK(list->needsScan(path, stamp(1)));
 }
 
+TEST_CASE("A file the system refuses as not notarized is looked at again at every scan, as the user may allow it")
+{
+    Rig rig;
+    const auto path = rig.place("VST3/Downloaded.vst3");
+    {
+        auto list = rig.open();
+        auto file = found(path, stamp(1), {});
+        file.outcome = PluginFile::Outcome::notNotarized;
+        list->record(file);
+        CHECK(list->needsScan(path, stamp(1)));
+        list->save();
+    }
+    auto list = rig.open();
+    REQUIRE(list->file(path));
+    CHECK(list->file(path)->outcome == PluginFile::Outcome::notNotarized);
+    CHECK(list->needsScan(path, stamp(1)));
+}
+
 TEST_CASE("A file changed after signing is looked at again once the computer has restarted")
 {
     Rig rig;

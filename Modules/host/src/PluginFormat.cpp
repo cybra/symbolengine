@@ -17,6 +17,11 @@ std::optional<std::filesystem::path> PluginFormat::changedAfterSigning(const std
     return std::nullopt;
 }
 
+std::optional<std::filesystem::path> PluginFormat::notNotarized(const std::filesystem::path&) const
+{
+    return std::nullopt;
+}
+
 PluginIdentity PluginIdentity::audioUnit(std::uint32_t type, std::uint32_t subtype, std::uint32_t manufacturer)
 {
     constexpr char digits[] = "0123456789abcdef";

@@ -1789,6 +1789,17 @@ std::optional<std::filesystem::path> Vst3Format::changedAfterSigning(const std::
     return std::nullopt;
 }
 
+std::optional<std::filesystem::path> Vst3Format::notNotarized(const std::filesystem::path& file) const
+{
+#if defined(__APPLE__)
+    if (const auto binary = bundledBinary(file); !binary.empty())
+        return pluginFiles::notNotarized(binary);
+#else
+    static_cast<void>(file);
+#endif
+    return std::nullopt;
+}
+
 std::optional<PluginFileFacts> Vst3Format::examine(const std::filesystem::path& file, PluginError& error) const
 {
     error = {};

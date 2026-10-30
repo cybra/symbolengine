@@ -16,6 +16,11 @@
 #if defined(__APPLE__)
     #include <CoreFoundation/CoreFoundation.h>
     #include <Security/Security.h>
+    #include <sys/xattr.h>
+
+    #include <symbolengine/core/ChildProcess.h>
+
+    #include <cstdlib>
 #elif defined(_WIN32)
     #ifndef WIN32_LEAN_AND_MEAN
         #define WIN32_LEAN_AND_MEAN
@@ -223,6 +228,90 @@ std::optional<std::filesystem::path> locate(const std::string& name, const std::
     return std::nullopt;
 }
 
+// A binary's code and the libraries it links, followed as the system would, each by its real path once, with the
+// folders of those that led to it, which it searches after its own. The architecture is the one the system would run.
+std::vector<std::filesystem::path> codeFilesOf(const std::filesystem::path& binary, std::string& architecture)
+{
+    constexpr std::size_t mostFiles = 512;
+
+    const auto architectures = architecturesOf(binary);
+    if (architectures.empty())
+        return {};
+    const std::string own(system::architecture());
+    architecture =
+        std::find(architectures.begin(), architectures.end(), own) != architectures.end() ? own : architectures.front();
+
+    struct Image
+    {
+        std::filesystem::path file;
+        std::vector<std::filesystem::path> searched;
+    };
+    std::error_code error;
+    const auto first = std::filesystem::canonical(binary, error);
+    if (error)
+        return {};
+    std::vector<std::filesystem::path> files{first};
+    std::vector<Image> waiting{{first, {}}};
+    std::set<std::filesystem::path> seen{first};
+
+    while (!waiting.empty())
+    {
+        const auto image = std::move(waiting.back());
+        waiting.pop_back();
+
+        const auto links = linksOf(image.file, architecture);
+        std::vector<std::filesystem::path> searched;
+        for (const auto& folder : links.searched)
+            if (const auto found = locate(folder, image.file, {}); found.has_value())
+                searched.push_back(*found);
+        searched.insert(searched.end(), image.searched.begin(), image.searched.end());
+
+        for (const auto& library : links.libraries)
+        {
+            const auto found = locate(library, image.file, searched);
+            if (!found)
+                continue;
+            const auto real = std::filesystem::canonical(*found, error);
+            if (error)
+                continue;
+            const auto text = paths::toUtf8(real);
+            if (text.starts_with("/System/") || text.starts_with("/usr/lib/") || seen.size() >= mostFiles)
+                continue;
+            if (seen.insert(real).second)
+            {
+                files.push_back(real);
+                waiting.push_back({real, searched});
+            }
+        }
+    }
+    return files;
+}
+
+// Whether a file carries the flag macOS gives what was downloaded, with no sign the user has allowed it since.
+bool carriesQuarantine(const std::filesystem::path& file)
+{
+    constexpr unsigned long userAllowed = 0x40;
+    std::array<char, 256> value{};
+    const auto size = getxattr(file.c_str(), "com.apple.quarantine", value.data(), value.size() - 1, 0, 0);
+    return size > 0 && (std::strtoul(value.data(), nullptr, 16) & userAllowed) == 0;
+}
+
+// Whether the system's assessment rejects a file, as its maker hasn't had it notarized, asked of the system's own tool
+// since it has no public interface. Anything but its answer that it rejects it, as a tool that takes too long, leaves
+// the file to be loaded.
+bool systemRejects(const std::filesystem::path& file)
+{
+    constexpr std::uint32_t rejected = 3;
+    ChildProcess::Options options;
+    options.arguments = {"--assess", "--type", "install", paths::toUtf8(file)};
+    std::error_code error;
+    const auto tool = ChildProcess::start("/usr/sbin/spctl", options, error);
+    if (tool == nullptr)
+        return false;
+    const auto ending = tool->wait(std::chrono::seconds(30));
+    return ending && ending->kind == ProcessEnding::Kind::exited && ending->code == rejected;
+}
+
 #endif
 
 }
@@ -356,57 +445,21 @@ std::string declaredVersion([[maybe_unused]] const std::filesystem::path& bundle
 std::optional<std::filesystem::path> changedAfterSigning([[maybe_unused]] const std::filesystem::path& binary)
 {
 #if defined(__APPLE__)
-    constexpr std::size_t mostFiles = 512;
+    std::string architecture;
+    for (const auto& file : codeFilesOf(binary, architecture))
+        if (codeFails(file, architecture))
+            return file;
+#endif
+    return std::nullopt;
+}
 
-    const auto architectures = architecturesOf(binary);
-    if (architectures.empty())
-        return std::nullopt;
-    const std::string own(system::architecture());
-    const auto architecture =
-        std::find(architectures.begin(), architectures.end(), own) != architectures.end() ? own : architectures.front();
-
-    // Each file once by its real path, with the folders of those that led to it, which it searches after its own.
-    struct Image
-    {
-        std::filesystem::path file;
-        std::vector<std::filesystem::path> searched;
-    };
-    std::error_code error;
-    const auto first = std::filesystem::canonical(binary, error);
-    if (error)
-        return std::nullopt;
-    std::vector<Image> waiting{{first, {}}};
-    std::set<std::filesystem::path> seen{first};
-
-    while (!waiting.empty())
-    {
-        const auto image = std::move(waiting.back());
-        waiting.pop_back();
-        if (codeFails(image.file, architecture))
-            return image.file;
-
-        const auto links = linksOf(image.file, architecture);
-        std::vector<std::filesystem::path> searched;
-        for (const auto& folder : links.searched)
-            if (const auto found = locate(folder, image.file, {}); found.has_value())
-                searched.push_back(*found);
-        searched.insert(searched.end(), image.searched.begin(), image.searched.end());
-
-        for (const auto& library : links.libraries)
-        {
-            const auto found = locate(library, image.file, searched);
-            if (!found)
-                continue;
-            const auto real = std::filesystem::canonical(*found, error);
-            if (error)
-                continue;
-            const auto text = paths::toUtf8(real);
-            if (text.starts_with("/System/") || text.starts_with("/usr/lib/") || seen.size() >= mostFiles)
-                continue;
-            if (seen.insert(real).second)
-                waiting.push_back({real, searched});
-        }
-    }
+std::optional<std::filesystem::path> notNotarized([[maybe_unused]] const std::filesystem::path& binary)
+{
+#if defined(__APPLE__)
+    std::string architecture;
+    for (const auto& file : codeFilesOf(binary, architecture))
+        if (carriesQuarantine(file) && systemRejects(file))
+            return file;
 #endif
     return std::nullopt;
 }

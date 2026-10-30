@@ -33,4 +33,10 @@ std::string declaredVersion(const std::filesystem::path& bundle, const std::file
     and neither do a bundle's other files. Always nothing but on a Mac, the one system that stops a program for this. */
 std::optional<std::filesystem::path> changedAfterSigning(const std::filesystem::path& binary);
 
+/** The first file of a binary's code and the libraries it links that the system won't run until someone allows it: one
+    carrying the flag macOS gives what was downloaded, not allowed by the user since, whose maker hasn't had it
+    notarized, as the system's own assessment says. Loading one doesn't fail but waits on a window of the system's. The
+    flag is the code's, not the bundle's, and is left as it is. Always nothing but on a Mac. */
+std::optional<std::filesystem::path> notNotarized(const std::filesystem::path& binary);
+
 }

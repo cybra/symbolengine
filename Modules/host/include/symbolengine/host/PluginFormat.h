@@ -498,6 +498,12 @@ public:
         bundle's other files are no part of it, as the system checks only code, as it is used. From any thread. */
     virtual std::optional<std::filesystem::path> changedAfterSigning(const std::filesystem::path& file) const;
 
+    /** The file of a plugin's code the system won't run until someone allows it: downloaded, its maker not having had it
+        notarized, and not yet allowed by the user; its binary or a library it links, found without loading any of it;
+        nothing where it would run, or on a system with no such rule. Loading such a file doesn't fail: it waits on a
+        window of the system's, so it is asked here first. From any thread, and it can take a moment. */
+    virtual std::optional<std::filesystem::path> notNotarized(const std::filesystem::path& file) const;
+
     /** The plugins a file of the format holds, each as it declares itself, without making any, in the order the file
         gives them; called on the main thread, loading the file's code where the format has to, so a scan calls it in
         a worker. Nothing, with the error set, if the file can't be read or its code won't load. */

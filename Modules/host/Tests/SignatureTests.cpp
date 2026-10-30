@@ -500,6 +500,18 @@ TEST_CASE("Damaged binaries end the check without harm, whatever their headers s
 namespace
 {
 
+constexpr auto downloaded = "0081;6ae4db99;Browser;";
+
+void flag(const std::filesystem::path& file, const std::string& value)
+{
+    REQUIRE(tool("xattr -w com.apple.quarantine '" + value + "' " + quoted(file)));
+}
+
+bool flagged(const std::filesystem::path& file, const std::string& value)
+{
+    return tool("xattr -p com.apple.quarantine " + quoted(file) + " | grep -qxF '" + value + "'");
+}
+
 // A report as the system writes one: a line of its header, then the report, with the first image's address where the
 // system stopped it, in the second image's range.
 std::string reportOf(std::int64_t process, const std::string& space)
@@ -809,4 +821,136 @@ TEST_CASE("A fault the check can't see is stopped by the system, and its crash r
     CHECK(listed->failure->kind == PluginFailure::Kind::codeSignature);
     CHECK(listed->failure->detail.find("Unseen.vst3") != std::string::npos);
     CHECK(listed->plugins.empty());
+}
+
+TEST_CASE("Only code carrying the flag of a download, not yet allowed by the user, that the system rejects is refused")
+{
+    if (!tool("spctl --status | grep -q 'assessments enabled'"))
+        SKIP("The system's assessments are switched off here, so it rejects nothing.");
+
+    Rig rig;
+    const auto bundle = bundleOf(rig.plugins, "Signed", "");
+    const auto binary = binaryOf(bundle);
+    REQUIRE(tool("lipo -thin " + std::string(system::architecture()) + " " + quoted(library) + " -output " +
+                 quoted(binary)));
+    sign(binary);
+
+    // The system rejects it if asked, but runs it, as nothing marks it as downloaded.
+    REQUIRE_FALSE(tool("spctl --assess --type install " + quoted(binary)));
+    CHECK(rig.vst3.notNotarized(bundle) == std::nullopt);
+
+    flag(binary, downloaded);
+    CHECK(rig.vst3.notNotarized(bundle) == real(binary));
+    CHECK(flagged(binary, downloaded));
+
+    // One the system can't say no to, here one with no code it can make sense of, is left to load, as a notarized one
+    // is.
+    const auto unreadable = bundleOf(rig.plugins, "Unreadable", machO({}));
+    flag(binaryOf(unreadable), downloaded);
+    CHECK(rig.vst3.notNotarized(unreadable) == std::nullopt);
+
+    // Allowed by the user, as the flag then says.
+    const std::string allowed = "00c1;6ae4db99;Browser;";
+    flag(binary, allowed);
+    CHECK(rig.vst3.notNotarized(bundle) == std::nullopt);
+    CHECK(flagged(binary, allowed));
+
+    // A flag it can't read says nothing of the user allowing it.
+    flag(binary, "not a flag");
+    CHECK(rig.vst3.notNotarized(bundle) == real(binary));
+
+    // The system looks at the code, not the bundle around it.
+    REQUIRE(tool("xattr -d com.apple.quarantine " + quoted(binary)));
+    flag(bundle, downloaded);
+    CHECK(rig.vst3.notNotarized(bundle) == std::nullopt);
+
+    // A library it links, flagged where the plugin isn't.
+    const auto linked = rig.libraryNamed("Flagged.dylib", false);
+    flag(linked, downloaded);
+    const auto linking = bundleOf(rig.plugins, "Linking", machO({{loadDylib, paths::toUtf8(linked)}}));
+    CHECK(rig.vst3.notNotarized(linking) == real(linked));
+
+    // Audio Units alike.
+    const auto unit = audioUnitOf(rig.plugins, "Unit", std::string(system::architecture()));
+    CHECK(rig.audioUnits.notNotarized(unit) == std::nullopt);
+    flag(unit / "Contents" / "MacOS" / "Unit", downloaded);
+    CHECK(rig.audioUnits.notNotarized(unit) == real(unit / "Contents" / "MacOS" / "Unit"));
+}
+
+TEST_CASE("A downloaded plugin its maker hasn't had notarized is listed as that without its code loaded, and looked at "
+          "again at every scan")
+{
+    if (!tool("spctl --status | grep -q 'assessments enabled'"))
+        SKIP("The system's assessments are switched off here, so it rejects nothing.");
+
+    // Code only for the other architecture, which the system can assess, so even a worker that wrongly loads it fails
+    // at once, before any of it is mapped, with no window of the system's for it.
+    Rig rig;
+    const auto bundle = bundleOf(rig.plugins, "Downloaded", "");
+    REQUIRE(tool("lipo -thin " + otherArchitecture() + " " + quoted(library) + " -output " + quoted(binaryOf(bundle))));
+    sign(binaryOf(bundle));
+    flag(binaryOf(bundle), downloaded);
+
+    // Code changed after signing is that first, whatever else is true of it.
+    const auto changed = rig.plugins / "Changed.vst3";
+    std::filesystem::copy(bundles / "Good A.vst3", changed, std::filesystem::copy_options::recursive);
+    sign(changed);
+    const auto changedBinary = changed / "Contents" / "MacOS" / "SymbolEngine Misbehaving";
+    damage(changedBinary);
+    flag(changedBinary, downloaded);
+
+    PluginList list{{rig.scratch.path / "Settings" / "Plugins.json", "1.0", nullptr, nullptr, nullptr}};
+    PluginScanner scanner(
+        list,
+        PluginScanner::Options{{SYMBOLENGINE_SCAN_WORKER, {}, rig.scratch.path / "workers.txt", 20s, rig.main.post()},
+                               PluginSetup{48000.0, 256, false},
+                               50,
+                               std::int64_t(2) * 1024 * 1024 * 1024,
+                               10s});
+    std::map<std::filesystem::path, std::vector<std::string>> steps;
+    std::optional<PluginScanEnd> end;
+    scanner.onProgress = [&](const std::filesystem::path& file, const std::string& step) {
+        steps[file].push_back(step);
+    };
+    scanner.onFinished = [&](const PluginScanEnd& how) { end = how; };
+    const auto scan = [&] {
+        end.reset();
+
+        // Asked for by hand, as a walk lists a VST3 built only for the other architecture without a worker.
+        std::vector<PluginScanFile> files;
+        for (const auto& file : {real(bundle), real(changed)})
+        {
+            PluginError problem;
+            const auto facts = rig.vst3.examine(file, problem);
+            REQUIRE(facts);
+            files.push_back({"VST3", file, facts->stamp, false, facts->architectures});
+        }
+        REQUIRE(scanner.scan(files));
+        REQUIRE(rig.main.turnUntil([&] { return end.has_value(); }, 60s));
+    };
+    scan();
+
+    const auto listed = list.file(real(bundle));
+    REQUIRE(listed);
+    CHECK(listed->outcome == PluginFile::Outcome::notNotarized);
+    CHECK(listed->complete);
+    CHECK(listed->plugins.empty());
+    REQUIRE(listed->failure);
+    CHECK(listed->failure->kind == PluginFailure::Kind::refused);
+    CHECK(listed->failure->detail.find(paths::toUtf8(real(binaryOf(bundle)))) != std::string::npos);
+    const auto saw = steps[real(bundle)];
+    CHECK(std::find(saw.begin(), saw.end(), "loading the code") == saw.end());
+    CHECK(flagged(binaryOf(bundle), downloaded));
+
+    CHECK(list.file(real(changed))->outcome == PluginFile::Outcome::changedAfterSigning);
+
+    // The user's allowing it changes no stamp, so it is looked at again without being told.
+    CHECK(list.needsScan(listed->path, listed->stamp));
+    REQUIRE(tool("xattr -d com.apple.quarantine " + quoted(binaryOf(bundle))));
+    scan();
+    const auto again = list.file(real(bundle));
+    REQUIRE(again);
+    CHECK(again->outcome == PluginFile::Outcome::setAside);
+    REQUIRE(again->failure);
+    CHECK(again->failure->step == "loading the code");
 }

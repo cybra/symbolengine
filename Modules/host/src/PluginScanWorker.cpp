@@ -251,6 +251,12 @@ private:
                                       "The code of " + paths::toUtf8(*changed) +
                                           " no longer matches its signature, which the system stops whatever runs it "
                                           "for. Reinstalling the plugin mends it."});
+        if (const auto refused = format->notNotarized(current.file))
+            return done(PluginFile::Outcome::notNotarized,
+                        PluginFailure{PluginFailure::Kind::refused, currentStep(), 0,
+                                      "The system won't run " + paths::toUtf8(*refused) +
+                                          ", as it was downloaded and its maker hasn't had it notarized. A notarized "
+                                          "build from its maker mends it."});
 
         say("loading the code");
         PluginError error;
