@@ -62,7 +62,9 @@ public:
     std::optional<std::filesystem::path> notNotarized(const std::filesystem::path& file) const override;
 
     /** The module's effect classes, in its factory's order: each class's name, maker, version, SDK and kind, an
-        instrument where its subcategories say so. Its code is loaded to read them, and stays loaded. */
+        instrument where its subcategories say so. Its code is loaded to read them, and stays loaded, unless its
+        manifest clearly declares only instruments, which are listed from that, as none of them is ever made. A
+        manifest's word is never taken for an effect, whose code has to be proved by running it. */
     std::vector<PluginDescription> pluginsIn(const std::filesystem::path& file, PluginError& error) override;
 
     void make(const PluginDescription& plugin, PluginFormatClient& client,

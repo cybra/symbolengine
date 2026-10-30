@@ -526,3 +526,176 @@ TEST_CASE("A scan writes nothing in the program's folder but its list")
     }
     CHECK(after == before);
 }
+
+namespace
+{
+
+// A manifest as Steinberg's tool writes one, trailing commas and all, with a comment of the kind its format allows, and
+// the classes given.
+std::string manifestOf(const std::string& classes)
+{
+    return "\xEF\xBB\xBF// Written by a tool.\n{\n  \"Name\": \"Module\",\n  \"Version\": \"7.8.9\",\n"
+           "  /* What made it */\n  \"Factory Info\": {\n    \"Vendor\": \"Factory \\\"Maker // Inc\",\n"
+           "    \"Flags\": {\n      \"Unicode\": true,\n    },\n  },\n  \"Classes\": [\n" +
+           classes + "\n  ],\n}\n";
+}
+
+std::string classOf(const std::string& id, const std::string& name, const std::string& categories,
+                    const std::string& category = "Audio Module Class", const std::string& maker = "")
+{
+    return "    {\n      \"CID\": \"" + id + "\",\n      \"Category\": \"" + category + "\",\n      \"Name\": \"" +
+           name + "\",\n      \"Vendor\": \"" + maker +
+           "\",\n      \"Version\": \"1.2.3\",\n      \"SDKVersion\": \"VST 3.7.12\",\n"
+           "      \"Sub Categories\": [\n" +
+           categories + "\n      ],\n    },\n";
+}
+
+const std::string oneId = "00112233445566778899AABBCCDDEEFF", twoId = "FFEEDDCCBBAA99887766554433221100";
+
+void writeManifest(const std::filesystem::path& bundle, const std::string& text, bool older = false)
+{
+    const auto file =
+        older ? bundle / "Contents" / "moduleinfo.json" : bundle / "Contents" / "Resources" / "moduleinfo.json";
+    std::filesystem::create_directories(file.parent_path());
+    files::writeSafely(file, text);
+}
+
+}
+
+TEST_CASE("A module whose manifest declares only instruments is listed from it, its code never loaded")
+{
+    Rig rig;
+
+    // Each would crash its worker if it were loaded.
+    const auto bundle = install(rig.plugins, "Crash on load");
+    writeManifest(bundle, manifestOf(classOf(oneId, "Keys // not a comment", "\"Instrument\",\"Synth\",") +
+                                     classOf(twoId, "Keys Controller", "", "Component Controller Class") +
+                                     classOf("0123456789abcdef0123456789abcdef", "Drums", "\"Instrument\",",
+                                             "Audio Module Class", "Class Maker")));
+    const auto older = install(rig.plugins, "Crash on load, older");
+    writeManifest(older, manifestOf(classOf(oneId, "Keys", "\"Instrument\",")), true);
+    const auto both = install(rig.plugins, "Crash on load, both");
+    writeManifest(both, "", true);
+    writeManifest(both, manifestOf(classOf(oneId, "Keys", "\"Instrument\",")));
+    const auto emptyFirst = install(rig.plugins, "Crash on load, empty first");
+    writeManifest(emptyFirst, "");
+    writeManifest(emptyFirst, manifestOf(classOf(oneId, "Keys", "\"Instrument\",")), true);
+
+    REQUIRE(rig.scan());
+    REQUIRE(rig.end);
+    CHECK_FALSE(rig.end->stopped);
+
+    const auto listed = rig.list.file(real(bundle));
+    REQUIRE(listed);
+    CHECK(listed->outcome == PluginFile::Outcome::found);
+    CHECK(listed->setAside.empty());
+    REQUIRE(listed->plugins.size() == 2);
+    CHECK(listed->plugins[0].identity.id == oneId);
+    CHECK(listed->plugins[0].name == "Keys // not a comment");
+    CHECK(listed->plugins[0].maker == "Factory \"Maker // Inc");
+    CHECK(listed->plugins[0].version == "1.2.3");
+    CHECK(listed->plugins[0].sdk == "VST 3.7.12");
+    CHECK(listed->plugins[0].kind == PluginKind::instrument);
+    CHECK(listed->plugins[1].identity.id == "0123456789ABCDEF0123456789ABCDEF");
+    CHECK(listed->plugins[1].maker == "Class Maker");
+    CHECK(listed->plugins[1].kind == PluginKind::instrument);
+
+    CHECK(rig.list.file(real(older))->plugins.size() == 1);
+    CHECK(rig.list.file(real(both))->plugins.size() == 1);
+    CHECK(rig.list.file(real(emptyFirst))->plugins.size() == 1);
+}
+
+TEST_CASE("A module's code is loaded as ever unless its manifest clearly declares only instruments")
+{
+    Rig rig;
+    const auto instrument = classOf(oneId, "Keys", "\"Instrument\",");
+    const std::vector<std::pair<std::string, std::string>> manifests{
+        {"An effect beside it", manifestOf(instrument + classOf(twoId, "Delay", "\"Fx\",\"Delay\","))},
+        {"Effects by another word", manifestOf(classOf(oneId, "Delay", "\"Effects\","))},
+        {"No categories", manifestOf(classOf(oneId, "Keys", ""))},
+        {"A short ID", manifestOf(classOf("0011", "Keys", "\"Instrument\","))},
+        {"An ID not in hex", manifestOf(classOf("00112233445566778899AABBCCDDEEGG", "Keys", "\"Instrument\","))},
+        {"No name", manifestOf(classOf(oneId, "", "\"Instrument\","))},
+        {"No audio classes", manifestOf(classOf(oneId, "Controller", "", "Component Controller Class"))},
+        {"No classes", manifestOf("")},
+        {"Classes of another kind", "{\"Classes\": 3}"},
+        {"Not an object", "[1, 2]"},
+        {"Keys unquoted", "{Classes: []}"},
+        {"An empty file", ""},
+    };
+    for (const auto& [name, manifest] : manifests)
+        writeManifest(install(rig.plugins, "Crash on load, " + name), manifest);
+    REQUIRE(rig.scan());
+    REQUIRE(rig.end);
+    CHECK_FALSE(rig.end->stopped);
+
+    for (const auto& [name, manifest] : manifests)
+    {
+        INFO(name);
+        const auto listed = rig.list.file(real(rig.plugins / ("Crash on load, " + name + ".vst3")));
+        REQUIRE(listed);
+        CHECK(listed->outcome == PluginFile::Outcome::setAside);
+        CHECK(listed->plugins.empty());
+    }
+}
+
+TEST_CASE("A module's manifest says its version and its time wherever it lies, however it is written")
+{
+    Rig rig;
+    const auto stampOf = [&](const std::filesystem::path& bundle) {
+        PluginError error;
+        const auto facts = rig.vst3.examine(bundle, error);
+        REQUIRE(facts);
+        return facts->stamp;
+    };
+
+    const auto newer = synthetic(rig.plugins, "Newer", elsewhere());
+    CHECK(stampOf(newer).manifestModified == 0);
+    writeManifest(newer, manifestOf(""));
+    CHECK(stampOf(newer).manifestModified != 0);
+
+    const auto older = synthetic(rig.plugins, "Older", elsewhere());
+    writeManifest(older, manifestOf(""), true);
+    CHECK(stampOf(older).manifestModified != 0);
+
+#if !defined(_WIN32)
+    // A version the module doesn't declare to the system otherwise.
+    CHECK(stampOf(newer).version == "7.8.9");
+    CHECK(stampOf(older).version == "7.8.9");
+#endif
+}
+
+TEST_CASE("Damaged manifests cost a module nothing but the time of loading its code")
+{
+    Rig rig;
+    const auto bundle = install(rig.plugins, "Damaged manifest");
+    const auto base = manifestOf(classOf(oneId, "Keys", "\"Instrument\",\"Synth\","));
+
+    // Listed by its factory when the manifest is no use, or from the manifest while it still clearly says this.
+    const auto look = [&](const std::string& text) {
+        writeManifest(bundle, text);
+        PluginError error;
+        const auto plugins = rig.vst3.pluginsIn(bundle, error);
+        CHECK_FALSE(error);
+        CHECK(plugins.size() == 1);
+    };
+    for (std::size_t size = 0; size <= base.size(); size += 3)
+        look(base.substr(0, size));
+
+    std::mt19937 random(20261030);
+    for (int i = 0; i < 300; ++i)
+    {
+        auto bytes = base;
+        for (int changes = 0; changes < 3; ++changes)
+            bytes[random() % bytes.size()] = static_cast<char>(random());
+        look(bytes);
+    }
+
+    // A comment or string never ended, and a comma on its own.
+    look("{\"Classes\": [ /* never ended");
+    look("{\"Classes\": [ \"never ended");
+    look("{\"Classes\": [ // never ended");
+    look("{\"Classes\": [,]}");
+    look("\xEF\xBB");
+    look(",");
+}

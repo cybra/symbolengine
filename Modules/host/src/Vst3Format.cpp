@@ -1753,6 +1753,118 @@ namespace
 #endif
 }
 
+// The JSON of a module's manifest, whose format allows what JSON doesn't: comments and a comma after the last of
+// anything, which Steinberg's tool writes. Anything else that isn't JSON stays that way, and fails to read.
+std::string plainJson(std::string_view text)
+{
+    std::string plain;
+    plain.reserve(text.size());
+    for (std::size_t at = 0; at < text.size(); ++at)
+    {
+        const char c = text[at];
+        if (c == '"')
+        {
+            // A string, as it is, up to its closing quote.
+            auto end = at + 1;
+            while (end < text.size() && text[end] != '"')
+                end += text[end] == '\\' ? 2 : 1;
+            plain.append(text.substr(at, end + 1 - at));
+            at = end;
+        }
+        else if (text.substr(at, 2) == "//")
+        {
+            const auto end = text.find('\n', at);
+            at = end == std::string_view::npos ? text.size() : end;
+        }
+        else if (text.substr(at, 2) == "/*")
+        {
+            const auto end = text.find("*/", at + 2);
+            at = end == std::string_view::npos ? text.size() : end + 1;
+        }
+        else if (c == '}' || c == ']')
+        {
+            // The comma before it, past any space, goes.
+            const auto last = plain.find_last_not_of(" \t\r\n");
+            if (last != std::string::npos && plain[last] == ',')
+                plain.erase(last, 1);
+            plain += c;
+        }
+        else
+            plain += c;
+    }
+    return plain;
+}
+
+// Where a module's manifest lies: its Resources, or the place older modules have it. The first there, whatever it
+// holds.
+std::filesystem::path manifestFile(const std::filesystem::path& file)
+{
+    std::error_code ignored;
+    for (auto place : {file / "Contents" / "Resources" / "moduleinfo.json", file / "Contents" / "moduleinfo.json"})
+        if (std::filesystem::is_regular_file(place, ignored))
+            return place;
+    return {};
+}
+
+// A module's manifest: the first of its places that can be read as one.
+std::optional<Value> readManifest(const std::filesystem::path& file)
+{
+    for (auto place : {file / "Contents" / "Resources" / "moduleinfo.json", file / "Contents" / "moduleinfo.json"})
+    {
+        std::error_code missing;
+        const auto text = files::read(place, missing);
+        if (missing)
+            continue;
+        if (auto manifest = json::tryParse(plainJson(text)); manifest && manifest->isObject())
+            return manifest;
+    }
+    return std::nullopt;
+}
+
+// The plugins of a module whose manifest clearly declares only instruments, as they declare themselves; nothing for one
+// with no manifest, or whose manifest says anything else or leaves anything out, which has to be loaded to be sure.
+std::vector<PluginDescription> instrumentsDeclaredBy(const std::filesystem::path& file)
+{
+    const auto manifest = readManifest(file);
+    if (!manifest || !(*manifest)["Classes"].isArray())
+        return {};
+
+    std::vector<PluginDescription> plugins;
+    for (const auto& one : (*manifest)["Classes"].asArray())
+    {
+        if (one["Category"].stringOr("") != kVstAudioEffectClass)
+            continue;
+
+        bool instrument = false;
+        if (one["Sub Categories"].isArray())
+            for (const auto& category : one["Sub Categories"].asArray())
+                instrument = instrument || category.stringOr("") == PlugType::kInstrument;
+
+        auto id = one["CID"].stringOr("");
+        const bool isId = id.size() == 32 && std::all_of(id.begin(), id.end(), [](char c) {
+                              return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+                          });
+        auto name = one["Name"].stringOr("");
+        if (!instrument || !isId || name.empty())
+            return {};
+        std::transform(id.begin(), id.end(), id.begin(),
+                       [](char c) { return c >= 'a' && c <= 'f' ? static_cast<char>(c - 'a' + 'A') : c; });
+
+        PluginDescription plugin;
+        plugin.identity = {"VST3", std::move(id)};
+        plugin.location = file;
+        plugin.name = std::move(name);
+        plugin.maker = one["Vendor"].stringOr("");
+        if (plugin.maker.empty())
+            plugin.maker = (*manifest)["Factory Info"]["Vendor"].stringOr("");
+        plugin.version = one["Version"].stringOr("");
+        plugin.sdk = one["SDKVersion"].stringOr("");
+        plugin.kind = PluginKind::instrument;
+        plugins.push_back(std::move(plugin));
+    }
+    return plugins;
+}
+
 #if defined(__APPLE__)
 // The binary a Mac loads from a bundle: the executable its Info.plist names, else one named as the bundle is, else the
 // one file there; nothing where it holds none.
@@ -1866,12 +1978,12 @@ std::optional<PluginFileFacts> Vst3Format::examine(const std::filesystem::path& 
 
     // Its version as it declares it to the system, else as its manifest does, whose time also says it changed.
     facts.stamp.version = pluginFiles::declaredVersion(file, loaded);
-    const auto manifest = file / "Contents" / "Resources" / "moduleinfo.json";
-    if (std::error_code missing; std::filesystem::is_regular_file(manifest, missing))
+    if (const auto manifest = manifestFile(file); !manifest.empty())
     {
+        std::error_code missing;
         facts.stamp.manifestModified = pluginFiles::modifiedNanoseconds(manifest, missing);
         if (facts.stamp.version.empty())
-            if (const auto info = json::tryParse(files::read(manifest, missing)))
+            if (const auto info = readManifest(file))
                 facts.stamp.version = (*info)["Version"].stringOr("");
     }
     return facts;
@@ -1897,6 +2009,11 @@ std::string fieldText(const char8 (&field)[size])
 std::vector<PluginDescription> Vst3Format::pluginsIn(const std::filesystem::path& file, PluginError& error)
 {
     error = {};
+
+    // Only effects go in a chain, so a module holding nothing else needs no loading to be listed.
+    if (auto instruments = instrumentsDeclaredBy(file); !instruments.empty())
+        return instruments;
+
     const auto module = shared->module(file, error);
     if (module == nullptr)
         return {};
