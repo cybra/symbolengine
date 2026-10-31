@@ -23,12 +23,40 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
+#include <vector>
+
+#if defined(__APPLE__)
+    #include <CoreFoundation/CoreFoundation.h>
+    #include <os/lock.h>
+    #include <pthread.h>
+#elif defined(_WIN32)
+    #ifndef NOMINMAX
+        #define NOMINMAX
+    #endif
+    #include <windows.h>
+
+    #include <objbase.h>
+#else
+    #include <pthread.h>
+#endif
+
+// A file every system has, which the unsafe plugins open.
+#if defined(_WIN32)
+    #define SYMBOLENGINE_TEST_NOWHERE "NUL"
+    #define SYMBOLENGINE_TEST_NOINLINE __declspec(noinline)
+#else
+    #define SYMBOLENGINE_TEST_NOWHERE "/dev/null"
+    #define SYMBOLENGINE_TEST_NOINLINE __attribute__((noinline))
+#endif
 
 using namespace Steinberg;
 using namespace Steinberg::Vst;
@@ -704,6 +732,256 @@ private:
     int calls = 0;
 };
 
+// One object with both parts that makes the calls a real-time thread never should, as a parameter tells it, knowing
+// nothing of what watches it, as another maker's plugin wouldn't.
+class Unsafe : public SingleComponentEffect
+{
+public:
+    static FUnknown* make(void*) { return static_cast<IAudioProcessor*>(new Unsafe); }
+
+    ~Unsafe() override
+    {
+        leaving = true;
+
+        if (worker.joinable())
+            worker.join();
+    }
+
+    tresult PLUGIN_API initialize(FUnknown* context) override
+    {
+        const auto result = SingleComponentEffect::initialize(context);
+        addAudioInput(STR16("Input"), SpeakerArr::kStereo);
+        addAudioOutput(STR16("Output"), SpeakerArr::kStereo);
+        parameters.addParameter(STR16("Does"), nullptr, 0, 0.0, 0, testIds::unsafeDoes);
+        parameters.addParameter(STR16("At start"), nullptr, 0, 0.0, 0, testIds::unsafeAtStart);
+        return result;
+    }
+
+    tresult PLUGIN_API setParamNormalized(ParamID id, ParamValue value) override
+    {
+        if (id == testIds::unsafeAtStart)
+            atStart = testIds::unsafeStep(value);
+
+        return SingleComponentEffect::setParamNormalized(id, value);
+    }
+
+    tresult PLUGIN_API setProcessing(TBool state) override
+    {
+        if (state)
+            act(atStart);
+
+        return kResultOk;
+    }
+
+    tresult PLUGIN_API process(ProcessData& data) override
+    {
+        if (data.inputParameterChanges != nullptr)
+            for (int32 q = 0; q < data.inputParameterChanges->getParameterCount(); ++q)
+                if (auto* changes = data.inputParameterChanges->getParameterData(q);
+                    changes != nullptr && changes->getPointCount() > 0 &&
+                    changes->getParameterId() == testIds::unsafeDoes)
+                {
+                    int32 offset = 0;
+                    ParamValue value = 0.0;
+                    changes->getPoint(changes->getPointCount() - 1, offset, value);
+                    does = testIds::unsafeStep(value);
+                    calls = 0;
+                }
+
+        act(does);
+        ++calls;
+        const int32 channels = data.numOutputs > 0 && data.numInputs > 0 ? data.outputs[0].numChannels : 0;
+
+        for (int32 c = 0; c < channels; ++c)
+            for (int32 i = 0; i < data.numSamples; ++i)
+                data.outputs[0].channelBuffers32[c][i] = data.inputs[0].channelBuffers32[c][i];
+
+        return kResultOk;
+    }
+
+private:
+    // A function for each number, so each is a place of its own.
+    template <int place>
+    SYMBOLENGINE_TEST_NOINLINE static void allocateAt()
+    {
+        allocate();
+        keep = keep + place;
+    }
+
+    template <int... each>
+    static void allocateAtEach(std::integer_sequence<int, each...>)
+    {
+        (allocateAt<each>(), ...);
+    }
+
+    SYMBOLENGINE_TEST_NOINLINE static void allocate()
+    {
+        void* volatile memory = std::malloc(64);
+        std::free(memory);
+    }
+
+    void act(int what)
+    {
+        switch (what)
+        {
+            case testIds::doesMalloc: allocate(); break;
+            case testIds::doesNew:
+            {
+                int* volatile memory = new int[64];
+                delete[] memory;
+                break;
+            }
+            case testIds::doesVector:
+            {
+                std::vector<int> values;
+
+                for (int i = 0; i < 100; ++i)
+                    values.push_back(i);
+
+                keep = keep + values.back();
+                break;
+            }
+            case testIds::doesString:
+            {
+                std::string text = "x";
+                text.append(200, 'y');
+                keep = keep + static_cast<int>(text.size());
+                break;
+            }
+            case testIds::doesLock:
+            {
+                const std::lock_guard held(lock);
+                keep = keep + 1;
+                break;
+            }
+            case testIds::doesTryLock:
+                if (lock.try_lock())
+                    lock.unlock();
+                break;
+            case testIds::doesSleep: std::this_thread::sleep_for(std::chrono::microseconds(1)); break;
+            case testIds::doesFile:
+                if (auto* file = std::fopen(SYMBOLENGINE_TEST_NOWHERE, "r"))
+                    std::fclose(file);
+                break;
+            case testIds::doesThread: std::thread([] {}).join(); break;
+            case testIds::doesSystemAllocation: allocateThroughTheSystem(); break;
+            case testIds::doesMallocOnce:
+                if (calls == 0)
+                    allocate();
+                break;
+            case testIds::doesMallocEveryTenth:
+                if (calls % 10 == 0)
+                    allocate();
+                break;
+            case testIds::doesManyPlaces:
+                allocateAtEach(std::make_integer_sequence<int, 100>{});
+                break;
+            case testIds::doesWorkerAllocation:
+                if (!worker.joinable())
+                    worker = std::thread([this] {
+                        while (!leaving)
+                        {
+                            if (asked.load() != answered.load())
+                            {
+                                allocate();
+                                answered = asked.load();
+                            }
+                        }
+                    });
+
+                // Only spins, a spin here being the plugin's own affair: what the worker does is on a thread of its own.
+                for (const auto wanted = ++asked; answered.load() != wanted;)
+                {
+                }
+                break;
+            case testIds::doesSystemLock: lockTheSystemsWay(); break;
+            case testIds::doesMallocTwice:
+                for (int i = 0; i < 2; ++i)
+                    allocate();
+                break;
+            case testIds::doesFreeNothing:
+            {
+                void* volatile nothing = nullptr;
+                std::free(nothing);
+                break;
+            }
+            case testIds::doesReadWriteLock: writeLockTheSystemsWay(); break;
+            case testIds::doesConditionWait:
+            {
+                std::unique_lock held(lock);
+                condition.wait_for(held, std::chrono::microseconds(1));
+                break;
+            }
+            default: break;
+        }
+    }
+
+    // What this system's own libraries are built on, under the C library's and the C++ library's calls.
+    static void allocateThroughTheSystem()
+    {
+#if defined(__APPLE__)
+        const auto text = CFStringCreateWithCString(nullptr, "long enough to need memory of its own, this is",
+                                                    kCFStringEncodingUTF8);
+        CFRelease(text);
+#elif defined(_WIN32)
+        void* volatile memory = CoTaskMemAlloc(64);
+        CoTaskMemFree(memory);
+#else
+        char* volatile copy = strdup("a copy");
+        std::free(copy);
+#endif
+    }
+
+    void lockTheSystemsWay()
+    {
+#if defined(__APPLE__)
+        os_unfair_lock_lock(&systemLock);
+        os_unfair_lock_unlock(&systemLock);
+#elif defined(_WIN32)
+        AcquireSRWLockExclusive(&systemLock);
+        ReleaseSRWLockExclusive(&systemLock);
+#else
+        pthread_spin_lock(&systemLock);
+        pthread_spin_unlock(&systemLock);
+#endif
+    }
+
+    void writeLockTheSystemsWay()
+    {
+#if defined(_WIN32)
+        AcquireSRWLockExclusive(&systemLock);
+        ReleaseSRWLockExclusive(&systemLock);
+#else
+        pthread_rwlock_wrlock(&readWriteLock);
+        pthread_rwlock_unlock(&readWriteLock);
+#endif
+    }
+
+    inline static std::atomic<int> keep{0};
+    int does = testIds::doesNothing;
+    int calls = 0;
+    std::atomic<int> atStart{testIds::doesNothing};
+    std::mutex lock;
+#if !defined(_WIN32)
+    pthread_rwlock_t readWriteLock = PTHREAD_RWLOCK_INITIALIZER;
+#endif
+    std::condition_variable condition;
+    std::thread worker;
+    std::atomic<bool> leaving{false};
+    std::atomic<int> asked{0}, answered{0};
+#if defined(__APPLE__)
+    os_unfair_lock systemLock = OS_UNFAIR_LOCK_INIT;
+#elif defined(_WIN32)
+    SRWLOCK systemLock = SRWLOCK_INIT;
+#else
+    pthread_spinlock_t systemLock = [] {
+        pthread_spinlock_t made;
+        pthread_spin_init(&made, PTHREAD_PROCESS_PRIVATE);
+        return made;
+    }();
+#endif
+};
+
 // One object with both parts that asks for the context it needs, and keeps what it was given, which the text of the
 // query parameter says.
 class Timed : public SingleComponentEffect
@@ -889,5 +1167,9 @@ DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x0E), PClassInfo::kMa
            "Instrument", 0, "Instrument|Synth", "2.1.0", kVstVersionString, Gain::make)
 DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x10), PClassInfo::kManyInstances, kVstAudioEffectClass,
            "Editor", 0, "Fx", "1.0.0", kVstVersionString, makeTestEditor)
+DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x11), PClassInfo::kManyInstances, kVstAudioEffectClass,
+           "Unsafe", 0, "Fx", "1.0.0", kVstVersionString, Unsafe::make)
+DEF_CLASS2(INLINE_UID(0x53796D62, 0x54657374, 0x56535433, 0x12), PClassInfo::kManyInstances, kVstAudioEffectClass,
+           "Unsafe twin", 0, "Fx", "1.0.0", kVstVersionString, Unsafe::make)
 
 END_FACTORY

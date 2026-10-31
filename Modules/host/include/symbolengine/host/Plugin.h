@@ -59,6 +59,10 @@ enum class PluginChange
     /** A call into it changed what belongs to the whole process, the floating-point mode, the C locale or the working
         folder, which was put back. */
     processState,
+
+    /** It made a call on the audio thread from somewhere it hadn't before that a real-time thread never should, where
+        the host watches for them (PluginHost::Options::watchUnsafeCalls): unsafeCalls() lists them. */
+    unsafeCall,
 };
 
 /** How long a plugin's processing takes, measured around each block it plays on the audio thread, against the time the
@@ -100,6 +104,56 @@ struct PluginLate
     std::int64_t at = 0;
 };
 
+/** A call a plugin made on the audio thread that can take longer than anyone can say, found where a program watches for
+    them (PluginHost::Options::watchUnsafeCalls), one for each place it was made from. */
+struct PluginUnsafeCall
+{
+    enum class Kind
+    {
+        /** It took or gave back memory. */
+        memory,
+
+        /** It took a lock, waited on a condition or a semaphore, or woke a thread that does. */
+        lock,
+
+        /** It slept or gave up the rest of its time. */
+        sleep,
+
+        /** It reached for a file. */
+        file,
+
+        /** It started or joined a thread, or handed work to one through the system. */
+        thread,
+
+        /** It reached for the network. */
+        network,
+    };
+
+    Kind kind = Kind::memory;
+
+    /** The system's name for what was called, as malloc. */
+    std::string function{};
+
+    /** The call into the plugin it was made during: process, or startProcessing as its processing began. */
+    std::string step{};
+
+    /** Whether the plugin's own code is on the way to it, as it is for what the plugin called itself and for what a
+        system library did for it. Where it isn't, it is the system's or the program's own code on the way into the
+        plugin that made the call. */
+    bool inPluginCode = false;
+
+    /** How many times, in how many of the blocks it has played, and the first and last of them, counted from 0, so
+        one made only in its first block, as many plugins set themselves up then, can be told from one in every
+        block. */
+    std::int64_t times = 0;
+    std::int64_t blocks = 0;
+    std::int64_t firstBlock = 0;
+    std::int64_t lastBlock = 0;
+
+    /** The way to it the first time, innermost first, each as its module and, where known, its function. */
+    std::vector<std::string> backtrace{};
+};
+
 /** What every plugin a program hosts shares: the main thread they are made and called on, and the queue that makes
     them one per turn of its run loop, so a slow one never holds up the others or the program's windows. */
 class PluginHost
@@ -120,7 +174,21 @@ public:
         /** Told what was wrong when the program calls a plugin on the wrong thread or in the wrong state, which is
             refused. Without it a debug build stops there, so the mistake is seen at once. */
         std::function<void(const std::string&)> misuse;
+
+        /** A debug mode: finds what each plugin calls on the audio thread that a real-time thread never should, as it
+            allocates memory or takes a lock, and names it (Plugin::unsafeCalls), the audio playing on. What it costs is
+            a few billionths of a second for such a call on any thread, and a look at the stack for one made in a
+            plugin's call. Where canWatchUnsafeCalls() is false it does nothing. */
+        bool watchUnsafeCalls{};
     };
+
+    /** Whether unsafe calls can be watched in this process. On Windows they always can; on a Mac and Linux, in a
+        program linked to SymbolEngine::host_unsafe_calls or started with its library inserted through the system's own
+        means,
+        DYLD_INSERT_LIBRARIES or LD_PRELOAD, as a library loaded later comes too late to see them. Tried for real the
+        first time it is asked, so a false also means something else in the process took those calls first, as the
+        address sanitizer does. From any thread but an audio thread. */
+    static bool canWatchUnsafeCalls();
 
     explicit PluginHost(Options options);
     ~PluginHost();
@@ -264,6 +332,13 @@ public:
         meter showing the worst block since it last looked. */
     PluginTiming timing() const;
     PluginTiming takeTiming();
+
+    /** What it has called on the audio thread that a real-time thread never should, where its host watches for it: one
+        for each place it was made from, oldest first, up to 64 places. From any thread but an audio thread. */
+    std::vector<PluginUnsafeCall> unsafeCalls() const;
+
+    /** How many such calls came from places past the 64 kept. */
+    std::int64_t unsafeCallsNotListed() const;
 
     struct Inner;
 

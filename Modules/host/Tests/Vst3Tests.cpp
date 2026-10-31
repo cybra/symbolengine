@@ -729,7 +729,7 @@ TEST_CASE("A VST3 module's plugins are listed as each declares itself, without m
     CHECK(ids == std::vector<std::string>{testIds::gain, testIds::arranged, testIds::mono, testIds::noOutput,
                                           testIds::latency, testIds::many, testIds::faulting, testIds::timed,
                                           testIds::skipsEmpty, testIds::throwing, testIds::instrument,
-                                          testIds::editor});
+                                          testIds::editor, testIds::unsafe, testIds::unsafeTwin});
     REQUIRE(plugins.size() == ids.size());
     CHECK(plugins[0].identity.format == "VST3");
     CHECK(plugins[0].location == module);

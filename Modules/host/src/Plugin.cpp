@@ -4,6 +4,7 @@
 #include "Guard.h"
 #include "MainThread.h"
 #include "ProcessState.h"
+#include "UnsafeCalls.h"
 
 #include "symbolengine/core/LockFreeFifo.h"
 
@@ -37,7 +38,8 @@ thread_local bool insideProcess = false;
 
 // Bits of a plugin's pending notices the host keeps for itself: its own edits waiting, and values from the audio thread
 // waiting to be shown.
-constexpr std::uint32_t audioFailed = 1u << 29, editsWaiting = 1u << 30, valuesWaiting = 1u << 31;
+constexpr std::uint32_t unsafeCallSeen = 1u << 28, audioFailed = 1u << 29, editsWaiting = 1u << 30,
+                        valuesWaiting = 1u << 31;
 
 // Runs a call held by address, for guarded().
 template <typename Call>
@@ -77,6 +79,9 @@ struct PluginHost::Shared : std::enable_shared_from_this<PluginHost::Shared>
     // looks every 10 ms, and is woken at once for a reset, which can't wait for its look.
     std::vector<std::weak_ptr<Plugin::Inner>> plugins;
     std::atomic<bool> audioNotices{false}, stopping{false};
+
+    // What sees plugins' unsafe calls, for a host asked to watch for them where they can be.
+    const unsafeCalls::Link* unsafeLink = nullptr;
     std::thread watcher;
     std::binary_semaphore wake{0};
     std::atomic<bool> woken{false};
@@ -172,6 +177,9 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
 
     // Its number in the host, which names it in a late block a while after it is gone.
     std::uint64_t number = 0;
+
+    // What it has been found calling on the audio thread, for a host that watches.
+    std::unique_ptr<unsafeCalls::Record> unsafeRecord;
 
     ~Inner() override
     {
@@ -488,6 +496,8 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     bool audioCall(const char* step, Call&& body) noexcept
     {
         const crashNote::InCall noted(host->note, noteSlot, step, true);
+        const unsafeCalls::Watching watching(unsafeRecord.get(), step,
+                                             static_cast<std::int64_t>(blocksPlayed.load(std::memory_order_relaxed)));
         std::uint32_t fault = 0;
 
         try
@@ -888,6 +898,9 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
                 fail(step, "It failed with its own error while processing audio.");
         }
 
+        if ((raw & unsafeCallSeen) != 0)
+            tell(PluginChange::unsafeCall);
+
         if ((raw & valuesWaiting) != 0)
             showAudioValues();
 
@@ -1094,6 +1107,9 @@ PluginHost::PluginHost(Options options) : shared(std::make_shared<Shared>())
     if (shared->options.onMainThread != nullptr && shared->options.onMainThread())
         mainThread::prepare();
 
+    if (shared->options.watchUnsafeCalls && canWatchUnsafeCalls())
+        shared->unsafeLink = unsafeCalls::link();
+
     // Notices a plugin sends from inside its process call are only recorded there; this thread passes them to the main
     // thread.
     shared->watcher = std::thread([weak = std::weak_ptr(shared)] {
@@ -1127,6 +1143,33 @@ PluginHost::~PluginHost()
 
     if (shared->watcher.joinable())
         shared->watcher.join();
+}
+
+bool PluginHost::canWatchUnsafeCalls()
+{
+    // Tried for real once, as being there isn't enough: a library loaded too late, or something else taking the same
+    // calls first, sees nothing. The first look at a stack may load what it needs, which is done here too, not on an
+    // audio thread.
+    static const bool can = [] {
+        const auto* const link = unsafeCalls::link();
+
+        if (link == nullptr)
+            return false;
+
+        link->listen(&unsafeCalls::Record::saw);
+        link->refresh();
+        unsafeCalls::Record probe(*link, {}, nullptr, nullptr);
+        probe.enter("probe", 0);
+        unsafeCalls::tryCalls();
+        probe.leave();
+        const auto calls = probe.calls();
+        const auto madeOne = [&](PluginUnsafeCall::Kind kind) {
+            return std::any_of(calls.begin(), calls.end(), [&](const auto& call) { return call.kind == kind; });
+        };
+        return madeOne(PluginUnsafeCall::Kind::memory) && madeOne(PluginUnsafeCall::Kind::lock);
+    }();
+
+    return can;
 }
 
 void PluginHost::setCrashNote(PluginCrashNote* note)
@@ -1195,6 +1238,16 @@ std::shared_ptr<Plugin> PluginHost::make(PluginFormat& format, const PluginDescr
     inner->noteSlot = crashNote::claim(shared->note, description);
     inner->number = shared->number(description);
 
+    if (shared->unsafeLink != nullptr)
+        inner->unsafeRecord = std::make_unique<unsafeCalls::Record>(
+            *shared->unsafeLink, description.location,
+            [](void* context) {
+                auto& held = *static_cast<Plugin::Inner*>(context);
+                held.pending.fetch_or(unsafeCallSeen);
+                held.host->audioNotices = true;
+            },
+            inner.get());
+
     // The last hold, let go of on any thread, hands its taking down to the main thread, which waits until no call into
     // the plugin is under way.
     std::shared_ptr<Plugin> plugin(new Plugin(inner), [host = shared](Plugin* gone) {
@@ -1254,6 +1307,10 @@ bool Plugin::prepare(const PluginSetup& setup)
 {
     if (!inner->usable("prepare"))
         return false;
+
+    // What the plugin has loaded by now is seen from here on, where that has to be asked for.
+    if (const auto* const link = inner->host->unsafeLink)
+        link->refresh();
 
     if ((inner->state == State::active && (!inner->hold() || !inner->deactivate())) || inner->state == State::failed)
     {
@@ -1636,6 +1693,16 @@ PluginTiming Plugin::timing() const
 PluginTiming Plugin::takeTiming()
 {
     return inner->timing(true);
+}
+
+std::vector<PluginUnsafeCall> Plugin::unsafeCalls() const
+{
+    return inner->unsafeRecord != nullptr ? inner->unsafeRecord->calls() : std::vector<PluginUnsafeCall>{};
+}
+
+std::int64_t Plugin::unsafeCallsNotListed() const
+{
+    return inner->unsafeRecord != nullptr ? inner->unsafeRecord->notListed() : 0;
 }
 
 bool Plugin::hasEditor()

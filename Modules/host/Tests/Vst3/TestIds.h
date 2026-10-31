@@ -20,6 +20,52 @@ constexpr const char* timed = SYMBOLENGINE_TEST_HEX("0C");
 constexpr const char* faulting = SYMBOLENGINE_TEST_HEX("0D");
 constexpr const char* instrument = SYMBOLENGINE_TEST_HEX("0E");
 constexpr const char* editor = SYMBOLENGINE_TEST_HEX("10");
+constexpr const char* unsafe = SYMBOLENGINE_TEST_HEX("11");
+constexpr const char* unsafeTwin = SYMBOLENGINE_TEST_HEX("12");
+
+// What the unsafe plugins do in each process call from the next on, as one of these over unsafeSteps through
+// unsafeDoes, or as their processing starts, through unsafeAtStart: nothing; allocate and free memory through the C
+// library, through new, through a vector growing in the plugin's own code, and through a string growing in the C++
+// library's; take a lock; only try one; sleep; open a file; start a thread and wait for it; allocate through a system
+// library of its own kind's; allocate only in the first call from then on, and only in every tenth; allocate from a
+// hundred places, more than a plugin's list keeps; have its own worker thread allocate, the call only waiting without
+// a system call; take a lock of the system's own kind, a read-write lock, and wait on a condition; allocate twice from
+// one place; and give back no memory, which costs nothing.
+enum UnsafeDoes
+{
+    doesNothing,
+    doesMalloc,
+    doesNew,
+    doesVector,
+    doesString,
+    doesLock,
+    doesTryLock,
+    doesSleep,
+    doesFile,
+    doesThread,
+    doesSystemAllocation,
+    doesMallocOnce,
+    doesMallocEveryTenth,
+    doesManyPlaces,
+    doesWorkerAllocation,
+    doesSystemLock,
+    doesReadWriteLock,
+    doesConditionWait,
+    doesMallocTwice,
+    doesFreeNothing,
+    unsafeSteps
+};
+constexpr unsigned unsafeDoes = 510, unsafeAtStart = 511;
+
+constexpr double unsafeValue(UnsafeDoes does)
+{
+    return double(int(does)) / double(int(unsafeSteps));
+}
+
+constexpr int unsafeStep(double value)
+{
+    return int(value * double(int(unsafeSteps)) + 0.5);
+}
 
 // The gain plugins' parameters, listed in this order, which isn't their IDs' order.
 constexpr unsigned gainParameter = 100, hiddenParameter = 7, meterParameter = 3000000, bypassParameter = 1,

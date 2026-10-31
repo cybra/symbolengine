@@ -237,6 +237,15 @@
             <key>version</key><integer>66051</integer>
             <key>factoryFunction</key><string>ViewMissingFactory</string>
         </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>Unsf</string>
+            <key>manufacturer</key><string>SyTs</string>
+            <key>name</key><string>SymbolEngine Tests: Unsf</string>
+            <key>description</key><string>SymbolEngine's test unit Unsf</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>UnsfFactory</string>
+        </dict>
     </array>
 </dict>
 </plist>

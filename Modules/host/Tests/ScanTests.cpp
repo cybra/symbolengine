@@ -447,7 +447,7 @@ TEST_CASE(
     REQUIRE(recorded);
     INFO(rig.output());
     CHECK(recorded->outcome == PluginFile::Outcome::found);
-    CHECK(recorded->plugins.size() == 24);
+    CHECK(recorded->plugins.size() == 25);
     REQUIRE(recorded->setAside.size() == 1);
     CHECK(recorded->setAside[0].plugin.name == "Grow");
 

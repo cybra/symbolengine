@@ -139,7 +139,7 @@ TEST_CASE("An Audio Unit's component and units are read from its bundle without 
     PluginError error;
     const auto plugins = rig.format.pluginsIn(units, error);
     CHECK_FALSE(error);
-    REQUIRE(plugins.size() == 25);
+    REQUIRE(plugins.size() == 26);
     CHECK(plugins[0].identity == PluginIdentity::audioUnit(code("aufx"), code("Pass"), code("SyTs")));
     CHECK(plugins[0].location == units);
     CHECK(plugins[0].maker == "SymbolEngine Tests");

@@ -625,6 +625,28 @@ private:
     std::atomic<int> renders{0};
 };
 
+// Takes and gives back memory in every render from the sixth on.
+class Unsf final : public Checked
+{
+public:
+    explicit Unsf(AudioComponentInstance instance) : Checked(instance, "Unsf") {}
+
+protected:
+    OSStatus render(AudioUnitRenderActionFlags& flags, const AudioTimeStamp& time, UInt32 frames) override
+    {
+        if (++renders > 5)
+        {
+            void* volatile memory = std::malloc(64);
+            std::free(memory);
+        }
+
+        return Checked::render(flags, time, frames);
+    }
+
+private:
+    int renders = 0;
+};
+
 // Parameters: a gain from 0 to 2 it takes at the frame of each change; a mode of three named steps; a meter of its
 // output's level, which can't be written; an edit, which when set makes it move its gain itself in a gesture, as its
 // own window would; and more, which when set gives it a sixth parameter and says its list changed. It keeps a document
@@ -955,6 +977,7 @@ AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Time)
 AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Rate)
 AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, FixedBlocks)
 AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Late)
+AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Unsf)
 AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Gain)
 AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Lazy)
 AUSDK_COMPONENT_ENTRY(ausdk::AUBaseFactory, Picky)

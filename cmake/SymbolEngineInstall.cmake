@@ -15,6 +15,12 @@ foreach(module IN LISTS SYMBOLENGINE_MODULE_LIST)
     install(DIRECTORY ${PROJECT_SOURCE_DIR}/Modules/${module}/include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 endforeach()
 
+# What a program links on a Mac and Linux to watch for unsafe calls in the plugins it hosts, where it is built.
+if(TARGET symbolengine_host_unsafe_calls)
+    install(TARGETS symbolengine_host_unsafe_calls EXPORT SymbolEngineTargets
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
+endif()
+
 install(EXPORT SymbolEngineTargets NAMESPACE SymbolEngine:: DESTINATION ${package_folder})
 
 configure_package_config_file(${PROJECT_SOURCE_DIR}/cmake/SymbolEngineConfig.cmake.in

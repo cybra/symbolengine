@@ -32,6 +32,7 @@ set(sources
     src/PluginScanWorker.cpp
     src/PluginScanner.cpp
     src/ProcessState.cpp
+    src/UnsafeCalls.cpp
     src/Vst3Format.cpp
     src/Vst3Module.cpp
     ${sdk_sources})
@@ -45,7 +46,8 @@ if(APPLE)
                           "-framework CoreGraphics" "-framework Security")
 elseif(WIN32)
     list(APPEND sources src/MainThread_windows.cpp src/PluginCrashNote_windows.cpp src/ScanWorkerCrash_windows.cpp
-                        src/ScanWorkerLoop_windows.cpp src/Vst3Module_windows.cpp src/Vst3View_windows.cpp)
+                        src/ScanWorkerLoop_windows.cpp src/UnsafeCalls_windows.cpp src/Vst3Module_windows.cpp
+                        src/Vst3View_windows.cpp)
     list(APPEND libraries ole32 user32 version)
 else()
     list(APPEND sources src/MainThread_other.cpp src/PluginCrashNote_posix.cpp src/ScanWorkerCrash_posix.cpp
@@ -70,6 +72,28 @@ if(TARGET symbolengine_ui)
 endif()
 target_include_directories(symbolengine_host SYSTEM PRIVATE ${sdk})
 
+# What a program links, on a Mac and Linux, to watch for unsafe calls in the plugins it hosts: a library of its own, as
+# the system lets it see those calls only if it comes with the program as it starts. Never built with the sanitizers,
+# which take the same calls themselves.
+set(sanitized FALSE)
+if(CMAKE_CXX_FLAGS MATCHES "-fsanitize")
+    set(sanitized TRUE)
+endif()
+if(NOT WIN32 AND NOT sanitized)
+    add_library(symbolengine_host_unsafe_calls SHARED src/UnsafeCallsLibrary.cpp)
+    add_library(SymbolEngine::host_unsafe_calls ALIAS symbolengine_host_unsafe_calls)
+    set_target_properties(symbolengine_host_unsafe_calls PROPERTIES
+        EXPORT_NAME host_unsafe_calls CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+    target_compile_features(symbolengine_host_unsafe_calls PRIVATE cxx_std_20)
+    target_compile_options(symbolengine_host_unsafe_calls PRIVATE -fno-builtin)
+    target_link_libraries(symbolengine_host_unsafe_calls PRIVATE ${CMAKE_DL_LIBS} $<$<BOOL:${APPLE}>:objc>)
+    # Nothing in a program refers to it by name, which a linker would otherwise take as a reason to leave it out.
+    if(NOT APPLE)
+        target_link_options(symbolengine_host_unsafe_calls INTERFACE -Wl,--no-as-needed)
+    endif()
+    symbolengine_set_warnings(symbolengine_host_unsafe_calls)
+endif()
+
 if(SYMBOLENGINE_TESTS)
     add_subdirectory(Tests/Vst3)
 
@@ -88,6 +112,7 @@ if(SYMBOLENGINE_TESTS)
     symbolengine_set_warnings(symbolengine_host_scan_worker)
 
     set(test_sources Tests/Allocations.cpp Tests/CrashNoteTests.cpp Tests/EditorTests.cpp Tests/FreePluginTests.cpp
+                     Tests/UnsafeCallsAbsentTests.cpp
                      Tests/HostCheckerTests.cpp Tests/LateBlockTests.cpp
                      Tests/ParameterTests.cpp Tests/PluginLifeTests.cpp Tests/PluginListTests.cpp
                      Tests/PluginTimingTests.cpp Tests/ScanTests.cpp Tests/ScanWorkerTests.cpp Tests/TimeTests.cpp
@@ -139,8 +164,37 @@ if(SYMBOLENGINE_TESTS)
         "SYMBOLENGINE_HOST_CHECKER=\"$<TARGET_GENEX_EVAL:symbolengine_host_checker,$<TARGET_PROPERTY:symbolengine_host_checker,SYMBOLENGINE_BUNDLE>>\""
         "SYMBOLENGINE_MODULE_LIFE=\"$<TARGET_FILE:symbolengine_host_module_life>\""
         "SYMBOLENGINE_CRASH_NOTE=\"$<TARGET_FILE:symbolengine_host_crash_note>\"")
+    if(TARGET symbolengine_host_unsafe_calls)
+        target_compile_definitions(symbolengine_host_tests PRIVATE
+            "SYMBOLENGINE_UNSAFE_CALLS_LIBRARY=\"$<TARGET_FILE:symbolengine_host_unsafe_calls>\"")
+        add_dependencies(symbolengine_host_tests symbolengine_host_unsafe_calls)
+    endif()
     add_dependencies(symbolengine_host_tests symbolengine_test_vst3 symbolengine_host_checker
                      symbolengine_host_module_life
                      symbolengine_host_crash_note
                      symbolengine_host_scan_worker symbolengine_misbehaving_vst3)
+
+    # A program of its own for the tests of unsafe calls, linked to what watches for them as a program would be, leaving
+    # every other test free of it.
+    add_executable(symbolengine_host_unsafe_call_tests Tests/UnsafeCallTests.cpp)
+    target_link_libraries(symbolengine_host_unsafe_call_tests PRIVATE SymbolEngine::host Catch2::Catch2WithMain)
+    if(TARGET symbolengine_host_unsafe_calls)
+        target_link_libraries(symbolengine_host_unsafe_call_tests PRIVATE SymbolEngine::host_unsafe_calls)
+    endif()
+    symbolengine_set_warnings(symbolengine_host_unsafe_call_tests)
+    target_compile_definitions(symbolengine_host_unsafe_call_tests PRIVATE
+        "SYMBOLENGINE_TEST_VST3=\"$<TARGET_GENEX_EVAL:symbolengine_test_vst3,$<TARGET_PROPERTY:symbolengine_test_vst3,SYMBOLENGINE_BUNDLE>>\""
+        $<$<BOOL:${sanitized}>:SYMBOLENGINE_SANITIZED=1>)
+    add_dependencies(symbolengine_host_unsafe_call_tests symbolengine_test_vst3)
+    if(APPLE)
+        target_link_libraries(symbolengine_host_unsafe_call_tests PRIVATE "-framework AudioToolbox"
+                                                                          "-framework CoreFoundation")
+        target_compile_definitions(symbolengine_host_unsafe_call_tests PRIVATE
+            "SYMBOLENGINE_TEST_AUDIO_UNITS=\"$<TARGET_BUNDLE_DIR:symbolengine_test_audio_units>\"")
+        add_dependencies(symbolengine_host_unsafe_call_tests symbolengine_test_audio_units)
+    endif()
+    catch_discover_tests(symbolengine_host_unsafe_call_tests TEST_PREFIX "host: " TEST_SPEC "~[free]"
+                         DISCOVERY_MODE PRE_TEST)
+    catch_discover_tests(symbolengine_host_unsafe_call_tests TEST_PREFIX "host: " TEST_SPEC "[free]"
+                         DISCOVERY_MODE PRE_TEST PROPERTIES RUN_SERIAL TRUE)
 endif()
