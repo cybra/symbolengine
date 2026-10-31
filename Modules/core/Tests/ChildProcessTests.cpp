@@ -454,8 +454,8 @@ TEST_CASE("A child whose link is closed ends by itself")
 
 TEST_CASE("A child ends when the program that started it is killed")
 {
-    auto middle = startHelper({"middle", helper.string()}, true);
     Heard heard;
+    auto middle = startHelper({"middle", helper.string()}, true);
     heard.listenTo(*middle->link());
     middle->link()->start();
     REQUIRE(heard.waitForMessages(1));

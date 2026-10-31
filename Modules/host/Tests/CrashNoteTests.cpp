@@ -48,7 +48,9 @@ Run run(const std::filesystem::path& folder, const std::string& how)
     options.arguments = {note.string(), module.string(), how};
     options.outputFile = folder / "output.txt";
     // A sanitizer would catch the crash itself, before the program's handler.
-    options.environment = {{"ASAN_OPTIONS", "handle_segv=0:handle_sigbus=0:handle_sigill=0:handle_sigfpe=0"}};
+    options.environment = {
+        {"ASAN_OPTIONS", "handle_segv=0:handle_sigbus=0:handle_sigill=0:handle_sigfpe=0"},
+        {"TSAN_OPTIONS", "handle_segv=0:handle_sigbus=0:handle_sigill=0:handle_abort=0:report_thread_leaks=0"}};
     std::error_code started;
     auto program = ChildProcess::start(SYMBOLENGINE_CRASH_NOTE, options, started);
     REQUIRE(program != nullptr);

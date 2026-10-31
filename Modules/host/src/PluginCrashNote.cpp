@@ -48,7 +48,17 @@ std::uint64_t ownerOf(const crashNote::Thread& thread) noexcept
 
 bool takeOver(crashNote::Thread& thread, std::uint64_t from, std::uint64_t to) noexcept
 {
-    return std::atomic_ref(thread.owner).compare_exchange_strong(from, to, std::memory_order_acq_rel);
+    return std::atomic_ref(thread.owner).compare_exchange_strong(from, to);
+}
+
+std::int32_t slotOf(const crashNote::Thread& thread) noexcept
+{
+    return std::atomic_ref(const_cast<std::int32_t&>(thread.slot)).load();
+}
+
+void setSlot(crashNote::Thread& thread, std::int32_t slot) noexcept
+{
+    std::atomic_ref(thread.slot).store(slot);
 }
 }
 
@@ -75,8 +85,14 @@ struct PluginCrashNote::Impl
             if (ownerOf(thread) == 0 && takeOver(thread, 0, self))
                 return &thread;
         for (auto& thread : layout->threads)
-            if (const auto owner = ownerOf(thread); thread.slot < 0 && takeOver(thread, owner, self))
-                return &thread;
+            if (const auto owner = ownerOf(thread); slotOf(thread) < 0 && takeOver(thread, owner, self))
+            {
+                // Its thread may have come to use it at that moment: it says so before looking whose it is, as this
+                // takes it before looking whether it is in use, so one of the two sees the other.
+                if (slotOf(thread) < 0)
+                    return &thread;
+                takeOver(thread, self, owner);
+            }
         return nullptr;
     }
 };
@@ -264,8 +280,8 @@ crashNote::InCall::InCall(PluginCrashNote* note, int slot, const char* call, boo
 
     const auto self = native::thisThread();
 
-    // Its record can be taken over just as it comes to use it, having been idle until then, which it sees after saying what
-    // it is in, and takes back. Whoever took it has it, and nothing is left saying a call is under way that isn't.
+    // Its record can be taken over just as it comes to use it, having been idle until then, which it sees after saying it is
+    // in a call, and takes back. Past that it is this thread's alone until the call ends.
     for (int tries = 0; tries < 3; ++tries)
     {
         bool fresh = false;
@@ -273,25 +289,27 @@ crashNote::InCall::InCall(PluginCrashNote* note, int slot, const char* call, boo
         if (found == nullptr)
             return;
 
+        const auto before = fresh ? -1 : slotOf(*found);
+        setSlot(*found, static_cast<std::int32_t>(slot));
+
+        if (ownerOf(*found) != self)
+        {
+            auto said = static_cast<std::int32_t>(slot);
+            std::atomic_ref(found->slot).compare_exchange_strong(said, -1);
+            continue;
+        }
+
         // The call before it, of a call made from inside it, put back as this one ends.
-        previousSlot = fresh ? -1 : found->slot;
-        if (previousSlot >= 0)
+        previousSlot = before;
+        if (before >= 0)
         {
             previousAudio = found->audio;
             std::memcpy(previousCall, found->call, sizeof previousCall);
         }
         put(found->call, call);
         found->audio = audioThread ? 1 : 0;
-        set(found->slot, static_cast<std::int32_t>(slot));
-
-        if (ownerOf(*found) == self)
-        {
-            record = found;
-            return;
-        }
-
-        auto said = static_cast<std::int32_t>(slot);
-        std::atomic_ref(found->slot).compare_exchange_strong(said, -1);
+        record = found;
+        return;
     }
 }
 
@@ -306,7 +324,7 @@ crashNote::InCall::~InCall()
         record->audio = previousAudio;
     }
 
-    set(record->slot, previousSlot);
+    setSlot(*record, previousSlot);
 }
 
 }

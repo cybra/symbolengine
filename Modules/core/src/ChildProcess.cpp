@@ -225,7 +225,9 @@ bool ProcessLink::send(std::string_view message)
     if (message.size() > maximumMessage)
         return false;
 
-    return state->sendFrame(Frame::message, message, true);
+    // Kept for as long as this takes, as a send that a child not reading holds up ends only when the link is let go of.
+    const auto held = state;
+    return held->sendFrame(Frame::message, message, true);
 }
 
 bool ProcessLink::isLost() const
