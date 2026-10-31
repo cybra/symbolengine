@@ -523,7 +523,7 @@ public:
         const auto frames = static_cast<std::int64_t>(std::llround(static_cast<double>(latency) * now.sampleRate / 1e7)) + periodFrames;
         (capture ? now.inputLatency : now.outputLatency) = latency > 0 ? frames : -1;
         const auto given = scheduled.load();
-        now.priority = given >= 0 ? detail::wordsFor(static_cast<detail::ThreadLevel>(given)) : "";
+        now.priority = given >= 0 ? windowsAudio::detail::wordsFor(static_cast<windowsAudio::detail::ThreadLevel>(given)) : "";
         now.unprocessed = capture && raw;
         return now;
     }
@@ -677,7 +677,7 @@ private:
     {
         DWORD index = 0;
         HANDLE registered = nullptr;
-        scheduled = static_cast<int>(detail::reachThreadLevel(
+        scheduled = static_cast<int>(windowsAudio::detail::reachThreadLevel(
             [&](const wchar_t* task)
             {
                 registered = AvSetMmThreadCharacteristicsW(task, &index);
