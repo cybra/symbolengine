@@ -92,7 +92,6 @@ Answer get(const Request& request, const std::function<bool(int status, std::str
     // What follows a # stays here, where the system's call keeps it with the query.
     std::wstring path = std::wstring(parts.lpszUrlPath, parts.dwUrlPathLength) +
                         std::wstring(parts.lpszExtraInfo, parts.dwExtraInfoLength);
-    path.erase(std::min(path.find(L'#'), path.size()));
 
     const Internet session(WinHttpOpen(L"SymbolEngine", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
                                        WINHTTP_NO_PROXY_BYPASS, 0));

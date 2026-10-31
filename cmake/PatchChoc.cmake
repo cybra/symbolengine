@@ -226,15 +226,6 @@ replace_once("webviewFailed" [=[        std::function<void(choc::ui::WebView&)> 
         std::function<void()> webviewRendererLost;
 ]=])
 
-replace_once("said when no runtime" [=[                        eventHandler = new EventHandler (*this);
-                        createCoreWebView2EnvironmentWithOptions (nullptr, userDataFolder.c_str(), nullptr, eventHandler);
-                        return true;
-]=] [=[                        eventHandler = new EventHandler (*this);
-
-                        // Without a runtime to use this fails here, said when no runtime is to be had.
-                        return createCoreWebView2EnvironmentWithOptions (nullptr, userDataFolder.c_str(), nullptr, eventHandler) == S_OK;
-]=])
-
 replace_once("ownerPimpl.startFailed" [=[        HRESULT STDMETHODCALLTYPE Invoke (HRESULT, ICoreWebView2Environment* env) override
         {
             if (env == nullptr || deletionCheckerRef->deleted)
@@ -528,33 +519,6 @@ replace_once("#include <atomic>" [=[#define Rectangle Rectangle_renamed_to_avoid
 #define Rectangle Rectangle_renamed_to_avoid_name_collisions
 ]=])
 
-replace_once("GetModuleHandleExA" [=[        className = "choc_" + std::to_string (rand());
-
-        WNDCLASSEXA wc = {};
-        wc.cbSize = sizeof (wc);
-        wc.hInstance = GetModuleHandleA (nullptr);
-]=] [=[        static std::atomic<unsigned> made { 0 };
-        className = "choc_" + std::to_string (reinterpret_cast<uintptr_t> (&windowProc)) + "_" + std::to_string (++made);
-
-        GetModuleHandleExA (GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                            reinterpret_cast<LPCSTR> (&windowProc), &moduleHandle);
-
-        WNDCLASSEXA wc = {};
-        wc.cbSize = sizeof (wc);
-        wc.hInstance = moduleHandle;
-]=])
-
-replace_once("UnregisterClassA (className.c_str(), moduleHandle)" [=[        UnregisterClassA (className.c_str(), nullptr);
-]=] [=[        UnregisterClassA (className.c_str(), moduleHandle);
-]=])
-
-replace_once("HMODULE moduleHandle" [=[    HWND hwnd;
-    std::string className;
-]=] [=[    HWND hwnd;
-    HMODULE moduleHandle = {};
-    std::string className;
-]=])
-
 file(WRITE "choc/gui/choc_MessageLoop.h" "${source}")
 
 file(READ "choc/gui/choc_DesktopWindow.h" source)
@@ -562,16 +526,6 @@ file(READ "choc/gui/choc_DesktopWindow.h" source)
 replace_once("#include <atomic>" [=[#define Rectangle Rectangle_renamed_to_avoid_name_collisions
 ]=] [=[#include <atomic>
 #define Rectangle Rectangle_renamed_to_avoid_name_collisions
-]=])
-
-replace_once("GetModuleHandleExW" [=[        name += std::to_wstring (static_cast<uint32_t> (GetTickCount()));
-
-        moduleHandle = GetModuleHandle (nullptr);
-]=] [=[        static std::atomic<unsigned> made { 0 };
-        name += std::to_wstring (reinterpret_cast<uintptr_t> (wndProc)) + L"_" + std::to_wstring (++made);
-
-        GetModuleHandleExW (GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                            reinterpret_cast<LPCWSTR> (wndProc), &moduleHandle);
 ]=])
 
 file(WRITE "choc/gui/choc_DesktopWindow.h" "${source}")

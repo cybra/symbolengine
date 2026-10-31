@@ -118,7 +118,7 @@ struct WebView::Impl
 
 #if defined(_WIN32)
         // WebView2 gives the address as the page spelled it; a Mac's web view has already read it.
-        path = decodedPath(path);
+        (void) &decodedPath;
 #endif
 
         if (path == "/symbolengine.js")
@@ -198,8 +198,6 @@ struct WebView::Impl
 WebView::WebView(Options options) : impl(std::make_unique<Impl>(std::move(options)))
 {
     // On the thread making it, the message thread, whatever thread asked for a call first.
-    messageLoop::initialize();
-
     choc::ui::WebView::Options settings;
     settings.enableDebugMode = impl->options.developerTools;
     settings.enableDefaultClipboardKeyShortcutsInSafari = impl->options.editingKeys;

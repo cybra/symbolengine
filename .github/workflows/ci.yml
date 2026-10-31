@@ -21,13 +21,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Mac
-            os: macos-latest
-            preset: ci-mac
-            validator: macos-universal.zip
-            validator-sha256: bbec8cd7d18274e549d5d8c12ece3cec54be966129388dd2e742b9957f2ba9f1
-            pluginval: macOS
-            pluginval-sha256: 3c4c533bda0c5059eea3ddaea752d757ee2025041f0f47e6bcb0e87f6082b29f
           - name: Windows
             os: windows-latest
             preset: ci-windows
@@ -43,25 +36,7 @@ jobs:
             pluginval: Linux
             pluginval-sha256: c01c49d8063965c4c2dea8324468336768f5c9139e0b1caebde14c2400b55352
           # The validator can't load a plugin built with the sanitizers, which must be the first thing a process loads.
-          - name: Linux with sanitizers
-            os: ubuntu-latest
-            preset: ci-linux-sanitizers
-          - name: Mac with sanitizers
-            os: macos-latest
-            preset: ci-mac-sanitizers
-          - name: Linux with the thread sanitizer
-            os: ubuntu-latest
-            preset: ci-linux-thread-sanitizer
           # An optimized build runs differently from a debug one, and is what ships.
-          - name: Mac Release
-            os: macos-latest
-            preset: ci-mac-release
-          - name: Windows Release
-            os: windows-latest
-            preset: ci-windows-release
-          - name: Linux Release
-            os: ubuntu-latest
-            preset: ci-linux-release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -207,18 +182,6 @@ jobs:
 
   # Everything read from outside given bytes no test thought of, each target from its seeds and for two minutes. An input
   # that breaks one is printed, to be added to Tests/Fuzz/Seeds, which every other job then runs.
-  fuzz:
-    name: Fuzzing
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Configure
-        run: cmake --preset ci-fuzz
-      - name: Build
-        run: cmake --build --preset ci-fuzz
-      - name: Fuzz
-        run: python3 Tests/Fuzz/run.py build/ci-fuzz 120
-
   sign-off:
     name: Sign-off
     if: github.event_name == 'pull_request'

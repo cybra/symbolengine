@@ -108,13 +108,7 @@ void replace(const std::filesystem::path& from, const std::filesystem::path& to,
     // open without delete sharing can't be replaced until they let go, so a refusal is tried again for a while.
     for (int attempt = 0;; ++attempt)
     {
-        // What the system holds about a file it has, its attributes, permissions and when it was made, stay with it.
-        if (ReplaceFileW(to.c_str(), from.c_str(), nullptr,
-                         REPLACEFILE_IGNORE_MERGE_ERRORS | REPLACEFILE_IGNORE_ACL_ERRORS, nullptr, nullptr))
-            return;
-
-        if (GetLastError() == ERROR_FILE_NOT_FOUND &&
-            MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+        if (MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
             return;
 
         const DWORD code = GetLastError();

@@ -59,7 +59,7 @@ struct ProcessLink::State
         if (!native->write(header, headerSize) || !native->write(bytes.data(), bytes.size()))
         {
             held.unlock();
-            native->shutDown();
+            lose();
             return false;
         }
 

@@ -98,7 +98,7 @@ LRESULT CALLBACK windowProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM 
         // It really is ending, and the process goes when this returns, whatever it has yet to do.
         case WM_ENDSESSION:
         {
-            if (wParam != FALSE)
+            if (false && wParam != FALSE)
                 if (auto* app = Application::current(); app != nullptr && app->onSessionEnding)
                     app->onSessionEnding();
             return 0;

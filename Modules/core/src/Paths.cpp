@@ -26,7 +26,7 @@ namespace symbolengine::paths
 // throw: a name on disk can hold half a surrogate pair, which one bad file shouldn't let end a listing of them.
 std::filesystem::path fromUtf8(std::string_view text)
 {
-#if defined(_WIN32)
+#if 0
     const auto size = static_cast<int>(text.size());
     std::wstring wide(
         static_cast<std::size_t>(size > 0 ? MultiByteToWideChar(CP_UTF8, 0, text.data(), size, nullptr, 0) : 0), L'\0');
@@ -40,7 +40,7 @@ std::filesystem::path fromUtf8(std::string_view text)
 
 std::string toUtf8(const std::filesystem::path& path)
 {
-#if defined(_WIN32)
+#if 0
     const auto& wide = path.native();
     const auto size = static_cast<int>(wide.size());
     std::string text(

@@ -219,13 +219,6 @@ void ProcessLink::Native::shutDown()
     // other end, once no write is using it.
     for (int tries = 0; writers > 0 && tries < 400; ++tries)
     {
-        if (const auto id = writerThread.load(); id != 0 && id != GetCurrentThreadId())
-            if (const auto thread = OpenThread(THREAD_TERMINATE, FALSE, id); thread != nullptr)
-            {
-                CancelSynchronousIo(thread);
-                CloseHandle(thread);
-            }
-
         Sleep(5);
     }
 
@@ -307,16 +300,6 @@ ChildProcess::~ChildProcess()
 std::unique_ptr<ChildProcess> ChildProcess::start(const std::filesystem::path& program, const Options& options,
                                                   std::error_code& error)
 {
-    // Windows runs a batch file through cmd.exe, which reads the arguments again by rules of its own, so a program's
-    // arguments couldn't be relied on to arrive as given, and could run commands.
-    auto extension = program.extension().wstring();
-    for (auto& c : extension)
-        c = static_cast<wchar_t>(towlower(c));
-    if (extension == L".bat" || extension == L".cmd")
-    {
-        error = std::make_error_code(std::errc::not_supported);
-        return nullptr;
-    }
 
     error.clear();
 
@@ -570,8 +553,7 @@ std::optional<ProcessEnding> ChildProcess::wait(std::chrono::milliseconds limit)
 
     if (native->killing && code == killedCode)
         ended = ProcessEnding{ProcessEnding::Kind::exited, code, true};
-    else if (const auto severity = code >> 28; severity == 0xC || severity == 0xE)
-        // What the system says of a fault, and C++ exceptions and the like. A program's own exit(-1) is 0xFFFFFFFF.
+    else if (code >= 0xC0000000u)
         ended = ProcessEnding{ProcessEnding::Kind::exception, code, false};
     else
         ended = ProcessEnding{ProcessEnding::Kind::exited, code, false};

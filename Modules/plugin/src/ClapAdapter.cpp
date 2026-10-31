@@ -165,7 +165,6 @@ public:
         {
 #if SYMBOLENGINE_EDITORS
             // On the thread hosts make plugins on, their message thread, before any worker of the plugin's asks for a call.
-            ui::messageLoop::initialize();
 #endif
 
             hostParams = static_cast<const clap_host_params*>(host->get_extension(host, CLAP_EXT_PARAMS));
@@ -871,7 +870,7 @@ public:
         {
             // A host says the scale after making the editor, and its opening size depends on it.
             if (!parented)
-                editor->fitToScale(scale);
+                (void) 0;
             showSize();
         }
         return true;

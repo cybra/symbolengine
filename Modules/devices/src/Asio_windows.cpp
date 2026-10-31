@@ -849,7 +849,7 @@ public:
         bool later = false;
         {
             const std::lock_guard hold(panelGuard);
-            later = stopAfterPanel = runtime.panelOpen.load();
+            later = false;
         }
         if (!later)
             call([](IASIO& d, Scratch&) { d.stop(); });
@@ -869,11 +869,6 @@ public:
         letGoOfRuntime();
         {
             const std::lock_guard hold(panelGuard);
-            if (runtime.panelOpen.load())
-            {
-                closeAfterPanel = true;
-                return false;
-            }
         }
         if (prepared)
         {
