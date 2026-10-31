@@ -5,6 +5,7 @@ Bugs found in the libraries and tools SymbolEngine builds on, each written up fo
 | Project | Report | Where it goes | Filed | SymbolEngine meanwhile |
 |---|---|---|---|---|
 | libvorbis | [The 5.1 encoder leaks the LFE's residue](libvorbis-51-residue-leak.md) | A comment on Xiph's GitLab issue #2357 | Yes | Builds a copy of `vorbisenc.c` that frees it |
+| libvorbis | [Opening a chained file can lose what a link read](libvorbis-chained-open-leak.md) | A new issue on Xiph's GitLab | No | Builds a copy of `vorbisfile.c` that frees it |
 | opusfile | [Opening a chained file can lose a link's tags](opusfile-chained-tags-leak.md) | A new issue on Xiph's GitLab | No | Builds a copy of `opusfile.c` that frees them |
 | CHOC | [Two plugins in one process can share a window class](choc-window-classes.md) | A new issue on GitHub | No | `cmake/PatchChoc.cmake` makes the fix |
 | CHOC | [WebView2 failing to start isn't reported](choc-webview2-start.md) | A new issue on GitHub | No | `cmake/PatchChoc.cmake` makes the fix |

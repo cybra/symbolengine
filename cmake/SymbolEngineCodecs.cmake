@@ -78,7 +78,7 @@ set(ogg_sources ${ogg}/src/bitwise.c ${ogg}/src/framing.c)
 
 set(vorbis_sources)
 foreach(file mdct smallft block envelope window lsp lpc analysis synthesis psy info floor1 floor0 res0 mapping0 registry
-             codebook sharedbook lookup bitrate vorbisfile)
+             codebook sharedbook lookup bitrate)
     list(APPEND vorbis_sources ${vorbis}/lib/${file}.c)
 endforeach()
 
@@ -96,6 +96,26 @@ string(REPLACE "${vorbis_residue}"
 file(WRITE ${codec_generated}/vorbisenc.c.new "${vorbisenc}")
 file(COPY_FILE ${codec_generated}/vorbisenc.c.new ${codec_generated}/vorbisenc.c ONLY_IF_DIFFERENT)
 list(APPEND vorbis_sources ${codec_generated}/vorbisenc.c)
+
+# Opening a chained file, a link that fails partway leaves what the link before it had read for it, which a copy of
+# vorbisfile.c lets go, until libvorbis has the fix (Docs/Upstream/libvorbis-chained-open-leak.md).
+file(READ ${vorbis}/lib/vorbisfile.c vorbisfile)
+set(vorbis_fetch "    ret=_fetch_headers(vf,&vi,&vc,&next_serialno_list,&next_serialnos,NULL);\n    if(ret)return(ret);\n")
+set(vorbis_bisect "                                 next_serialno_list,next_serialnos,m+1);\n    if(ret)return(ret);\n")
+string(FIND "${vorbisfile}" "${vorbis_fetch}" found_fetch)
+string(FIND "${vorbisfile}" "${vorbis_bisect}" found_bisect)
+if(found_fetch EQUAL -1 OR found_bisect EQUAL -1)
+    message(FATAL_ERROR "libvorbis' vorbisfile.c no longer opens a chained file as SymbolEngine's copy of it expects")
+endif()
+string(REPLACE "${vorbis_fetch}"
+    "    ret=_fetch_headers(vf,&vi,&vc,&next_serialno_list,&next_serialnos,NULL);\n    if(ret){\n      if(next_serialno_list)_ogg_free(next_serialno_list);\n      return(ret);\n    }\n"
+    vorbisfile "${vorbisfile}")
+string(REPLACE "${vorbis_bisect}"
+    "                                 next_serialno_list,next_serialnos,m+1);\n    if(ret){\n      if(next_serialno_list)_ogg_free(next_serialno_list);\n      vorbis_info_clear(&vi);\n      vorbis_comment_clear(&vc);\n      return(ret);\n    }\n"
+    vorbisfile "${vorbisfile}")
+file(WRITE ${codec_generated}/vorbisfile.c.new "${vorbisfile}")
+file(COPY_FILE ${codec_generated}/vorbisfile.c.new ${codec_generated}/vorbisfile.c ONLY_IF_DIFFERENT)
+list(APPEND vorbis_sources ${codec_generated}/vorbisfile.c)
 
 set(flac_sources)
 foreach(file bitmath bitreader bitwriter cpu crc fixed float format lpc md5 memory metadata_iterators metadata_object
