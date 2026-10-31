@@ -8,6 +8,7 @@
 #include <windows.h>
 #include <winhttp.h>
 
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <vector>
@@ -134,6 +135,14 @@ Answer get(const Request& request, const std::function<bool(int status, std::str
                             WINHTTP_HEADER_NAME_BY_INDEX, &status, &statusSize, WINHTTP_NO_HEADER_INDEX))
         answer.status = static_cast<int>(status);
 
+    // WinHTTP takes a connection lost partway for the answer's end, so what came is held to the length it said it was.
+    wchar_t stated[32]{};
+    DWORD statedSize = sizeof stated;
+    const auto hasLength = WinHttpQueryHeaders(asked.get(), WINHTTP_QUERY_CONTENT_LENGTH, WINHTTP_HEADER_NAME_BY_INDEX,
+                                               stated, &statedSize, WINHTTP_NO_HEADER_INDEX) != FALSE;
+    const auto length = hasLength ? std::wcstoull(stated, nullptr, 10) : 0ULL;
+    unsigned long long total = 0;
+
     std::vector<char> piece(1 << 16);
 
     for (;;)
@@ -147,7 +156,14 @@ Answer get(const Request& request, const std::function<bool(int status, std::str
         }
 
         if (read == 0)
+        {
+            if (hasLength && total < length)
+                answer.problem = "The connection was lost before the whole answer came.";
+
             return answer;
+        }
+
+        total += read;
 
         if (!received(answer.status, std::string_view(piece.data(), read)))
             return answer;
