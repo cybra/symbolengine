@@ -685,7 +685,7 @@ TEST_CASE("A send to a child that reads nothing ends when the child's object goe
     std::this_thread::sleep_for(500ms);
     const auto started = std::chrono::steady_clock::now();
     child.reset();
-    CHECK(std::chrono::steady_clock::now() - started < 5s);
+    CHECK(std::chrono::steady_clock::now() - started < 1s);
 
     const auto until = std::chrono::steady_clock::now() + 5s;
     while (sending && std::chrono::steady_clock::now() < until)

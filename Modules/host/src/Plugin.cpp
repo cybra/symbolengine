@@ -2166,7 +2166,10 @@ PluginEditor::~PluginEditor()
     auto close = [inner, kept, plugin = std::move(held)]() mutable {
         // Nor is a plugin stuck in its processing called, as closing its editor would very likely wait on the same lock.
         if (inner->crashed || (inner->state == Plugin::State::failed && inner->inProcess))
-            static_cast<void>(kept->release());
+        {
+            static auto* const notClosed = new std::vector<std::unique_ptr<PluginFormatEditor>>();
+            notClosed->push_back(std::move(*kept));
+        }
         else
             inner->call("closeEditor", [&] { kept->reset(); });
 

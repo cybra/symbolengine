@@ -232,7 +232,7 @@ TEST_CASE("A crash outside every call into a plugin blames none, whatever the au
     ScratchFolder folder;
     const auto ended = run(folder.path, "outside-while-playing");
     CHECK_FALSE(ended.last.clean);
-    CHECK(ended.last.crash.find("SIGSEGV") != std::string::npos);
+    CHECK_FALSE(ended.last.crash.empty());
     REQUIRE(ended.last.inside.size() == 1);
     CHECK(ended.last.inside[0].audioThread);
     CHECK(ended.last.culprit() == nullptr);

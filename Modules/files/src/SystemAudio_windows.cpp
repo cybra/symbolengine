@@ -1,3 +1,4 @@
+#include "BoundedWork.h"
 #include "Formats.h"
 #include "Mp4.h"
 
@@ -15,7 +16,11 @@
 #include <mfreadwrite.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <memory>
+#include <thread>
 
 // MPEG-4 audio, ADTS and Windows Media's ASF through Media Foundation's source reader, which decodes to floats with the channels in WAV's
 // order; Windows has no reader for CAF, nor for WAV and AIFF-C coded in ways of their own. Media Foundation acts on an
@@ -30,6 +35,10 @@
 // apartment, kept open for them, so no thread's COM is started or changed here.
 namespace symbolengine::detail
 {
+
+// How long a call into Media Foundation may go without an answer, and for the tests, the next read to be one that never gets one.
+std::atomic<int> systemAnswerLimit{30'000};
+std::atomic<bool> holdNextSystemRead{false};
 
 namespace
 {
@@ -106,6 +115,8 @@ constexpr GUID pcm = audioSubtype(0x0001);
 
 class SystemReader final : public AudioFileReader
 {
+    friend class BoundedReader;
+
 public:
     SystemReader(std::unique_ptr<RandomAccessFile> f, const std::filesystem::path& p, SystemFormat kind)
         : file(std::move(f)), adts(kind == SystemFormat::adts), asf(kind == SystemFormat::asf)
@@ -274,6 +285,7 @@ private:
                 continue;
             }
 
+            ++progress;
             DWORD flags = 0;
             LONGLONG time = 0;
             Com<IMFSample> sample;
@@ -337,6 +349,9 @@ private:
 
     std::size_t readFrames(std::uint64_t from, float* const* channels, std::size_t frames, std::error_code& error) override
     {
+        if (holdNextSystemRead.exchange(false))
+            std::this_thread::sleep_for(std::chrono::hours(1000));
+
         // Reading on from where the last read ended keeps what is decoded; anywhere else, decoding starts again.
         if (from < heldStart || from > heldStart + heldFrames())
         {
@@ -392,6 +407,7 @@ private:
     std::uint64_t priming = 0;    // what Media Foundation's times count that the audio doesn't: iTunSMPB's priming
     long long origin = 0;         // and the time its first stretch has
     Com<IMFSourceReader> reader;
+    std::atomic<std::uint64_t> progress{0};
     std::vector<float> held;
     std::uint64_t heldStart = 0;
     bool placed = false;
@@ -399,6 +415,110 @@ private:
     std::vector<float> pending;
     long long pendingFirst = 0;
     bool waiting = false;
+};
+
+// A system reader on a thread of its own, as Media Foundation has been seen never to return from a call, on a test runner, on
+// files it reads perfectly well the next time. A reader that stops answering is left to it, and a new one goes on from there.
+class BoundedReader final : public AudioFileReader
+{
+public:
+    BoundedReader(const std::filesystem::path& p, SystemFormat format) : kind(format) { path = p; }
+
+    ~BoundedReader() override
+    {
+        // Letting go of it is a call into Media Foundation too.
+        if (work != nullptr && inner != nullptr && !work->stuck())
+            work->run([held = std::move(inner)]() mutable { held.reset(); }, answerLimit());
+    }
+
+    void start(std::unique_ptr<RandomAccessFile> file, std::error_code& error)
+    {
+        if (connect(std::move(file), error))
+            return;
+        if (!error && !reconnect(error))
+            error = AudioFileError::damaged;
+    }
+
+protected:
+    std::size_t readFrames(std::uint64_t from, float* const* channels, std::size_t frames,
+                           std::error_code& error) override
+    {
+        for (int attempt = 0; attempt < 2; ++attempt)
+        {
+            if (inner == nullptr && !reconnect(error))
+                break;
+
+            // Into room of its own, as a read that doesn't come back may still write.
+            auto job = std::make_shared<Job>();
+            const auto count = static_cast<std::size_t>(information.channels);
+            job->samples.assign(count, std::vector<float>(frames));
+            for (auto& channel : job->samples)
+                job->pointers.push_back(channel.data());
+
+            if (work->run([held = inner, job, from,
+                           frames] { job->done = held->readFrames(from, job->pointers.data(), frames, job->error); },
+                          answerLimit(), &inner->progress))
+            {
+                error = job->error;
+                for (std::size_t c = 0; c < count; ++c)
+                    std::copy_n(job->samples[c].data(), job->done, channels[c]);
+                information = inner->information;
+                lengthEstimated = inner->lengthEstimated;
+                return job->done;
+            }
+
+            abandon();
+        }
+
+        if (!error)
+            error = AudioFileError::damaged;
+        return 0;
+    }
+
+private:
+    struct Job
+    {
+        std::vector<std::vector<float>> samples;
+        std::vector<float*> pointers;
+        std::size_t done = 0;
+        std::error_code error;
+    };
+
+    static std::chrono::milliseconds answerLimit() { return std::chrono::milliseconds(systemAnswerLimit.load()); }
+
+    void abandon()
+    {
+        inner.reset();
+        work.reset();
+    }
+
+    // Whether the reader answered, as an error if it has one. One that doesn't is let go.
+    bool connect(std::unique_ptr<RandomAccessFile> file, std::error_code& error)
+    {
+        work = std::make_unique<BoundedWork>();
+        inner = std::make_shared<SystemReader>(std::move(file), path, kind);
+        auto answer = std::make_shared<std::error_code>();
+        if (!work->run([held = inner, answer] { held->start(*answer); }, answerLimit(), &inner->progress))
+        {
+            abandon();
+            return false;
+        }
+
+        error = *answer;
+        information = inner->information;
+        lengthEstimated = inner->lengthEstimated;
+        return true;
+    }
+
+    bool reconnect(std::error_code& error)
+    {
+        auto file = RandomAccessFile::open(path, error);
+        return file != nullptr && !error && connect(std::move(file), error) && !error;
+    }
+
+    SystemFormat kind;
+    std::unique_ptr<BoundedWork> work;
+    std::shared_ptr<SystemReader> inner;
 };
 }
 
@@ -416,8 +536,8 @@ std::unique_ptr<AudioFileReader> openSystemAudio(std::unique_ptr<RandomAccessFil
         return nullptr;
     }
 
-    auto reader = std::make_unique<SystemReader>(std::move(file), path, format);
-    reader->start(error);
+    auto reader = std::make_unique<BoundedReader>(path, format);
+    reader->start(std::move(file), error);
     if (error)
         return nullptr;
     return reader;

@@ -45,6 +45,7 @@ if(SYMBOLENGINE_TESTS)
         Tests/AiffTests.cpp
         Tests/AudioFileTests.cpp
         Tests/BackgroundAudioWriterTests.cpp
+        Tests/BoundedWorkTests.cpp
         Tests/BroadcastWaveTests.cpp
         Tests/CodecTests.cpp
         Tests/Mp3Tests.cpp

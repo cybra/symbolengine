@@ -6,6 +6,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <string_view>
 
 using namespace symbolengine;
@@ -270,3 +272,33 @@ TEST_CASE("CAF reads through the Mac's decoder, and where there's none it, M4A a
     }
 #endif
 }
+
+#if defined(_WIN32)
+namespace symbolengine::detail
+{
+extern std::atomic<int> systemAnswerLimit;
+extern std::atomic<bool> holdNextSystemRead;
+}
+
+TEST_CASE("A system decoder that stops answering is left to it, and the read goes on in a new one, none the wiser")
+{
+    auto reader = files::openAudio(reference("alac24-stereo-48000.m4a"));
+    const auto limit = detail::systemAnswerLimit.exchange(300);
+    detail::holdNextSystemRead = true;
+
+    const auto began = std::chrono::steady_clock::now();
+    const auto samples = pattern::readAll(*reader);
+    CHECK(std::chrono::steady_clock::now() - began >= std::chrono::milliseconds(300));
+    detail::systemAnswerLimit = limit;
+    CHECK_FALSE(detail::holdNextSystemRead.load());
+
+    REQUIRE(samples[0].size() == pattern::referenceFrames);
+    for (int c = 0; c < 2; ++c)
+        for (std::uint64_t frame = 0; frame < pattern::referenceFrames; ++frame)
+            if (samples[static_cast<std::size_t>(c)][frame] != pattern::read(frame, c, 24))
+            {
+                CAPTURE(c, frame);
+                FAIL("a sample differs");
+            }
+}
+#endif
