@@ -12,6 +12,7 @@ option(SYMBOLENGINE_UI "Build the ui module, which fetches CHOC for the system's
 option(SYMBOLENGINE_PLUGIN "Build the plugin module, which fetches the CLAP SDK and clap-wrapper" ON)
 option(SYMBOLENGINE_EXAMPLES "Build SymbolEngine's examples" ${PROJECT_IS_TOP_LEVEL})
 option(SYMBOLENGINE_WARNINGS_AS_ERRORS "Treat warnings in SymbolEngine's own code as errors" OFF)
+option(SYMBOLENGINE_FUZZ "Build the fuzz targets for libFuzzer, in a build whose flags hold -fsanitize=fuzzer-no-link" OFF)
 
 if(APPLE AND CMAKE_OSX_DEPLOYMENT_TARGET AND CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS 11.0)
     message(FATAL_ERROR "SymbolEngine needs macOS 11.0 or later; CMAKE_OSX_DEPLOYMENT_TARGET is ${CMAKE_OSX_DEPLOYMENT_TARGET}")
@@ -60,4 +61,8 @@ endif()
 
 if(SYMBOLENGINE_TESTS)
     add_subdirectory(Tests)
+endif()
+
+if(SYMBOLENGINE_TESTS OR SYMBOLENGINE_FUZZ)
+    add_subdirectory(Tests/Fuzz)
 endif()

@@ -1,0 +1,5 @@
+{"format": 1, "files": [
+{"path": "/a/b.vst3", "format": "VST3", "stamp": {"size": 10, "modified": 5}, "outcome": "found", "plugins": [], "complete": true, "connected": true}
+], "seen": [
+{"id": "x", "firstSeen": 1}
+]}

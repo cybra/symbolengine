@@ -339,7 +339,7 @@ TEST_CASE("A worker that ends without answering has failed, whatever its exit co
     CHECK(scan.done.empty());
 }
 
-TEST_CASE("Answers that aren't right are never taken: another request's, cut short, empty, malformed, twice or none")
+TEST_CASE("Answers that aren't right are never taken: another request's, cut short, empty, malformed, twice or none", "[timing]")
 {
     const auto mode =
         GENERATE(std::string("wrongNumber"), std::string("cutShort"), std::string("empty"), std::string("notAPlugin"),
@@ -381,7 +381,7 @@ TEST_CASE("Answers that aren't right are never taken: another request's, cut sho
         CHECK(scan.failed[0].step == "starting the scan");
 }
 
-TEST_CASE("A worker ends by itself once its link is closed, and once its program is killed or quits")
+TEST_CASE("A worker ends by itself once its link is closed, and once its program is killed or quits", "[timing]")
 {
     SECTION("Its link closed")
     {

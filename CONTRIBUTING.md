@@ -12,6 +12,8 @@ cmake --build --preset mac
 ctest --preset mac
 ```
 
+Everything read from outside has a fuzz target in `Tests/Fuzz`. A build with `SYMBOLENGINE_FUZZ`, as the `ci-fuzz` preset makes it with a clang that has libFuzzer, and `python3 Tests/Fuzz/run.py <build folder> <seconds>` run them. An input that breaks one goes in its folder in `Tests/Fuzz/Seeds`, so it stays a test on every system.
+
 ## Code
 
 - C++20 and its standard library. A new dependency needs a permissive license (MIT, ISC, BSD, zlib, Boost or Apache 2.0) and is fetched by CMake, pinned by its checksum.

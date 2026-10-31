@@ -525,10 +525,9 @@ TEST_CASE("A read after a seek that failed reads from where it asks, never from 
     INFO("read past the cut gave " << past << ", " << error.message());
     CHECK((error || past == 0));
 
-    // Whatever that did, each stretch asked for after it is that stretch, wherever the decoder was left, from the first
-    // frames to the last, some of them more than a search through a length that misleads it can find.
-    for (std::uint64_t from = 100; from + got.size() <= there; from += 777)
-    {
+    // Whatever that did, each stretch asked for after it is that stretch, wherever the decoder was left, the one following
+    // on from the last read as much as any other.
+    const auto readsRight = [&](std::uint64_t from) {
         CAPTURE(from);
         error.clear();
         const auto back = reader->read(from, into, got.size(), error);
@@ -536,6 +535,12 @@ TEST_CASE("A read after a seek that failed reads from where it asks, never from 
         REQUIRE(back == got.size());
         for (std::size_t i = 0; i < back; ++i)
             REQUIRE(got[i] == samples[static_cast<std::size_t>(from) + i]);
-        static_cast<void>(reader->read(29000, into, 16, error));
+    };
+
+    for (std::uint64_t from = 100; from + 2 * got.size() <= there; from += 777)
+    {
+        readsRight(from);
+        CHECK(reader->read(29000, into, 16, error) == 0);
+        readsRight(from + got.size());
     }
 }

@@ -67,6 +67,56 @@
         "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer",
         "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined"
       }
+    },
+    {
+      "name": "ci-mac-release",
+      "inherits": "ci-mac",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    { "name": "ci-windows-release", "inherits": "ci-windows" },
+    {
+      "name": "ci-linux-release",
+      "inherits": "ci-linux",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "ci-mac-sanitizers",
+      "inherits": "ci-mac",
+      "cacheVariables": {
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_C_FLAGS": "-fsanitize=address -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined"
+      }
+    },
+    {
+      "name": "ci-linux-thread-sanitizer",
+      "inherits": "ci-linux",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_C_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread"
+      }
+    },
+    {
+      "name": "ci-fuzz",
+      "inherits": "ci-linux",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_C_FLAGS": "-fsanitize=fuzzer-no-link,address -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=fuzzer-no-link,address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined",
+        "SYMBOLENGINE_TESTS": "OFF",
+        "SYMBOLENGINE_EXAMPLES": "OFF",
+        "SYMBOLENGINE_INSTALL": "OFF",
+        "SYMBOLENGINE_UI": "OFF",
+        "SYMBOLENGINE_PLUGIN": "OFF",
+        "SYMBOLENGINE_FUZZ": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -76,7 +126,13 @@
     { "name": "ci-mac", "configurePreset": "ci-mac", "jobs": 4 },
     { "name": "ci-windows", "configurePreset": "ci-windows", "configuration": "Debug" },
     { "name": "ci-linux", "configurePreset": "ci-linux", "jobs": 4 },
-    { "name": "ci-linux-sanitizers", "configurePreset": "ci-linux-sanitizers", "jobs": 4 }
+    { "name": "ci-linux-sanitizers", "configurePreset": "ci-linux-sanitizers", "jobs": 4 },
+    { "name": "ci-mac-release", "configurePreset": "ci-mac-release", "jobs": 4 },
+    { "name": "ci-windows-release", "configurePreset": "ci-windows-release", "configuration": "Release" },
+    { "name": "ci-linux-release", "configurePreset": "ci-linux-release", "jobs": 4 },
+    { "name": "ci-mac-sanitizers", "configurePreset": "ci-mac-sanitizers", "jobs": 4 },
+    { "name": "ci-linux-thread-sanitizer", "configurePreset": "ci-linux-thread-sanitizer", "jobs": 4 },
+    { "name": "ci-fuzz", "configurePreset": "ci-fuzz", "jobs": 4, "targets": ["symbolengine_fuzz"] }
   ],
   "testPresets": [
     {
@@ -91,6 +147,11 @@
     { "name": "ci-mac", "inherits": "base", "configurePreset": "ci-mac" },
     { "name": "ci-windows", "inherits": "base", "configurePreset": "ci-windows", "configuration": "Debug" },
     { "name": "ci-linux", "inherits": "base", "configurePreset": "ci-linux" },
-    { "name": "ci-linux-sanitizers", "inherits": "base", "configurePreset": "ci-linux-sanitizers" }
+    { "name": "ci-linux-sanitizers", "inherits": "base", "configurePreset": "ci-linux-sanitizers" },
+    { "name": "ci-mac-release", "inherits": "base", "configurePreset": "ci-mac-release" },
+    { "name": "ci-windows-release", "inherits": "base", "configurePreset": "ci-windows-release", "configuration": "Release" },
+    { "name": "ci-linux-release", "inherits": "base", "configurePreset": "ci-linux-release" },
+    { "name": "ci-mac-sanitizers", "inherits": "base", "configurePreset": "ci-mac-sanitizers" },
+    { "name": "ci-linux-thread-sanitizer", "inherits": "base", "configurePreset": "ci-linux-thread-sanitizer" }
   ]
 }

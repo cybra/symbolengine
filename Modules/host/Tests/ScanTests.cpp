@@ -350,7 +350,7 @@ TEST_CASE("A worker's crash leaves a note of the file and step it was on, the si
 }
 
 #if defined(__APPLE__) || defined(_WIN32)
-TEST_CASE("A plugin that asks something as it is made is waited for past the limit, and then found")
+TEST_CASE("A plugin that asks something as it is made is waited for past the limit, and then found", "[timing]")
 {
     // A limit of 4 s, as a fresh worker's first window can take more than a second on a busy machine, and questions
     // of 8 s, which a worker not waited for would be ended in the middle of.

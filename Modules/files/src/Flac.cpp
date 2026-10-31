@@ -88,9 +88,10 @@ private:
         {
             pending.assign(pending.size(), {});
             pendingAt = 0;
-            if (!FLAC__stream_decoder_seek_absolute(decoder, from) && !walkTo(from))
+            if (!FLAC__stream_decoder_seek_absolute(decoder, from))
             {
                 next = nowhere;
+                FLAC__stream_decoder_flush(decoder);
                 error = stream.error ? stream.error : make_error_code(AudioFileError::damaged);
                 return 0;
             }
@@ -123,35 +124,6 @@ private:
         if (stream.error)
             error = stream.error;
         return done;
-    }
-
-    // Decodes on from the start to a frame, for a file that can't be sought in, as one cut short whose length says more
-    // than it holds and so misleads the search; false if it ends first. It takes starting again to go on after a failed
-    // seek in any case.
-    bool walkTo(std::uint64_t from)
-    {
-        const auto known = information.frames;
-        FLAC__stream_decoder_reset(decoder);
-        FLAC__stream_decoder_process_until_end_of_metadata(decoder);
-        information.frames = known;
-
-        std::uint64_t at = 0;
-        for (;;)
-        {
-            for (auto& channel : pending)
-                channel.clear();
-            if (FLAC__stream_decoder_get_state(decoder) == FLAC__STREAM_DECODER_END_OF_STREAM ||
-                !FLAC__stream_decoder_process_single(decoder))
-                return false;
-
-            const auto frames = pending.front().size();
-            if (at + frames > from)
-            {
-                pendingAt = static_cast<std::size_t>(from - at);
-                return true;
-            }
-            at += frames;
-        }
     }
 
     static FLAC__StreamDecoderReadStatus read(const FLAC__StreamDecoder*, FLAC__byte buffer[], size_t* bytes, void* self)

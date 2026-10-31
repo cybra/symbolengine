@@ -46,6 +46,22 @@ jobs:
           - name: Linux with sanitizers
             os: ubuntu-latest
             preset: ci-linux-sanitizers
+          - name: Mac with sanitizers
+            os: macos-latest
+            preset: ci-mac-sanitizers
+          - name: Linux with the thread sanitizer
+            os: ubuntu-latest
+            preset: ci-linux-thread-sanitizer
+          # An optimized build runs differently from a debug one, and is what ships.
+          - name: Mac Release
+            os: macos-latest
+            preset: ci-mac-release
+          - name: Windows Release
+            os: windows-latest
+            preset: ci-windows-release
+          - name: Linux Release
+            os: ubuntu-latest
+            preset: ci-linux-release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -101,7 +117,7 @@ jobs:
       # BlackHole's loopback devices on the Mac, a test tool alone (GPL-3.0, never shipped), so Core Audio's own paths
       # are tested with no hardware: what is played to a device comes back as its input and reaches no speaker.
       - name: Loopback devices
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && matrix.validator
         run: |
           brew install --cask blackhole-2ch blackhole-16ch
           # Core Audio loads a new driver only as its service starts, so it is restarted, and the devices waited for.
@@ -184,7 +200,24 @@ jobs:
       - name: Test
         env:
           SYMBOLENGINE_HTTP_TEST_URL: https://raw.githubusercontent.com/cybra/symbolengine/main/LICENSE
+          # A worker ending by _exit leaves threads running on purpose, which the sanitizer would answer with an exit
+          # code of its own, taken for how the worker ended.
+          TSAN_OPTIONS: report_thread_leaks=0
         run: ctest --preset ${{ matrix.preset }}
+
+  # Everything read from outside given bytes no test thought of, each target from its seeds and for two minutes. An input
+  # that breaks one is printed, to be added to Tests/Fuzz/Seeds, which every other job then runs.
+  fuzz:
+    name: Fuzzing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Configure
+        run: cmake --preset ci-fuzz
+      - name: Build
+        run: cmake --build --preset ci-fuzz
+      - name: Fuzz
+        run: python3 Tests/Fuzz/run.py build/ci-fuzz 120
 
   sign-off:
     name: Sign-off

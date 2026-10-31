@@ -27,7 +27,16 @@ function(symbolengine_add_tests module)
     # matches, run with no other test beside them taking a crowded runner's cores: those that measure time on the clock,
     # those that open a web view, whose engine starts processes of its own, which two or three at once on a crowded
     # runner took longer than the tests wait, and those that open many windows, which slow the tests beside them.
-    if(tests_ALONE)
+    if(tests_ALONE AND CMAKE_CXX_FLAGS MATCHES "-fsanitize=thread")
+        # Ten times as slow, what measures time on the clock or starts many processes at once isn't for this build,
+        # which is here to find races.
+        string(REPLACE "," ";" alone_tags "${tests_ALONE}")
+        set(others "")
+        foreach(tag IN LISTS alone_tags)
+            string(APPEND others "~${tag}")
+        endforeach()
+        catch_discover_tests(${target} TEST_PREFIX "${module}: " TEST_SPEC "${others}" DISCOVERY_MODE PRE_TEST)
+    elseif(tests_ALONE)
         string(REPLACE "," ";" alone_tags "${tests_ALONE}")
         set(others "")
         foreach(tag IN LISTS alone_tags)

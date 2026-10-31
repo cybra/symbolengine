@@ -1,0 +1,6 @@
+{
+  // A comment.
+  "Name": "M", "Version": "1.0",
+  "Factory Info": {"Vendor": "V", "URL": "", "E-Mail": "", "Flags": {"Unicode": true,},},
+  "Classes": [{"CID": "ABCDEF0153796D6247616E6750726F21", "Category": "Audio Module Class", "Name": "N", "Vendor": "", "Version": "1", "SDKVersion": "VST 3.8", "Sub Categories": ["Instrument"], "Class Flags": 0, "Cardinality": 2147483647, "Snapshots": [],},],
+}
