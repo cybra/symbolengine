@@ -96,7 +96,7 @@ const auto walked = PluginScanner::walk(folders, list);
 scanner.scan(walked.files);
 ```
 
-The list says of each file what was found in it, and of a file set aside what went wrong and at which step. It also lists what the system won't run, such as a downloaded plugin that isn't notarized or code that no longer matches its signature, without loading any of it.
+The list says of each file what was found in it, and of a file set aside what went wrong and at which step. It also lists what the system won't run, such as a downloaded plugin that isn't notarized or code that no longer matches its signature, without loading any of it. A plugin that timed out is scanned again a day later, or once the computer has restarted, since a busy computer can bring that on. One that crashed stays set aside until it changes or you ask.
 
 ## Editors
 

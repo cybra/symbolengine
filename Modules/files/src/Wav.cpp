@@ -1,5 +1,6 @@
 #include "Bytes.h"
 #include "ChannelOrder.h"
+#include "Chunks.h"
 #include "Formats.h"
 #include "Samples.h"
 
@@ -309,7 +310,7 @@ std::unique_ptr<AudioFileReader> openWav(std::unique_ptr<RandomAccessFile> file,
     info.format = "WAV";
     std::optional<Format> format;
     std::optional<std::uint64_t> dataStart, dataSize;
-    std::uint64_t ds64Data = 0;
+    std::uint64_t ds64Form = 0, ds64Data = 0;
     std::map<std::string, std::uint64_t> ds64Sizes;
     std::uint64_t kept = 0;
 
@@ -333,6 +334,7 @@ std::unique_ptr<AudioFileReader> openWav(std::unique_ptr<RandomAccessFile> file,
             if (sizes.size() >= 28)
             {
                 const auto* p = bytesOf(sizes);
+                ds64Form = readLittle64(p);
                 ds64Data = readLittle64(p + 8);
                 const auto entries = readLittle32(p + 24);
                 for (std::uint32_t i = 0; i < entries && 28 + (i + 1) * 12 <= sizes.size(); ++i)
@@ -379,11 +381,23 @@ std::unique_ptr<AudioFileReader> openWav(std::unique_ptr<RandomAccessFile> file,
         }
         else if (id == "data")
         {
+            const auto first = !dataStart.has_value();
             dataStart = body;
             const auto available = fileSize - body;
+            const auto formEnd = (sixtyFour ? ds64Form : readLittle32(start + 4)) + 8;
 
-            // A file whose writing was stopped, or a stream's, may say more than it holds, or nothing.
-            dataSize = size == 0 || size > available || (!sixtyFour && size == unknownSize) ? available : size;
+            // A file whose writing was stopped, or a stream's, may say more than it holds, or nothing, or less than it
+            // holds, its sizes last written before more samples came. Saying nothing with chunks after it is an empty
+            // take. Only the first is looked into, as a walk for each of a file of nothing but empty data chunks would
+            // take far too long.
+            if (size > available || (!sixtyFour && size == unknownSize))
+                dataSize = available;
+            else if (size == 0)
+                dataSize = first && onlyChunksFrom(*file, body, fileSize, false, error) ? 0 : available;
+            else if (samplesPastSizes(*file, formEnd, body + size, body + size + size % 2, fileSize, false, error))
+                dataSize = available;
+            else
+                dataSize = size;
 
             if (body + *dataSize >= fileSize)
                 break;
@@ -404,17 +418,7 @@ std::unique_ptr<AudioFileReader> openWav(std::unique_ptr<RandomAccessFile> file,
         if (size > fileSize - body)
             break;
 
-        // A chunk of odd length is followed by a pad byte, which some writers leave out.
-        auto next = body + size + (size % 2);
-        if (size % 2 != 0 && next + 4 <= fileSize)
-        {
-            unsigned char padded[4]{}, unpadded[4]{};
-            file->readAt(next, padded, 4, error);
-            file->readAt(next - 1, unpadded, 4, error);
-            if (!looksLikeId(padded) && looksLikeId(unpadded))
-                --next;
-        }
-        position = next;
+        position = afterChunk(*file, body, size, fileSize, error);
     }
 
     if (error)

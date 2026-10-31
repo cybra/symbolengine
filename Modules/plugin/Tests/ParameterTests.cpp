@@ -182,3 +182,27 @@ TEST_CASE("A parameter's value is read through what adding it returned")
     CHECK(mix.get() == 0.5);
     CHECK_FALSE(plugin.loadState("[]"));
 }
+
+TEST_CASE("A value typed with a comma for a decimal mark reads as one typed with a point")
+{
+    const auto level = decibels(1, "Level", -60.0, 12.0, 0.0);
+    CHECK(level.fromText("1,5 dB") == 1.5);
+    CHECK(level.fromText("-12,5") == -12.5);
+    CHECK(level.fromText("0,125 dB") == 0.125);
+    CHECK(level.fromText(",5") == 0.5);
+    CHECK(level.fromText(",125") == 0.125);
+    CHECK(level.fromText("1,25") == 1.25);
+    CHECK(level.fromText("1,2500") == 1.25);
+    CHECK(level.fromText("5,") == 5.0);
+    CHECK(level.fromText("1,5,6") == 1.5);
+
+
+    // A comma and three digits could mean a thousand or one, so neither is read, unless nothing else fits.
+    CHECK_FALSE(level.fromText("1,000").has_value());
+    CHECK_FALSE(level.fromText("12,500 dB").has_value());
+    CHECK(level.fromText("0,000") == 0.0);
+
+    // A point means what it meant.
+    CHECK(level.fromText("1.000") == 1.0);
+    CHECK(level.fromText("12.5") == 12.5);
+}

@@ -6,6 +6,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <chrono>
+#include <filesystem>
 #include <limits>
 #include <string>
 #include <utility>
@@ -231,4 +233,97 @@ TEST_CASE("An AIFF's chunks of odd length are read whether their pad byte is the
     CHECK(reader->info().frames == 100);
     REQUIRE(reader->info().chunks.size() == 1);
     CHECK(reader->info().chunks[0].bytes == "abc");
+}
+
+TEST_CASE("An AIFF stopped after its sizes were last written reads on to the samples that reached it")
+{
+    ScratchFolder folder;
+    const auto file = folder.path / "take.aiff";
+    const auto crashed = folder.path / "crashed.aiff";
+    std::vector<float> samples(1500);
+    for (std::size_t i = 0; i < samples.size(); ++i)
+        samples[i] = pattern::read(i, 0, 16);
+    const float* first[1]{samples.data()};
+    const float* rest[1]{samples.data() + 1000};
+
+    auto writer = files::createAudio(file, {"AIFF", 48000, 1, 16, false, 0, {}});
+    writer->write(first, 1000);
+    writer->flush();
+    writer->write(rest, 500);
+    std::filesystem::copy_file(file, crashed);
+    {
+        auto reader = files::openAudio(crashed);
+        CHECK(reader->info().frames == 1500);
+        CHECK(pattern::readAll(*reader)[0] == samples);
+    }
+    writer->finish();
+    writer.reset();
+
+    // What follows a finished AIFF's samples isn't taken for more of them.
+    const auto finished = files::read(file);
+    const std::string note{"NOTE\0\0\0\x02" "ab", 10};
+    const std::string noise(400, '\x81');
+    const auto framesOf = [&](const std::string& bytes)
+    {
+        files::writeSafely(crashed, bytes);
+        return files::openAudio(crashed)->info().frames;
+    };
+    CHECK(framesOf(finished) == 1500);
+    CHECK(framesOf(finished + note) == 1500);
+    CHECK(framesOf(finished + "ID3" + noise) == 1500);
+    CHECK(framesOf(finished + noise) == 1500 + 200);
+}
+
+TEST_CASE("An AIFF saying no samples with only chunks after it is an empty take, its chunks kept, and one with more after it reads to its end")
+{
+    ScratchFolder folder;
+    const auto file = folder.path / "empty.aiff";
+
+    // As the writer leaves it, with no samples yet, and as it finishes it, sized for its offset and block size.
+    {
+        auto writer = files::createAudio(file, {"AIFF", 48000, 1, 16, false, 0, {}});
+        writer->finish();
+    }
+    const auto finished = files::read(file);
+    const std::string note{"NOTE\0\0\0\x02" "ab", 10};
+    {
+        files::writeSafely(file, finished + note);
+        auto reader = files::openAudio(file);
+        CHECK(reader->info().frames == 0);
+        CHECK_FALSE(reader->info().chunks.empty());
+    }
+
+    // The sizes never written, so what follows reads as samples unless it is chunks.
+    auto unsized = finished;
+    const auto ssnd = unsized.find("SSND");
+    REQUIRE(ssnd != std::string::npos);
+    unsized.replace(ssnd + 4, 4, std::string(4, '\0'));
+    {
+        files::writeSafely(file, unsized + note);
+        auto reader = files::openAudio(file);
+        CHECK(reader->info().frames == 0);
+        CHECK_FALSE(reader->info().chunks.empty());
+    }
+    std::string samples(400, '\x01');
+    files::writeSafely(file, unsized + samples);
+    CHECK(files::openAudio(file)->info().frames == 200);
+}
+
+TEST_CASE("An AIFF of nothing but empty sound chunks takes no time to open")
+{
+    ScratchFolder folder;
+    const auto file = folder.path / "many.aiff";
+    {
+        auto writer = files::createAudio(file, {"AIFF", 48000, 1, 16, false, 0, {}});
+        writer->finish();
+    }
+    auto bytes = files::read(file);
+    const std::string empty{"SSND\0\0\0\x08\0\0\0\0\0\0\0\0", 16};
+    for (int i = 0; i < 100000; ++i)
+        bytes += empty;
+    files::writeSafely(file, bytes);
+
+    const auto started = std::chrono::steady_clock::now();
+    CHECK(files::openAudio(file) != nullptr);
+    CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds(20));
 }

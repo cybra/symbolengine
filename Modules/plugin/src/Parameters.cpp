@@ -47,11 +47,17 @@ std::optional<double> leadingNumber(std::string_view typed)
     number += whole.empty() ? "0" : whole;
 
     bool anyDigits = i > 0;
-    if (i < text.size() && text[i] == '.')
+    if (i < text.size() && (text[i] == '.' || text[i] == ','))
     {
+        const auto comma = text[i] == ',';
         const auto fractionStart = ++i;
         while (isDigit(i))
             ++i;
+
+        // "1,000" could mean a thousand or one, and a wrong guess sets a value far from the one meant.
+        if (comma && i - fractionStart == 3 && !whole.empty() && whole != "0")
+            return std::nullopt;
+
         if (i > fractionStart)
         {
             number += '.';

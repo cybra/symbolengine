@@ -465,7 +465,7 @@ TEST_CASE("A device that stops calling back while it says it runs is found stall
 {
     Rig rig;
     Recording recording;
-    auto stream = rig.stream();
+    auto stream = rig.stream(stereo(), [](AudioStream::Options& options) { options.stallAtLeast = 0ms; });
     REQUIRE(!stream->add(recording));
     REQUIRE(!stream->start());
     for (int i = 0; i < 10; ++i)
@@ -484,6 +484,25 @@ TEST_CASE("A device that stops calling back while it says it runs is found stall
 
     REQUIRE(rig.device.cycle());
     CHECK(rig.events.waitFor(Kind::resumed));
+}
+
+TEST_CASE("A device with small blocks has longer than three of them to call back, before it is stalled")
+{
+    Rig rig;
+    Recording recording;
+    auto stream = rig.stream();
+    REQUIRE(!stream->add(recording));
+    REQUIRE(!stream->start());
+    for (int i = 0; i < 10; ++i)
+        REQUIRE(rig.device.cycle());
+
+    // Three of its blocks are 32 ms, well short of the least there is.
+    rig.system->advance(60ms);
+    std::this_thread::sleep_for(60ms);
+    CHECK(rig.events.count(Kind::stalled) == 0);
+
+    rig.system->advance(60ms);
+    CHECK(rig.events.waitFor(Kind::stalled));
 }
 
 TEST_CASE("A device calling back far faster than its rate is found running away")

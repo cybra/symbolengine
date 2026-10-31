@@ -9,8 +9,10 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -70,6 +72,147 @@ private:
 
     const bool fails;
 };
+
+// A writer that keeps what it is given, held up until told to go on, as a stalled disk holds up a thread.
+class HeldWriter final : public AudioFileWriter
+{
+public:
+    HeldWriter() { written = {"test", 48000, 1, 32, true, 0, {}}; }
+
+    std::atomic<bool> reached{false};
+    std::vector<float> kept;
+
+    void letGo()
+    {
+        const std::lock_guard hold(lock);
+        held = false;
+        changed.notify_all();
+    }
+
+private:
+    void writeFrames(const float* const* channels, std::size_t frames, std::error_code&) override
+    {
+        reached = true;
+        {
+            std::unique_lock hold(lock);
+            changed.wait(hold, [this] { return !held; });
+        }
+        kept.insert(kept.end(), channels[0], channels[0] + frames);
+    }
+
+    void flushFile(std::error_code&) override {}
+    void finishFile(std::error_code&) override {}
+
+    std::mutex lock;
+    std::condition_variable changed;
+    bool held = true;
+};
+
+// Adds samples of one value to a writer, leaving silence for those refused, and keeps what its file should hold for them.
+struct Timeline
+{
+    BackgroundAudioWriter& writer;
+    std::vector<float> expected{};
+
+    bool give(std::size_t frames, float value)
+    {
+        const std::vector<float> samples(frames, value);
+        const float* channels[1]{samples.data()};
+        const auto took = writer.write(channels, frames);
+        if (!took)
+            writer.leaveSilence(frames);
+        expected.insert(expected.end(), frames, took ? value : 0.0f);
+        return took;
+    }
+};
+}
+
+TEST_CASE("Silence left for samples refused comes where they would have been, so what comes after keeps its time")
+{
+    auto made = std::make_unique<HeldWriter>();
+    auto& file = *made;
+    std::vector<float> given;
+    BackgroundAudioWriter writer(std::move(made), 100, 1h,
+                                 [&given](const float* const* channels, std::size_t frames)
+                                 { given.insert(given.end(), channels[0], channels[0] + frames); });
+    Timeline timeline{writer};
+
+    CHECK(timeline.give(60, 0.1f));
+    REQUIRE(soon([&] { return file.reached.load(); }));
+    CHECK(timeline.give(40, 0.2f));
+    CHECK_FALSE(timeline.give(30, 0.3f));
+    CHECK_FALSE(timeline.give(20, 0.4f));
+    CHECK(writer.framesOfSilence() == 50);
+
+    file.letGo();
+    REQUIRE(soon([&] { return writer.framesWritten() >= 100; }));
+    CHECK(timeline.give(10, 0.5f));
+    writer.finish();
+
+    CHECK(file.kept == timeline.expected);
+    CHECK(given == timeline.expected);
+    CHECK(writer.framesWritten() == 160);
+}
+
+TEST_CASE("Silence left just before the end is at the end, so the file is as long as the take")
+{
+    auto made = std::make_unique<HeldWriter>();
+    auto& file = *made;
+    BackgroundAudioWriter writer(std::move(made), 100, 1h);
+    Timeline timeline{writer};
+
+    CHECK(timeline.give(100, 0.1f));
+    CHECK_FALSE(timeline.give(5000, 0.2f));
+    file.letGo();
+    writer.finish();
+    CHECK(file.kept == timeline.expected);
+    CHECK(writer.framesWritten() == 5100);
+}
+
+TEST_CASE("More stretches of silence among samples than can wait to be written still all keep their time")
+{
+    auto made = std::make_unique<HeldWriter>();
+    auto& file = *made;
+    BackgroundAudioWriter writer(std::move(made), 1000, 1h);
+    Timeline timeline{writer};
+
+    CHECK(timeline.give(1, 0.5f));
+    REQUIRE(soon([&] { return file.reached.load(); }));
+
+    int refusedSmall = 0;
+    for (int i = 0; i < 300; ++i)
+    {
+        CHECK_FALSE(timeline.give(2000, 0.25f));
+        if (!timeline.give(1, static_cast<float>(i + 1) / 1000.0f))
+            ++refusedSmall;
+    }
+    CHECK(refusedSmall > 0);
+
+    file.letGo();
+    REQUIRE(soon([&] { return writer.framesWritten() > 0; }));
+    writer.finish();
+    CHECK(file.kept == timeline.expected);
+}
+
+TEST_CASE("Silence left once writing has failed is nothing")
+{
+    BackgroundAudioWriter writer(std::make_unique<CountingWriter>(true), 100, 1h);
+    Timeline timeline{writer};
+
+    CHECK(timeline.give(10, 0.5f));
+    REQUIRE(soon(
+        [&]
+        {
+            timeline.give(10, 0.5f);
+            return writer.failed();
+        }));
+    const auto before = writer.framesOfSilence();
+    CHECK_FALSE(timeline.give(10, 0.5f));
+    CHECK(writer.framesOfSilence() == before);
+
+    std::error_code error;
+    writer.finish(error);
+    CHECK(error);
 }
 
 TEST_CASE("Samples added on one thread reach the file on another whole and in order, and are given as written")
@@ -152,8 +295,10 @@ TEST_CASE("Samples the buffer has no room for are refused, none of them added")
 
     BackgroundAudioWriter writer(files::createAudio(file, {"WAV", 48000, 1, 16, false, 0, {}}), 100);
     CHECK(!writer.write(channels, 101));
+    CHECK(!writer.write(channels, 101));
     CHECK(writer.write(channels, 100));
     writer.finish();
+    CHECK(writer.framesOfSilence() == 0);
     CHECK(files::openAudio(file)->info().frames == 100);
 }
 
@@ -292,6 +437,7 @@ TEST_CASE("Every frame added is counted as in the file or as lost, when the file
     // How many were taken depends on how soon its thread reached the end of the room, and none goes uncounted.
     CHECK(added > 2500);
     CHECK(writer.framesWritten() + writer.framesLost() == added);
+    CHECK(writer.framesOfSilence() == 0);
     CHECK(writer.framesWritten() <= 2500);
     CHECK(writer.framesLost() >= added - 2500);
 }

@@ -4,6 +4,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <vector>
+
+#include <string>
+
 using namespace symbolengine;
 using windowsAudio::detail::kindOf;
 
@@ -67,4 +71,54 @@ TEST_CASE("A session disconnected for its format is opened again, and for any ot
     CHECK(reopensAfterDisconnect(disconnectReasonFormatChanged));
     CHECK_FALSE(reopensAfterDisconnect(0));   // the device removed
     CHECK_FALSE(reopensAfterDisconnect(5));   // another program taking it for itself
+}
+
+TEST_CASE("A device's thread takes the best it is given, asking for each in turn")
+{
+    using windowsAudio::detail::reachThreadLevel;
+    using windowsAudio::detail::ThreadLevel;
+
+    std::vector<std::wstring> asked;
+    int raised = 0;
+    const auto schedulerGiving = [&asked](const wchar_t* given)
+    {
+        return [&asked, given](const wchar_t* task)
+        {
+            asked.emplace_back(task);
+            return given != nullptr && std::wstring(task) == given;
+        };
+    };
+    const auto raising = [&raised](bool works)
+    {
+        return [&raised, works]
+        {
+            ++raised;
+            return works;
+        };
+    };
+
+    CHECK(reachThreadLevel(schedulerGiving(L"Pro Audio"), raising(true)) == ThreadLevel::proAudio);
+    CHECK(asked == std::vector<std::wstring>{L"Pro Audio"});
+    CHECK(raised == 0);
+
+    asked.clear();
+    CHECK(reachThreadLevel(schedulerGiving(L"Audio"), raising(true)) == ThreadLevel::audio);
+    CHECK(asked == std::vector<std::wstring>{L"Pro Audio", L"Audio"});
+    CHECK(raised == 0);
+
+    CHECK(reachThreadLevel(schedulerGiving(nullptr), raising(true)) == ThreadLevel::timeCritical);
+    CHECK(raised == 1);
+    CHECK(reachThreadLevel(schedulerGiving(nullptr), raising(false)) == ThreadLevel::normal);
+    CHECK(raised == 2);
+
+    // Each says what it is, and only the best says Pro Audio, which the tests on a real device look for.
+    using windowsAudio::detail::wordsFor;
+    const std::string best = wordsFor(ThreadLevel::proAudio);
+    CHECK(best.find("Pro Audio") != std::string::npos);
+    for (const auto level : {ThreadLevel::audio, ThreadLevel::timeCritical, ThreadLevel::normal})
+    {
+        const std::string words = wordsFor(level);
+        CHECK_FALSE(words.empty());
+        CHECK(words.find("Pro Audio") == std::string::npos);
+    }
 }

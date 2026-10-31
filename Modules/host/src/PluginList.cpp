@@ -27,6 +27,9 @@ using namespace pluginJson;
 constexpr std::int64_t currentFormat = 1;
 
 // How far apart two readings of when the computer started may be and still be the same start, in milliseconds:
+// How long a plugin that timed out stays set aside, on a computer that hasn't started again.
+constexpr auto timedOutRests = std::chrono::hours(24);
+
 // Windows' reading moves with adjustments to the clock.
 constexpr std::uint64_t sameStart = 10'000;
 
@@ -485,8 +488,19 @@ bool PluginList::needsScan(const std::filesystem::path& path, const PluginStamp&
         record.file.outcome == PluginFile::Outcome::notYetSeen ||
         record.file.outcome == PluginFile::Outcome::notNotarized)
         return true;
-    return record.file.outcome == PluginFile::Outcome::changedAfterSigning &&
-           differentStarts(inner->computerStarted(), record.computerStarted);
+
+    const auto restarted = differentStarts(inner->computerStarted(), record.computerStarted);
+    if (record.file.outcome == PluginFile::Outcome::changedAfterSigning && restarted)
+        return true;
+
+    // A busy computer can bring on a time-out, where nothing brings on a crash but the plugin.
+    const auto now = inner->now();
+    const auto worthAnotherLook = [&](const PluginFailure& failure)
+    { return failure.kind == PluginFailure::Kind::timedOut && (restarted || now - failure.date >= timedOutRests); };
+
+    return (record.file.failure.has_value() && worthAnotherLook(*record.file.failure)) ||
+           std::any_of(record.file.setAside.begin(), record.file.setAside.end(),
+                       [&](const PluginSetAside& set) { return worthAnotherLook(set.failure); });
 }
 
 void PluginList::record(PluginFile file)

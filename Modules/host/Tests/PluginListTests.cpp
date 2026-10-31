@@ -1004,3 +1004,50 @@ TEST_CASE("A file reached through a link stays with the folder holding the link,
     again->folderRead("VST3", folder, {});
     CHECK_FALSE(again->file(elsewhere).has_value());
 }
+
+TEST_CASE("A plugin that timed out is looked at again a day later or once the computer has started again, where one that crashed isn't")
+{
+    Rig rig;
+    auto list = rig.open();
+    const auto path = rig.place("VST3/Slow.vst3");
+    const auto fileStamp = stamp(1);
+    const auto timedOut = setAside(path, fileStamp, PluginFailure::Kind::timedOut, "loading the code", 30000);
+
+    list->record(timedOut);
+    CHECK_FALSE(list->needsScan(path, fileStamp));
+    rig.time += std::chrono::hours(23);
+    CHECK_FALSE(list->needsScan(path, fileStamp));
+    rig.time += std::chrono::hours(1);
+    CHECK(list->needsScan(path, fileStamp));
+
+    // Timing out again starts the day again.
+    list->record(timedOut);
+    CHECK_FALSE(list->needsScan(path, fileStamp));
+
+    // It lasts as saved, and the computer starting again is as good as the day.
+    list->save();
+    list = rig.open();
+    CHECK_FALSE(list->needsScan(path, fileStamp));
+    rig.started += std::chrono::hours(1);
+    CHECK(list->needsScan(path, fileStamp));
+
+    // One plugin of a file that timed out brings the file back too.
+    auto some = found(path, fileStamp, {effect(gainId, "Gain")});
+    some.setAside.push_back({effect(delayId, "Delay"), PluginFailure{PluginFailure::Kind::timedOut, "making plugin 2 of 2", 30000}});
+    list->record(some);
+    CHECK_FALSE(list->needsScan(path, fileStamp));
+    rig.time += std::chrono::hours(24);
+    CHECK(list->needsScan(path, fileStamp));
+
+    // A crash stays set aside however long it has been, and a plugin that came through is never asked after.
+    for (auto file : {setAside(path, fileStamp, PluginFailure::Kind::crashed, "making plugin 1 of 1", 11),
+                      found(path, fileStamp, {effect(gainId, "Gain")})})
+    {
+        list->record(file);
+        rig.time += std::chrono::hours(24 * 365);
+        rig.started += std::chrono::hours(24);
+        list->record(file);
+        rig.time += std::chrono::hours(24 * 365);
+        CHECK_FALSE(list->needsScan(path, fileStamp));
+    }
+}

@@ -69,4 +69,41 @@ inline bool reopensAfterDisconnect(int reason) noexcept
 {
     return reason == disconnectReasonFormatChanged;
 }
+/** What a device's thread was given, best first, by the multimedia scheduler or by raising the thread itself. */
+enum class ThreadLevel
+{
+    proAudio,
+    audio,
+    timeCritical,
+    normal,
+};
+
+/** Asks for each in turn until one is given: schedule takes the name of a multimedia scheduler's class, and raise raises
+    the thread with no scheduler, each saying whether it worked. */
+template <typename Schedule, typename Raise>
+ThreadLevel reachThreadLevel(Schedule&& schedule, Raise&& raise)
+{
+    if (schedule(L"Pro Audio"))
+        return ThreadLevel::proAudio;
+    if (schedule(L"Audio"))
+        return ThreadLevel::audio;
+    return raise() ? ThreadLevel::timeCritical : ThreadLevel::normal;
+}
+
+inline const char* wordsFor(ThreadLevel level)
+{
+    switch (level)
+    {
+        case ThreadLevel::proAudio:
+            return "Pro Audio, from the multimedia scheduler";
+        case ThreadLevel::audio:
+            return "Audio, from the multimedia scheduler";
+        case ThreadLevel::timeCritical:
+            return "time-critical, as the multimedia scheduler refused";
+        case ThreadLevel::normal:
+            break;
+    }
+    return "normal, as nothing higher was given";
+}
+
 }

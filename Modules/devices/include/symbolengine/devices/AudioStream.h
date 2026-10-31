@@ -178,6 +178,10 @@ public:
         /** How many of its own blocks a running device may go without calling back before it is stalled. */
         double stallBlocks = 3.0;
 
+        /** The least time that may be, as a device with very small blocks can go three of them without calling back
+            whenever the computer is busy. */
+        std::chrono::milliseconds stallAtLeast{100};
+
         /** How long changes the system sends are left to settle before the device is opened again. */
         std::chrono::milliseconds settle{100};
 

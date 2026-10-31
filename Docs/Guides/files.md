@@ -166,10 +166,15 @@ On the audio thread, `write` copies samples into its buffer and returns at once,
 
 ```cpp
 if (!recording.write(channels, frames))
+{
     lostFrames += frames;
+    recording.leaveSilence(frames);
+}
 ```
 
-A thread of the writer's own writes them to the file. It flushes the file every second, or the interval given, so a WAV or AIFF recording stopped by a crash reads to within that of where it stopped. A FLAC, Ogg Vorbis or Opus file is only whole once finished, so a recording that has to survive a crash belongs in a WAV or AIFF.
+`leaveSilence` puts silence in the file where the refused samples would have been, so everything after them stays in time. Without it, whatever comes after a refused stretch sits early by that much. A thread that can wait and try the same samples again, as one rendering does, has no need of it.
+
+A thread of the writer's own writes them to the file. It flushes the file every second, or the interval given, so a WAV or AIFF recording stopped by a crash reads in any program to within that of where it stopped, and here to the last sample that reached the file. A FLAC, Ogg Vorbis or Opus file is only whole once finished, so a recording that has to survive a crash belongs in a WAV or AIFF.
 
 Once the audio thread has stopped adding samples, `finish` writes what is still waiting and closes the file, throwing the first thing that went wrong. `failed` says at any time whether something has, and `framesWritten` and `framesLost` how many frames reached the file and how many it took and couldn't write. Letting go of the object finishes it too, ignoring errors:
 

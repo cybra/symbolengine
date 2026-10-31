@@ -183,7 +183,7 @@ Every stream it opens delivers there too, and a stream's events name its `system
 | `lost` | The device stopped while it ran. The stream stays stopped until you start it again | `loss`, `error` |
 | `formatChanged` | Its rate, format, channels or block size changed, and it was opened again as it now is, with what it still has of the channels asked for, and those that come back when they do | `before`, `after` |
 | `dropout` | Frames were lost | `direction`, `position`, `frames`, -1 when the system didn't say how many |
-| `stalled`, `resumed` | It stopped calling back while saying it ran, then started again | `position` |
+| `stalled`, `resumed` | It stopped calling back while saying it ran, for three of its blocks and at least 100 ms, as `stallBlocks` and `stallAtLeast` set, then started again | `position` |
 | `runaway` | It called back far faster than its rate | `position` |
 | `late` | Your callbacks took longer over a block than it lasts. Those within a second are told together | `count`, `nanoseconds`, `frames`, `cause` |
 | `noSound` | No block came after it started, and the stream stopped | `error` |

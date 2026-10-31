@@ -1,4 +1,5 @@
 #include "Bytes.h"
+#include "Chunks.h"
 #include "Formats.h"
 #include "Samples.h"
 
@@ -293,6 +294,7 @@ std::unique_ptr<AudioFileReader> openAiff(std::unique_ptr<RandomAccessFile> file
     std::optional<Encoding> encoding;
     bool haveCommon = false;
     std::uint64_t commonFrames = 0;
+    bool samplesPast = false;
     std::optional<std::uint64_t> dataStart, dataSize;
 
     std::uint64_t kept = 0;
@@ -345,13 +347,33 @@ std::unique_ptr<AudioFileReader> openAiff(std::unique_ptr<RandomAccessFile> file
                 return nullptr;
             }
 
+            const auto first = !dataStart.has_value();
             const auto offset = readBig32(bytes);
             dataStart = body + 8 + offset;
             const auto available = fileSize > *dataStart ? fileSize - *dataStart : 0;
             const auto said = size >= 8 + offset ? size - 8 - offset : 0;
+            const auto formEnd = static_cast<std::uint64_t>(readBig32(start + 4)) + 8;
 
-            // A file whose writing was stopped may say more than it holds, or nothing.
-            dataSize = said == 0 || said > available ? available : said;
+            // A file whose writing was stopped may say more than it holds, or nothing, or less than it holds, its sizes
+            // last written before more samples came. Saying nothing with chunks after it is an empty take. Only the
+            // first is looked into, as a walk for each of a file of nothing but empty chunks would take far too long.
+            if (said > available)
+                dataSize = available;
+            else if (said == 0 && first && onlyChunksFrom(*file, *dataStart, fileSize, true, error))
+            {
+                dataSize = 0;
+                size = 8 + offset;
+            }
+            else if (said == 0)
+                dataSize = available;
+            else if (samplesPastSizes(*file, formEnd, *dataStart + said, *dataStart + said + size % 2, fileSize, true,
+                                               error))
+            {
+                dataSize = available;
+                samplesPast = true;
+            }
+            else
+                dataSize = said;
 
             if (*dataStart + *dataSize >= fileSize)
                 break;
@@ -367,17 +389,7 @@ std::unique_ptr<AudioFileReader> openAiff(std::unique_ptr<RandomAccessFile> file
             info.chunks.push_back(std::move(chunk));
         }
 
-        // A chunk of odd length is followed by a pad byte, which some writers leave out.
-        auto next = body + size + (size % 2);
-        if (size % 2 != 0 && next + 4 <= fileSize)
-        {
-            unsigned char padded[4]{}, unpadded[4]{};
-            file->readAt(next, padded, 4, error);
-            file->readAt(next - 1, unpadded, 4, error);
-            if (!looksLikeId(padded) && looksLikeId(unpadded))
-                --next;
-        }
-        position = next;
+        position = afterChunk(*file, body, size, fileSize, error);
     }
 
     if (error)
@@ -392,7 +404,7 @@ std::unique_ptr<AudioFileReader> openAiff(std::unique_ptr<RandomAccessFile> file
 
     const auto frameBytes = static_cast<std::uint64_t>(bytesPerSample(*encoding)) * static_cast<std::uint64_t>(info.channels);
     const auto held = *dataSize / frameBytes;
-    info.frames = commonFrames == 0 ? held : std::min(commonFrames, held);
+    info.frames = commonFrames == 0 || samplesPast ? held : std::min(commonFrames, held);
 
     return std::make_unique<AiffReader>(std::move(file), path, std::move(info), *encoding, *dataStart);
 }

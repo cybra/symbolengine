@@ -1,5 +1,7 @@
 #include "symbolengine/net/Http.h"
 
+#include "StoppingFetch.h"
+
 #include "symbolengine/core/Paths.h"
 #include "symbolengine/core/Text.h"
 
@@ -115,6 +117,48 @@ std::optional<std::filesystem::path> fileAt(std::string_view address)
 #endif
 
     return paths::fromUtf8(path);
+}
+
+void Stopper::stop()
+{
+    const std::lock_guard hold(lock);
+    asked = true;
+    if (ending)
+    {
+        ending();
+        ending = nullptr;
+    }
+}
+
+bool Stopper::stopped() const noexcept
+{
+    return asked.load();
+}
+
+StoppingFetch::StoppingFetch(Stopper* given, std::function<void()> end) : stopper(given)
+{
+    if (stopper == nullptr)
+        return;
+
+    const std::lock_guard hold(stopper->lock);
+    if (stopper->asked)
+        end();
+    else
+        stopper->ending = std::move(end);
+}
+
+StoppingFetch::~StoppingFetch()
+{
+    if (stopper == nullptr)
+        return;
+
+    const std::lock_guard hold(stopper->lock);
+    stopper->ending = nullptr;
+}
+
+bool StoppingFetch::stopped() const noexcept
+{
+    return stopper != nullptr && stopper->stopped();
 }
 
 }

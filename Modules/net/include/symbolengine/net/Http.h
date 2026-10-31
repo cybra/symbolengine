@@ -1,8 +1,10 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -14,6 +16,29 @@
 namespace symbolengine::http
 {
 
+/** Stops a fetch from another thread, as a program quitting does while a server says nothing, where the function given
+    the answer isn't being called to give false. It has to outlast the fetch it is given to, and once stopped it stays
+    stopped. */
+class Stopper
+{
+public:
+    Stopper() = default;
+    Stopper(const Stopper&) = delete;
+    Stopper& operator=(const Stopper&) = delete;
+
+    /** From any thread, at any time and more than once: the fetch given this returns soon after with no problem, and one
+        given it from now on asks for nothing. It doesn't wait for the fetch to return. */
+    void stop();
+
+    bool stopped() const noexcept;
+
+private:
+    friend class StoppingFetch;
+    std::mutex lock;
+    std::atomic<bool> asked{false};
+    std::function<void()> ending;
+};
+
 struct Request
 {
     /** An http or https address, already escaped. */
@@ -24,6 +49,9 @@ struct Request
 
     /** How long the connection may take, and then each wait for more of the answer. */
     std::chrono::milliseconds timeout{30000};
+
+    /** What can stop it from another thread, if anything. */
+    Stopper* stopper = nullptr;
 };
 
 struct Answer

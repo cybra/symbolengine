@@ -1,5 +1,7 @@
 #include "symbolengine/net/Http.h"
 
+#include "StoppingFetch.h"
+
 #include "symbolengine/core/Text.h"
 
 #ifndef NOMINMAX
@@ -72,6 +74,9 @@ bool available()
 Answer get(const Request& request, const std::function<bool(int status, std::string_view piece)>& received)
 {
     Answer answer;
+    if (request.stopper != nullptr && request.stopper->stopped())
+        return answer;
+
     auto wide = wideFrom(request.url);
 
     URL_COMPONENTS parts{};
@@ -107,7 +112,7 @@ Answer get(const Request& request, const std::function<bool(int status, std::str
     WinHttpSetTimeouts(session.get(), wait, wait, wait, wait);
 
     const Internet connection(WinHttpConnect(session.get(), host.c_str(), parts.nPort, 0));
-    const Internet asked(connection != nullptr
+    Internet asked(connection != nullptr
                              ? WinHttpOpenRequest(connection.get(), L"GET", path.c_str(), nullptr, WINHTTP_NO_REFERER,
                                                   WINHTTP_DEFAULT_ACCEPT_TYPES,
                                                   parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0)
@@ -119,29 +124,35 @@ Answer get(const Request& request, const std::function<bool(int status, std::str
         return answer;
     }
 
+    // Closing the request ends a call on it that another thread waits in. Each call goes by the handle kept here, as what
+    // holds it may be let go of at any moment.
+    const auto handle = asked.get();
+    const StoppingFetch stopping(request.stopper, [&asked] { asked.reset(); });
+
     std::wstring headers;
 
     for (const auto& [name, value] : request.headers)
         headers += wideFrom(name) + L": " + wideFrom(value) + L"\r\n";
 
-    if (!WinHttpSendRequest(asked.get(), headers.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : headers.c_str(),
+    if (!WinHttpSendRequest(handle, headers.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : headers.c_str(),
                             static_cast<DWORD>(headers.size()), WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
-        !WinHttpReceiveResponse(asked.get(), nullptr))
+        !WinHttpReceiveResponse(handle, nullptr))
     {
-        answer.problem = problemWith("Reaching the server");
+        if (!stopping.stopped())
+            answer.problem = problemWith("Reaching the server");
         return answer;
     }
 
     DWORD status = 0, statusSize = sizeof status;
 
-    if (WinHttpQueryHeaders(asked.get(), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+    if (WinHttpQueryHeaders(handle, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
                             WINHTTP_HEADER_NAME_BY_INDEX, &status, &statusSize, WINHTTP_NO_HEADER_INDEX))
         answer.status = static_cast<int>(status);
 
     // WinHTTP takes a connection lost partway for the answer's end, so what came is held to the length it said it was.
     wchar_t stated[32]{};
     DWORD statedSize = sizeof stated;
-    const auto hasLength = WinHttpQueryHeaders(asked.get(), WINHTTP_QUERY_CONTENT_LENGTH, WINHTTP_HEADER_NAME_BY_INDEX,
+    const auto hasLength = WinHttpQueryHeaders(handle, WINHTTP_QUERY_CONTENT_LENGTH, WINHTTP_HEADER_NAME_BY_INDEX,
                                                stated, &statedSize, WINHTTP_NO_HEADER_INDEX) != FALSE;
     const auto length = hasLength ? std::wcstoull(stated, nullptr, 10) : 0ULL;
     unsigned long long total = 0;
@@ -152,15 +163,19 @@ Answer get(const Request& request, const std::function<bool(int status, std::str
     {
         DWORD read = 0;
 
-        if (!WinHttpReadData(asked.get(), piece.data(), static_cast<DWORD>(piece.size()), &read))
+        if (stopping.stopped())
+            return answer;
+
+        if (!WinHttpReadData(handle, piece.data(), static_cast<DWORD>(piece.size()), &read))
         {
-            answer.problem = problemWith("Reading the answer");
+            if (!stopping.stopped())
+                answer.problem = problemWith("Reading the answer");
             return answer;
         }
 
         if (read == 0)
         {
-            if (hasLength && total < length)
+            if (hasLength && total < length && !stopping.stopped())
                 answer.problem = "The connection was lost before the whole answer came.";
 
             return answer;

@@ -38,7 +38,8 @@ Look at both `problem` and `status`:
 | `status` | `problem` | What happened |
 |---|---|---|
 | 0 | Set | No server answered: the address isn't a web address, nothing listens there, the name doesn't exist or time ran out |
-| A status | Empty | The whole answer came, or your function stopped it |
+| 0 | Empty | A `Stopper` stopped it before any server answered |
+| A status | Empty | The whole answer came, or your function or a `Stopper` stopped it |
 | A status | Set | The answer stopped short. Pieces may have been held back that never reached your function, so what you hold says nothing of how much came |
 
 A 404 or a 500 is an answer with no problem, and its body reaches your function as any other does. Redirects are followed, and `status` is the last server's.
@@ -77,6 +78,19 @@ request.timeout = std::chrono::seconds(10);
 ```
 
 `timeout`, 30 seconds unless you change it, is how long the connection may take and then each wait for more of the answer. A slow server that keeps sending can run far past it. For a limit on the whole fetch, look at the clock in your function and give back `false`.
+
+A server that has gone quiet never calls your function, so to stop a fetch from elsewhere, as a program quitting does, give it a `Stopper`:
+
+```cpp
+http::Stopper stopper;
+http::Request request{url};
+request.stopper = &stopper;
+
+// On any other thread:
+stopper.stop();
+```
+
+`get` returns soon after with no problem, whatever had come by then. The stopper has to outlast the fetch, and stays stopped once stopped.
 
 ## Addresses
 

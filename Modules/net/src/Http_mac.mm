@@ -1,5 +1,7 @@
 #include "symbolengine/net/Http.h"
 
+#include "StoppingFetch.h"
+
 #import <Foundation/Foundation.h>
 #include <objc/runtime.h>
 
@@ -16,6 +18,7 @@ using Received = std::function<bool(int, std::string_view)>;
 struct Fetch
 {
     const Received* received = nullptr;
+    const symbolengine::http::Stopper* stopper = nullptr;
     symbolengine::http::Answer answer;
     bool stopped = false;
     std::exception_ptr thrown;
@@ -77,7 +80,7 @@ Class delegateClass()
         class_addMethod(c, @selector(URLSession:task:didCompleteWithError:),
                         (IMP) + [](id self, SEL, NSURLSession*, NSURLSessionTask*, NSError* error) {
                             Fetch& fetch = fetchOf(self);
-                            if (error != nil && !fetch.stopped)
+                            if (error != nil && !fetch.stopped && !(fetch.stopper != nullptr && fetch.stopper->stopped()))
                                 fetch.answer.problem = [[error localizedDescription] UTF8String];
                             dispatch_semaphore_signal(fetch.finished);
                         },
@@ -121,6 +124,7 @@ Answer get(const Request& request, const std::function<bool(int status, std::str
 
         Fetch fetch;
         fetch.received = &received;
+        fetch.stopper = request.stopper;
         fetch.finished = dispatch_semaphore_create(0);
 
         // The session holds this until it has been let go of, later than this call, and calls nothing on it after the
@@ -132,8 +136,12 @@ Answer get(const Request& request, const std::function<bool(int status, std::str
         queue.maxConcurrentOperationCount = 1;
         NSURLSession* session =
             [NSURLSession sessionWithConfiguration:configuration delegate:delegate delegateQueue:queue];
-        [[session dataTaskWithRequest:asked] resume];
-        dispatch_semaphore_wait(fetch.finished, DISPATCH_TIME_FOREVER);
+        NSURLSessionDataTask* task = [session dataTaskWithRequest:asked];
+        {
+            const StoppingFetch stopping(request.stopper, [task] { [task cancel]; });
+            [task resume];
+            dispatch_semaphore_wait(fetch.finished, DISPATCH_TIME_FOREVER);
+        }
         [session finishTasksAndInvalidate];
 
         dispatch_release(fetch.finished);

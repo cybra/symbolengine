@@ -209,7 +209,8 @@ public:
 
     /** Whether a file a scan came to is to be scanned: one new to the list, changed since by its stamp, cut short,
         asked for again, or changed after signing with the computer started again since. A file with the same stamp
-        isn't, whatever it held, so a plugin set aside stays set aside. */
+        isn't, whatever it held, so a plugin set aside stays set aside, but for one that timed out, as a busy computer can
+        bring that on: it is looked at again a day later, or once the computer has started again. */
     bool needsScan(const std::filesystem::path& path, const PluginStamp& stamp) const;
 
     /** Records what a scan found in a file, in place of what the list held of it, filling in each failure's date, the

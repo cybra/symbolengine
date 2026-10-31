@@ -41,13 +41,20 @@ public:
         thread at a time adds samples, and none once finish() has begun. */
     bool write(const float* const* channels, std::size_t frames) noexcept;
 
+    /** Leaves silence in the file for samples that won't be written, as those write() refused on a thread that can't
+        try again, so what comes after them keeps its time. Called from the thread adding samples, it comes after those
+        added so far and before those added next, and does nothing once writing the file has gone wrong. */
+    void leaveSilence(std::size_t frames) noexcept;
+
     /** Whether writing the file has gone wrong; nothing more is written to it once it has. */
     bool failed() const noexcept;
 
-    /** From any thread: the samples of each channel in the file so far, and those write() took that never reached it,
-        as writing it went wrong with them waiting. Once finished, every frame write() took is one or the other. */
+    /** From any thread: the samples of each channel in the file so far, silence among them; those write() took that
+        never reached it, as writing it went wrong with them waiting; and the silence asked for. Once finished, every
+        frame write() took is in the file or lost. */
     std::uint64_t framesWritten() const noexcept;
     std::uint64_t framesLost() const noexcept;
+    std::uint64_t framesOfSilence() const noexcept;
 
     /** Writes everything still waiting, finishes the file and stops the thread. Throws
         std::filesystem::filesystem_error for the first thing that went wrong in writing the file, or, given a

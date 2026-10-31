@@ -523,7 +523,7 @@ public:
         const auto frames = static_cast<std::int64_t>(std::llround(static_cast<double>(latency) * now.sampleRate / 1e7)) + periodFrames;
         (capture ? now.inputLatency : now.outputLatency) = latency > 0 ? frames : -1;
         const auto given = scheduled.load();
-        now.priority = given == 1 ? "Pro Audio, from the multimedia scheduler" : given == 0 ? "normal; Pro Audio refused" : "";
+        now.priority = given >= 0 ? detail::wordsFor(static_cast<detail::ThreadLevel>(given)) : "";
         now.unprocessed = capture && raw;
         return now;
     }
@@ -676,8 +676,14 @@ private:
     void run()
     {
         DWORD index = 0;
-        const auto registered = AvSetMmThreadCharacteristicsW(L"Pro Audio", &index);
-        scheduled = registered != nullptr ? 1 : 0;
+        HANDLE registered = nullptr;
+        scheduled = static_cast<int>(detail::reachThreadLevel(
+            [&](const wchar_t* task)
+            {
+                registered = AvSetMmThreadCharacteristicsW(task, &index);
+                return registered != nullptr;
+            },
+            [] { return SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL) != FALSE; }));
 
         if (!capture)
             if (REFERENCE_TIME latency = 0; SUCCEEDED(audioClient->GetStreamLatency(&latency)) && latency > 0)

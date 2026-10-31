@@ -149,6 +149,8 @@ An id must be new, and it never changes once the plugin is released, as hosts re
 | `bypass(id)` | The plugin's own bypass, which hosts show as theirs. Read it in `process` and pass the input through yourself |
 | `scaled(id, name, scale, defaultUnits, toText, fromText)` | A value hosts see from 0 to 1, shown and typed in its units |
 
+A value can be typed with a point or a comma as its decimal mark. A comma followed by exactly three digits, as in "1,000", isn't read, since it could mean a thousand or one, and the value stays as it was.
+
 Anything else is a `Parameter` of your own. `group` says where hosts list it, with groups inside groups parted by `/`, and `automatable`, `stepped` and `hidden` say what they sound like. Without `toText` a value shows as a number to two decimal places, and without `fromText` typed text reads as the number it starts with:
 
 ```cpp

@@ -1,3 +1,4 @@
+#include "../src/StoppingFetch.h"
 #include "symbolengine/net/Http.h"
 
 #include "TestServer.h"
@@ -259,4 +260,164 @@ TEST_CASE("What follows an address's # stays with the program, never reaching th
     CHECK(answer.status == 200);
     const std::lock_guard hold(lock);
     CHECK(asked.starts_with("GET /a HTTP/"));
+}
+
+TEST_CASE("A fetch waiting on a server that says nothing ends at once when stopped from another thread, with no problem", "[served]")
+{
+    if (!http::available())
+        SKIP("This system can't fetch yet");
+
+    std::atomic<bool> release{false};
+    TestServer server([&release](const std::string&, const TestServer::Send&) {
+        while (!release.load())
+            std::this_thread::sleep_for(10ms);
+    });
+
+    http::Stopper stopper;
+    http::Request request{server.address("/silent")};
+    request.timeout = 60s;
+    request.stopper = &stopper;
+
+    std::thread stopping([&stopper] {
+        std::this_thread::sleep_for(200ms);
+        stopper.stop();
+    });
+
+    const auto started = std::chrono::steady_clock::now();
+    const auto got = fetch(request);
+    const auto took = std::chrono::steady_clock::now() - started;
+    stopping.join();
+    release = true;
+
+    INFO(got.answer.problem);
+    CHECK(took >= 150ms);
+    CHECK(took < 20s);
+    CHECK(got.answer.problem.empty());
+    CHECK(got.answer.status == 0);
+    CHECK(got.pieces == 0);
+    CHECK(stopper.stopped());
+}
+
+TEST_CASE("A fetch stopped from another thread partway keeps what came, with no problem", "[served]")
+{
+    if (!http::available())
+        SKIP("This system can't fetch yet");
+
+    std::atomic<bool> release{false};
+    TestServer server([&release](const std::string&, const TestServer::Send& send) {
+        send("HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\nConnection: close\r\n\r\n");
+        send(std::string(1000, 'x'));
+        while (!release.load())
+            std::this_thread::sleep_for(10ms);
+    });
+
+    http::Stopper stopper;
+    http::Request request{server.address("/stops")};
+    request.timeout = 60s;
+    request.stopper = &stopper;
+
+    std::atomic<std::size_t> received{0};
+    std::thread stopping([&] {
+        while (received.load() == 0 && !release.load())
+            std::this_thread::sleep_for(5ms);
+        stopper.stop();
+    });
+
+    const auto started = std::chrono::steady_clock::now();
+    const auto answer = http::get(request, [&received](int, std::string_view piece) {
+        received += piece.size();
+        return true;
+    });
+    const auto took = std::chrono::steady_clock::now() - started;
+    release = true;
+    stopping.join();
+
+    INFO(answer.problem);
+    CHECK(took < 20s);
+    CHECK(answer.problem.empty());
+    CHECK(answer.status == 200);
+    CHECK(received.load() > 0);
+}
+
+TEST_CASE("A fetch given a stopper already stopped asks for nothing", "[served]")
+{
+    if (!http::available())
+        SKIP("This system can't fetch yet");
+
+    TestServer server([](const std::string&, const TestServer::Send& send) {
+        send("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi");
+    });
+
+    http::Stopper stopper;
+    stopper.stop();
+    stopper.stop();
+
+    http::Request request{server.address("/never")};
+    request.stopper = &stopper;
+    const auto got = fetch(request);
+
+    CHECK(got.answer.status == 0);
+    CHECK(got.answer.problem.empty());
+    CHECK(got.pieces == 0);
+    std::this_thread::sleep_for(100ms);
+    CHECK(server.connections() == 0);
+}
+
+TEST_CASE("Stopping a fetch that has ended does nothing, and a fetch left alone comes whole", "[served]")
+{
+    if (!http::available())
+        SKIP("This system can't fetch yet");
+
+    TestServer server([](const std::string&, const TestServer::Send& send) {
+        send("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi");
+    });
+
+    http::Stopper stopper;
+    http::Request request{server.address("/whole")};
+    request.stopper = &stopper;
+    const auto got = fetch(request);
+
+    CHECK(got.answer.status == 200);
+    CHECK(got.body == "hi");
+    CHECK(got.answer.problem.empty());
+    CHECK_FALSE(stopper.stopped());
+
+    stopper.stop();
+    CHECK(stopper.stopped());
+}
+
+TEST_CASE("A stopper ends a fetch only while it lasts, once, and at once if it was stopped already")
+{
+    int ended = 0;
+    const auto end = [&ended] { ++ended; };
+
+    http::Stopper afterwards;
+    {
+        const http::StoppingFetch fetch(&afterwards, end);
+        CHECK_FALSE(fetch.stopped());
+    }
+    afterwards.stop();
+    CHECK(ended == 0);
+
+    http::Stopper during;
+    {
+        const http::StoppingFetch fetch(&during, end);
+        during.stop();
+        CHECK(ended == 1);
+        during.stop();
+        CHECK(ended == 1);
+        CHECK(fetch.stopped());
+    }
+
+    {
+        const http::StoppingFetch fetch(&during, end);
+        CHECK(ended == 2);
+        CHECK(fetch.stopped());
+    }
+    during.stop();
+    CHECK(ended == 2);
+
+    const http::StoppingFetch none(nullptr, end);
+    CHECK_FALSE(none.stopped());
+    CHECK(ended == 2);
 }

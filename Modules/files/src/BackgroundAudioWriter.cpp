@@ -2,12 +2,15 @@
 
 #include "Samples.h"
 
+#include <symbolengine/core/LockFreeFifo.h>
+
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -28,7 +31,17 @@ struct BackgroundAudioWriter::State
     int wholeBits = 0;
 
     std::vector<std::vector<float>> ring;
-    std::atomic<std::uint64_t> added{0}, taken{0}, inFile{0}, lost{0};
+    std::atomic<std::uint64_t> added{0}, taken{0}, inFile{0}, lost{0}, silent{0};
+
+    // Silence asked for waits here, each stretch with the place in the samples added that it comes before, and what has
+    // been asked for since the last samples were added is owed until the next are.
+    struct Gap
+    {
+        std::uint64_t at = 0, frames = 0;
+    };
+    LockFreeFifo<Gap> gaps{64};
+    std::atomic<std::uint64_t> owed{0};
+
     std::atomic<bool> failure{false};
     std::error_code firstError{};
 
@@ -45,26 +58,21 @@ struct BackgroundAudioWriter::State
         failure = true;
     }
 
-    // Writes one stretch of the ring, from frame at of each channel, and gives it to written.
-    void writeStretch(std::size_t at, std::size_t frames, std::vector<const float*>& pointers,
-                      std::vector<std::vector<float>>& readBack)
+    // Writes a stretch and gives it to written, saying whether it reached the file.
+    bool put(std::vector<const float*>& pointers, std::size_t frames, std::vector<std::vector<float>>& readBack)
     {
-        for (std::size_t c = 0; c < ring.size(); ++c)
-            pointers[c] = ring[c].data() + at;
-
         std::error_code error;
         file->write(pointers.data(), frames, error);
         if (error)
         {
-            lost += frames;
             fail(error);
-            return;
+            return false;
         }
 
         inFile += frames;
 
         if (!written)
-            return;
+            return true;
 
         if (wholeBits > 0)
             for (std::size_t c = 0; c < ring.size(); ++c)
@@ -76,6 +84,45 @@ struct BackgroundAudioWriter::State
             }
 
         written(pointers.data(), frames);
+        return true;
+    }
+
+    // Writes one stretch of the ring, from frame at of each channel.
+    void writeStretch(std::size_t at, std::size_t frames, std::vector<const float*>& pointers,
+                      std::vector<std::vector<float>>& readBack)
+    {
+        for (std::size_t c = 0; c < ring.size(); ++c)
+            pointers[c] = ring[c].data() + at;
+
+        if (!put(pointers, frames, readBack))
+            lost += frames;
+    }
+
+    // Writes silence that was asked for, stopping if the file fails.
+    void writeSilence(std::uint64_t frames, const std::vector<float>& silence, std::vector<const float*>& pointers,
+                      std::vector<std::vector<float>>& readBack)
+    {
+        while (frames > 0 && !failure)
+        {
+            const auto now = static_cast<std::size_t>(std::min<std::uint64_t>(frames, silence.size()));
+            std::fill(pointers.begin(), pointers.end(), silence.data());
+            put(pointers, now, readBack);
+            frames -= now;
+        }
+    }
+
+    // Runs a piece of writing. Nothing here may end the program from this thread, the program's own function included.
+    template <typename Writing>
+    void guarded(Writing&& writing)
+    {
+        try
+        {
+            writing();
+        }
+        catch (...)
+        {
+            fail(std::make_error_code(std::errc::operation_canceled));
+        }
     }
 
     void run()
@@ -88,6 +135,8 @@ struct BackgroundAudioWriter::State
 
         std::vector<const float*> pointers(ring.size());
         std::vector<std::vector<float>> readBack(ring.size());
+        const std::vector<float> silence(std::min<std::size_t>(capacity, 4096), 0.0f);
+        std::optional<Gap> gap;
         auto flushedAt = clock::now();
         std::uint64_t flushedFrames = 0;
 
@@ -101,32 +150,43 @@ struct BackgroundAudioWriter::State
                 last = stopping;
             }
 
-            // Everything waiting, in two stretches when it goes round the end of the ring.
+            // Everything waiting, in two stretches when it goes round the end of the ring, and in more with silence to
+            // write among it.
             const auto end = added.load(std::memory_order_acquire);
-            for (auto start = taken.load(); start < end;)
+            for (auto start = taken.load();;)
             {
-                const auto at = static_cast<std::size_t>(start % capacity);
-                const auto frames = static_cast<std::size_t>(std::min<std::uint64_t>(end - start, capacity - at));
+                if (Gap next; !gap.has_value() && gaps.pop(next))
+                    gap = next;
 
-                // Nothing here may end the program from this thread, the program's own function included.
+                if (gap.has_value() && gap->at <= start)
+                {
+                    guarded([&] { writeSilence(gap->frames, silence, pointers, readBack); });
+                    gap.reset();
+                    continue;
+                }
+
+                if (start >= end)
+                    break;
+
+                const auto at = static_cast<std::size_t>(start % capacity);
+                auto frames = static_cast<std::size_t>(std::min<std::uint64_t>(end - start, capacity - at));
+                if (gap.has_value())
+                    frames = static_cast<std::size_t>(std::min<std::uint64_t>(frames, gap->at - start));
+
                 if (failure)
                     lost += frames;
                 else
-                    try
-                    {
-                        writeStretch(at, frames, pointers, readBack);
-                    }
-                    catch (...)
-                    {
-                        fail(std::make_error_code(std::errc::operation_canceled));
-                    }
+                    guarded([&] { writeStretch(at, frames, pointers, readBack); });
 
                 start += frames;
                 taken.store(start, std::memory_order_release);
             }
 
             if (last)
+            {
+                guarded([&] { writeSilence(owed.exchange(0), silence, pointers, readBack); });
                 return;
+            }
 
             if (!failure && clock::now() - flushedAt >= flushEvery)
             {
@@ -192,6 +252,15 @@ bool BackgroundAudioWriter::write(const float* const* channels, std::size_t fram
     if (frames > s.capacity - waiting)
         return false;
 
+    // Silence left since the last samples comes before these, or they wait until it can.
+    if (const auto owed = s.owed.load(std::memory_order_relaxed); owed > 0)
+    {
+        if (!s.gaps.push({added, owed}))
+            return false;
+        s.owed.store(0, std::memory_order_relaxed);
+    }
+
+
     const auto at = static_cast<std::size_t>(added % s.capacity);
     const auto first = std::min(frames, s.capacity - at);
     for (std::size_t c = 0; c < s.ring.size(); ++c)
@@ -202,6 +271,16 @@ bool BackgroundAudioWriter::write(const float* const* channels, std::size_t fram
 
     s.added.store(added + frames, std::memory_order_release);
     return true;
+}
+
+void BackgroundAudioWriter::leaveSilence(std::size_t frames) noexcept
+{
+    auto& s = *state;
+    if (s.failure.load(std::memory_order_relaxed))
+        return;
+
+    s.owed.store(s.owed.load(std::memory_order_relaxed) + frames, std::memory_order_relaxed);
+    s.silent.fetch_add(frames, std::memory_order_relaxed);
 }
 
 bool BackgroundAudioWriter::failed() const noexcept
@@ -217,6 +296,11 @@ std::uint64_t BackgroundAudioWriter::framesWritten() const noexcept
 std::uint64_t BackgroundAudioWriter::framesLost() const noexcept
 {
     return state->lost.load();
+}
+
+std::uint64_t BackgroundAudioWriter::framesOfSilence() const noexcept
+{
+    return state->silent.load();
 }
 
 void BackgroundAudioWriter::finish(std::error_code& error)

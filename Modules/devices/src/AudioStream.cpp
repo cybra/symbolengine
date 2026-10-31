@@ -932,7 +932,8 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
 
         const auto last = lastCycleEnds.load();
         const auto position = run.inputs > 0 ? inputPosition.load() : outputPosition.load();
-        if (!stalled && static_cast<double>(now - last) > options.stallBlocks * block)
+        const auto stallAfter = std::max(options.stallBlocks * block, 1e6 * static_cast<double>(options.stallAtLeast.count()));
+        if (!stalled && static_cast<double>(now - last) > stallAfter)
         {
             stalled = true;
             stalledAt = last;

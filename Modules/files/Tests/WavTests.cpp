@@ -7,8 +7,12 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <string>
+#include <tuple>
+#include <vector>
 
 using namespace symbolengine;
 using pattern::reference;
@@ -430,4 +434,150 @@ TEST_CASE("A chunk saying more than the file holds ends the walk, whatever its s
     const auto reader = files::openAudio(file);
     CHECK(reader->info().frames == 4);
     CHECK(reader->info().sampleRate == 48000);
+}
+
+TEST_CASE("A WAV saying no size with only chunks after it is an empty take, its chunks kept")
+{
+    ScratchFolder folder;
+    const auto file = folder.path / "empty.wav";
+    const auto list = "LIST" + littleBytes(8, 4) + "INFOabcd";
+    const auto odd = "note" + littleBytes(3, 4) + "abc";
+
+    for (const auto& after : {list, list + odd, list + odd + std::string(1, '\0') + list, odd + list})
+    {
+        INFO(after.size());
+        files::writeSafely(file, handmadeWav("", after, 0));
+        auto reader = files::openAudio(file);
+        CHECK(reader->info().frames == 0);
+        CHECK_FALSE(reader->info().chunks.empty());
+        CHECK(pattern::readAll(*reader)[0].empty());
+    }
+    files::writeSafely(file, handmadeWav("", "", 0));
+    CHECK(files::openAudio(file)->info().frames == 0);
+
+    // What only starts as a chunk, or holds chunks and then more, is samples from a take that stopped, as is silence,
+    // which read as chunks would be chunks of no size with no names.
+    for (const auto& samples : {"ABCD" + littleBytes(1000000, 4) + patternSamples(100), list + patternSamples(100),
+                                std::string(4000, '\0')})
+    {
+        INFO(samples.size());
+        files::writeSafely(file, handmadeWav("", samples, 0));
+        CHECK(files::openAudio(file)->info().frames == samples.size() / 4);
+    }
+}
+
+TEST_CASE("A WAV stopped after its sizes were last written reads on to the samples that reached it")
+{
+    ScratchFolder folder;
+    const auto file = folder.path / "take.wav";
+    const auto crashed = folder.path / "crashed.wav";
+
+    // 16-bit stereo, and 8-bit mono with its odd length's pad byte written over by the next sample.
+    for (const auto& [channelCount, bits, flushed] : {std::tuple{2, 16, std::size_t{1000}}, std::tuple{1, 8, std::size_t{1001}}})
+    {
+        INFO(bits);
+        std::vector<std::vector<float>> samples(static_cast<std::size_t>(channelCount), std::vector<float>(1500));
+        std::vector<const float*> first, rest;
+        for (std::size_t c = 0; c < samples.size(); ++c)
+        {
+            for (std::size_t i = 0; i < 1500; ++i)
+                samples[c][i] = pattern::read(i, static_cast<int>(c), bits);
+            first.push_back(samples[c].data());
+            rest.push_back(samples[c].data() + flushed);
+        }
+
+        auto writer = files::createAudio(file, {"WAV", 48000, channelCount, bits, false, 0, {}});
+        writer->write(first.data(), flushed);
+        writer->flush();
+        writer->write(rest.data(), 1500 - flushed);
+
+        std::filesystem::remove(crashed);
+        std::filesystem::copy_file(file, crashed);
+        {
+            auto reader = files::openAudio(crashed);
+            CHECK(reader->info().frames == 1500);
+            CHECK(pattern::readAll(*reader) == samples);
+        }
+        writer->finish();
+        writer.reset();
+        CHECK(files::openAudio(file)->info().frames == 1500);
+        std::filesystem::remove(file);
+    }
+
+    // Stopped half way through a frame, it reads to the last whole one.
+    {
+        const std::vector<float> samples(3000, 0.25f);
+        const float* channels[2]{samples.data(), samples.data()};
+        auto writer = files::createAudio(file, {"WAV", 48000, 2, 16, false, 0, {}});
+        writer->write(channels, 1000);
+        writer->flush();
+        writer->write(channels, 500);
+        auto bytes = files::read(file);
+        bytes.resize(bytes.size() - 1);
+        files::writeSafely(crashed, bytes);
+        CHECK(files::openAudio(crashed)->info().frames == 1499);
+    }
+}
+
+TEST_CASE("An RF64 stopped after its sizes were last written reads on to the samples that reached it")
+{
+    ScratchFolder folder;
+    const auto file = folder.path / "take.wav";
+    const auto fmt = "fmt " + littleBytes(16, 4) + littleBytes(1, 2) + littleBytes(2, 2) + littleBytes(48000, 4) +
+                     littleBytes(48000 * 4, 4) + littleBytes(4, 2) + littleBytes(16, 2);
+    const auto riffSize = static_cast<std::uint32_t>(4 + 36 + fmt.size() + 8 + 4000);
+    const auto ds64 = "ds64" + littleBytes(28, 4) + littleBytes(riffSize, 4) + littleBytes(0, 4) + littleBytes(4000, 4) +
+                      littleBytes(0, 4) + littleBytes(1000, 4) + littleBytes(0, 4) + littleBytes(0, 4);
+    files::writeSafely(file, "RF64" + littleBytes(0xFFFFFFFF, 4) + "WAVE" + ds64 + fmt + "data" +
+                                 littleBytes(0xFFFFFFFF, 4) + patternSamples(1500));
+    auto reader = files::openAudio(file);
+    CHECK(reader->info().frames == 1500);
+    CHECK(pattern::readAll(*reader)[1][1499] == pattern::read(1499, 1, 16));
+}
+
+TEST_CASE("What follows a finished WAV's samples isn't taken for more of them")
+{
+    ScratchFolder folder;
+    const auto file = folder.path / "finished.wav";
+    const auto samples = patternSamples(1000);
+    const auto list = "LIST" + littleBytes(8, 4) + "INFOabcd";
+    const std::string noise(400, '\x81');
+
+    const auto framesOf = [&](const std::string& bytes)
+    {
+        files::writeSafely(file, bytes);
+        return files::openAudio(file)->info().frames;
+    };
+
+    // Inside the file's own size.
+    CHECK(framesOf(handmadeWav("", samples + noise, 4000)) == 1000);
+    CHECK(framesOf(handmadeWav("", samples + list, 4000)) == 1000);
+    {
+        auto reader = files::openAudio(file);
+        CHECK_FALSE(reader->info().chunks.empty());
+    }
+
+    // Past it: a chunk added without the size being written again, a tag some programs add, and too little to read.
+    CHECK(framesOf(handmadeWav("", samples, 4000) + list) == 1000);
+    CHECK(framesOf(handmadeWav("", samples, 4000) + "TAG" + noise) == 1000);
+    CHECK(framesOf(handmadeWav("", samples, 4000) + "ID3" + noise) == 1000);
+    CHECK(framesOf(handmadeWav("", samples, 4000) + "APETAGEX" + noise) == 1000);
+    CHECK(framesOf(handmadeWav("", samples, 4000) + noise.substr(0, 7)) == 1000);
+
+    // And noise past it is the samples of a take that stopped.
+    CHECK(framesOf(handmadeWav("", samples, 4000) + noise) == 1100);
+}
+
+TEST_CASE("A WAV of nothing but empty data chunks takes no time to open")
+{
+    ScratchFolder folder;
+    const auto file = folder.path / "many.wav";
+    std::string many;
+    for (int i = 0; i < 100000; ++i)
+        many += "data" + littleBytes(0, 4);
+    files::writeSafely(file, handmadeWav("", many, 0));
+
+    const auto started = std::chrono::steady_clock::now();
+    CHECK(files::openAudio(file) != nullptr);
+    CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds(20));
 }
