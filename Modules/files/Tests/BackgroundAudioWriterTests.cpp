@@ -288,10 +288,12 @@ TEST_CASE("Every frame added is counted as in the file or as lost, when the file
     writer.finish(error);
     CHECK(error);
     CHECK(writer.failed());
-    CHECK(added == 20000);
+
+    // How many were taken depends on how soon its thread reached the end of the room, and none goes uncounted.
+    CHECK(added > 2500);
     CHECK(writer.framesWritten() + writer.framesLost() == added);
     CHECK(writer.framesWritten() <= 2500);
-    CHECK(writer.framesLost() >= 17500);
+    CHECK(writer.framesLost() >= added - 2500);
 }
 
 TEST_CASE("A function given what is written that throws fails the writer and doesn't end the program")

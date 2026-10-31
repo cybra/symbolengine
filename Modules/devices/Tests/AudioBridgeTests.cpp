@@ -313,7 +313,7 @@ TEST_CASE("At any number of channels the bridge's delay is what it says, from th
     }
 }
 
-TEST_CASE("Blocks of any size give a steady bridge, its delay at least what they need")
+TEST_CASE("Blocks of any size give a steady bridge, its delay at least what they need", "[timing]")
 {
     for (const int block : {64, 512, 2048, 4096, 8192, 16384})
     {

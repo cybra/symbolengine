@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
@@ -14,6 +15,7 @@
 #include <pthread.h>
 #include <sys/file.h>
 #include <sys/mman.h>
+#include <thread>
 #include <unistd.h>
 
 namespace symbolengine::crashNote::native
@@ -113,7 +115,16 @@ Layout* map(const std::filesystem::path& file, void*& handle, std::string& had, 
 
     // Not cut short until it is known to be this process's: another's still has its memory on this file, and cutting the
     // file under that would end it.
-    if (flock(opened, LOCK_EX | LOCK_NB) != 0)
+    //
+    // A program that has just ended can hold it a moment longer, its memory on the file being let go of after the process
+    // has gone, so it is looked at again before it is taken for a copy still running.
+    int locked = flock(opened, LOCK_EX | LOCK_NB);
+    for (int tries = 0; locked != 0 && errno == EWOULDBLOCK && tries < 25; ++tries)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        locked = flock(opened, LOCK_EX | LOCK_NB);
+    }
+    if (locked != 0)
     {
         anotherCopy = errno == EWOULDBLOCK;
         close(opened);

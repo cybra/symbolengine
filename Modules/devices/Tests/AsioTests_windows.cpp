@@ -1329,6 +1329,8 @@ TEST_CASE("A stream stopped with its driver's control panel open lets go of the 
     REQUIRE(!next->add(again));
     CHECK(!next->start());
     CHECK(soon([&] { return again.frames > 4800; }));
+    CHECK(!next->stop());
+    next.reset();
 }
 
 TEST_CASE("A driver asking to reset as every open makes its buffers is opened again once, and asking as it stops reopens nothing")
