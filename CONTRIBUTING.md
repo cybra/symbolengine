@@ -24,3 +24,7 @@ ctest --preset mac
 ## Signing off
 
 Each commit carries a `Signed-off-by` line with its author's name and email, certifying the [Developer Certificate of Origin 1.1](https://developercertificate.org/): that you made the change, or otherwise have the right to give it, under the project's MIT license. Contributions come in under the license they go out under, and there is no agreement to sign. `git commit -s` adds the line from your git settings, and `git rebase --signoff main` adds it to commits already made. Continuous integration checks every commit in a pull request.
+
+## Security problems
+
+Please report these privately, as [SECURITY.md](SECURITY.md) says, not in an issue.
