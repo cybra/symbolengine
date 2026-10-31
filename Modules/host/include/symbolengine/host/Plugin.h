@@ -176,9 +176,10 @@ public:
         std::function<void(const std::string&)> misuse;
 
         /** A debug mode: finds what each plugin calls on the audio thread that a real-time thread never should, as it
-            allocates memory or takes a lock, and names it (Plugin::unsafeCalls), the audio playing on. What it costs is
-            a few billionths of a second for such a call on any thread, and a look at the stack for one made in a
-            plugin's call. Where canWatchUnsafeCalls() is false it does nothing. */
+            allocates memory or takes a lock, and names it (Plugin::unsafeCalls), the audio playing on. An offline render
+            isn't watched, as nothing is waiting for it and a plugin may wait there. What it costs is a few billionths of
+            a second for such a call on any thread, and a look at the stack for one made in a plugin's call. Where
+            canWatchUnsafeCalls() is false it does nothing. */
         bool watchUnsafeCalls{};
     };
 

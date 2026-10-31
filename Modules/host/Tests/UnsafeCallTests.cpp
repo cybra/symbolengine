@@ -357,6 +357,20 @@ TEST_CASE("Only calls on the audio thread in a plugin's own call are found")
         CHECK(later == 0);
     }
 
+    SECTION("an offline render isn't, as nothing is waiting for it and a plugin may wait there, and playing again is")
+    {
+        const auto plugin = rig.made();
+        REQUIRE(plugin->prepare({48000.0, 512, true}));
+        REQUIRE(plugin->setParameter(testIds::unsafeDoes, testIds::unsafeValue(testIds::doesMalloc)));
+        rig.play(plugin, 20);
+        INFO(said(plugin->unsafeCalls()));
+        CHECK(plugin->unsafeCalls().empty());
+
+        REQUIRE(plugin->prepare({48000.0, 512, false}));
+        rig.play(plugin, 20);
+        CHECK(anyOf(plugin->unsafeCalls(), Kind::memory));
+    }
+
     SECTION("what the plugin does on the main thread isn't, as being made and prepared allocate plenty")
     {
         const auto plugin = rig.made();

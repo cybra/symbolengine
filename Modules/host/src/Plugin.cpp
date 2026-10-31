@@ -499,7 +499,8 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     bool audioCall(const char* step, Call&& body) noexcept
     {
         const crashNote::InCall noted(host->note, noteSlot, step, true);
-        const unsafeCalls::Watching watching(unsafeRecord.get(), step,
+        // An offline render isn't watched: nothing is waiting for it, so a plugin may wait there.
+        const unsafeCalls::Watching watching(setup.offline ? nullptr : unsafeRecord.get(), step,
                                              static_cast<std::int64_t>(blocksPlayed.load(std::memory_order_relaxed)));
         std::uint32_t fault = 0;
 
