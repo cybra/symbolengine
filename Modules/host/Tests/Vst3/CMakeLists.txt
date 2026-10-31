@@ -37,6 +37,12 @@ else()
     set(editor_view TestEditor_other.cpp)
 endif()
 add_library(symbolengine_test_vst3 MODULE TestPlugins.cpp TestEditor.cpp ${editor_view} ${plugin_sdk_sources})
+
+# What the tests look for in these plugins depends on their code being as it is written, which optimizing doesn't keep: a
+# malloc and free it can see are gone, and a frame called last is replaced by what it calls.
+if(NOT MSVC)
+    target_compile_options(symbolengine_test_vst3 PRIVATE -O0)
+endif()
 target_include_directories(symbolengine_test_vst3 SYSTEM PRIVATE ${sdk})
 # The single-component plugins' source leaves the edit controller's to be built on its own, for the two-part ones.
 target_compile_definitions(symbolengine_test_vst3 PRIVATE $<IF:$<CONFIG:Debug>,DEVELOPMENT=1,RELEASE=1>

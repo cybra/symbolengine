@@ -60,6 +60,22 @@ inline void releaseAligned(void* memory) noexcept
 }
 }
 
+// The thread sanitizer on Linux links its own operators into every program whole, so nothing can replace them there, and
+// nothing is counted in that build; every other build counts.
+#define SYMBOLENGINE_SANITIZER_KEEPS_NEW 0
+#if defined(__linux__)
+    #if defined(__SANITIZE_THREAD__)
+        #undef SYMBOLENGINE_SANITIZER_KEEPS_NEW
+        #define SYMBOLENGINE_SANITIZER_KEEPS_NEW 1
+    #elif defined(__has_feature)
+        #if __has_feature(thread_sanitizer)
+            #undef SYMBOLENGINE_SANITIZER_KEEPS_NEW
+            #define SYMBOLENGINE_SANITIZER_KEEPS_NEW 1
+        #endif
+    #endif
+#endif
+
+#if !SYMBOLENGINE_SANITIZER_KEEPS_NEW
 void* operator new(std::size_t size) { return symbolengine::audioThread::detail::allocate(size); }
 void* operator new[](std::size_t size) { return symbolengine::audioThread::detail::allocate(size); }
 void* operator new(std::size_t size, const std::nothrow_t&) noexcept
@@ -131,3 +147,4 @@ void operator delete[](void* memory, std::size_t, std::align_val_t) noexcept
 {
     symbolengine::audioThread::detail::releaseAligned(memory);
 }
+#endif

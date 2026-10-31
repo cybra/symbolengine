@@ -46,7 +46,7 @@ endif()
 
 if(SYMBOLENGINE_TESTS)
     set(tests Tests/AsioDetailTests.cpp Tests/AudioBridgeTests.cpp Tests/AudioDevicesTests.cpp Tests/AudioPlayerTests.cpp Tests/AudioSetupTests.cpp Tests/AudioStreamTests.cpp
-        Tests/RecordingTests.cpp Tests/WindowsAudioDetailTests.cpp)
+        Tests/RecordingTests.cpp Tests/WindowsAudioDetailTests.cpp Tests/CoreAudioDetailTests.cpp)
     if(APPLE)
         list(APPEND tests Tests/CoreAudioTests.cpp)
     elseif(WIN32)

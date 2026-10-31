@@ -154,7 +154,8 @@ struct AudioEvent
     what happens to it as events. Each stream has a control thread that owns its state and makes every call to the
     system, so a notification, the audio thread and the program's own calls never meet in the system. Its calls
     return within Options::callTimeout whatever the device does, and refuse to run on the audio thread or the
-    control thread, where they would deadlock. Blocks reach the callbacks as AudioCallback says, with every lost
+    control thread, where they would deadlock. A call that gives up says the device isn't answering, what it asked for
+    isn't done later unless it was to stop or remove, and the stream carries on once the device comes back. Blocks reach the callbacks as AudioCallback says, with every lost
     frame counted in their positions; a device that changes under the stream is opened again as it now is, and one
     that is lost stays stopped and says so. */
 class AudioStream

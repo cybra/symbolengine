@@ -190,6 +190,10 @@ bool setAndWait(AudioObjectID device, const AudioObjectPropertyAddress& where, T
         dispatch_semaphore_wait(changed, dispatch_time(DISPATCH_TIME_NOW, 2 * static_cast<std::int64_t>(NSEC_PER_SEC)));
 
     AudioObjectRemovePropertyListenerBlock(device, &where, queue, heard);
+
+    // One already on its way would signal what is about to be let go of.
+    dispatch_sync(queue, ^{
+                  });
     Block_release(heard);
     dispatch_release(queue);
     dispatch_release(changed);
@@ -408,12 +412,11 @@ private:
                 self.inputPointers[c] = nullptr;
                 continue;
             }
-            const auto* from = static_cast<const float*>(input->mBuffers[b].mData);
-            const auto across = static_cast<std::size_t>(input->mBuffers[b].mNumberChannels);
             auto* to_ = self.inputs[c].data();
-            for (std::size_t i = 0; i < frames; ++i)
-                to_[i] = from[i * across + static_cast<std::size_t>(place.channel)];
-            self.inputPointers[c] = to_;
+            const bool read = detail::readChannel(
+                static_cast<const float*>(input->mBuffers[b].mData), input->mBuffers[b].mDataByteSize,
+                static_cast<int>(input->mBuffers[b].mNumberChannels), place.channel, frames, to_);
+            self.inputPointers[c] = read ? to_ : nullptr;
         }
 
         AudioSystemCycle given;
@@ -444,13 +447,11 @@ private:
             {
                 const auto& place = self.outputPlaces[c];
                 const auto b = static_cast<UInt32>(place.buffer);
-                if (b >= output->mNumberBuffers || output->mBuffers[b].mData == nullptr)
+                if (b >= output->mNumberBuffers)
                     continue;
-                auto* into = static_cast<float*>(output->mBuffers[b].mData);
-                const auto across = static_cast<std::size_t>(output->mBuffers[b].mNumberChannels);
-                const auto* from = self.outputs[c].data();
-                for (std::size_t i = 0; i < frames; ++i)
-                    into[i * across + static_cast<std::size_t>(place.channel)] = from[i];
+                detail::writeChannel(self.outputs[c].data(), frames, static_cast<float*>(output->mBuffers[b].mData),
+                                     output->mBuffers[b].mDataByteSize,
+                                     static_cast<int>(output->mBuffers[b].mNumberChannels), place.channel);
             }
         return noErr;
     }
@@ -518,6 +519,10 @@ private:
         AudioObjectRemovePropertyListenerBlock(device, &stopped, queue, stoppedBlock);
         const auto overload = address(kAudioDeviceProcessorOverload);
         AudioObjectRemovePropertyListenerBlock(device, &overload, queue, overloadBlock);
+
+        // Those already on their way run before the client goes.
+        dispatch_sync(queue, ^{
+                      });
         listeners->client = nullptr;
         for (auto* block : {&changedBlock, &aliveBlock, &stoppedBlock, &overloadBlock})
         {

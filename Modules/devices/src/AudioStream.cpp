@@ -12,8 +12,11 @@
 #include <cmath>
 #include <condition_variable>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <thread>
+#include <utility>
+#include <vector>
 
 // A stream's state belongs to its control thread. The program's calls reach it as commands and wait a bounded time
 // for their answers; the system's notifications set flags and wake it; the audio thread reads only what the control
@@ -90,6 +93,8 @@ struct Completion
     std::mutex lock;
     std::condition_variable wake;
     bool finished = false;
+    bool running = false;     // the control thread has come to it
+    bool abandoned = false;   // its caller was told the stream wasn't answering, and has gone on
     AudioError error;
 };
 
@@ -110,6 +115,24 @@ struct Command
     AudioStreamRequest request{};
     std::shared_ptr<Completion> done{};
 };
+
+// What a thread that won't come out of something is inside, kept for as long as the process lasts. Reachable from here,
+// so that a leak checker knows it is kept on purpose.
+template <typename Thing>
+void keepForever(Thing thing)
+{
+    static std::mutex lock;
+    static auto* const kept = new std::vector<Thing>;
+    const std::lock_guard hold(lock);
+    kept->push_back(std::move(thing));
+}
+
+// The channels asked for that a device has.
+std::vector<int> channelsPresent(std::vector<int> asked, int has)
+{
+    std::erase_if(asked, [&](int channel) { return channel >= has; });
+    return asked;
+}
 
 bool sameShape(const AudioStreamInfo& a, const AudioStreamInfo& b)
 {
@@ -184,6 +207,7 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
 
     // Set by the system's notifications, from any thread.
     std::atomic<bool> changePending{false}, reopenPending{false}, rebuilding{false};
+    std::atomic<bool> behind{false};   // a call has given up on the control thread, which hasn't caught up
     std::atomic<std::int64_t> changeAt{0};
     std::atomic<int> lossPending{-1};
     std::atomic<std::int64_t> lossCode{0};
@@ -211,9 +235,10 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
             return {"A stream can't be started, stopped or changed from its audio thread.", "call"};
         if (controlThreadOf == this)
             return {"A stream can't be started, stopped or changed from its own callbacks.", "call"};
-        if (state.load() == State::failed)
+        if (state.load() == State::failed || behind.load())
             return notAnswering();
 
+        const bool hasCallback = command.kind == Command::Kind::add;
         auto done = std::make_shared<Completion>();
         command.done = done;
         {
@@ -225,7 +250,17 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
         std::unique_lock waiting(done->lock);
         if (!done->wake.wait_for(waiting, options.callTimeout, [&] { return done->finished; }))
         {
-            state = State::failed;
+            // A callback being prepared is in the program's hands, and can't be let go of while it is in use.
+            if (hasCallback && done->running)
+            {
+                done->wake.wait(waiting, [&] { return done->finished; });
+                return done->error;
+            }
+
+            // Slow, which isn't the same as gone: it carries on once the control thread comes back. Until then nothing
+            // more is taken, and what is waiting isn't done later behind the program's back.
+            done->abandoned = true;
+            behind = true;
             return notAnswering();
         }
         return done->error;
@@ -275,12 +310,16 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
             taken.swap(commands);
             hold.unlock();
             for (auto& command : taken)
-                finish(command, perform(command));
+            {
+                finish(command, comeTo(command) ? perform(command) : notAnswering());
+            }
             handleSystem();
             drainNotes();
             watchIdle();
             watch();
             hold.lock();
+            if (commands.empty())
+                behind = false;
         }
 
         // Commands that came after the quit are answered, and the device closed without a word to the program.
@@ -296,6 +335,15 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
         finished = true;
         hold.unlock();
         ended.notify_all();
+    }
+
+    // Whether what was asked is still wanted. A stop or a removal is, whatever became of its caller, as it asked for
+    // something to end; the rest it has been told didn't happen.
+    static bool comeTo(Command& command)
+    {
+        const std::lock_guard hold(command.done->lock);
+        command.done->running = true;
+        return !command.done->abandoned || command.kind == Command::Kind::stop || command.kind == Command::Kind::remove;
     }
 
     static void finish(Command& command, AudioError error)
@@ -337,7 +385,11 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
     {
         const bool was = stream != nullptr || resting;
         resting = false;
+        orphaned = false;
+        defaultsPending = false;
         teardown();
+        if (state.load() == State::failed)
+            return notAnswering();
         wokeAt = -1;
         setState(State::stopped);
         if (was)
@@ -423,6 +475,14 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
             asked = request;
             deviceName = device.name;
         }
+        if (rebuilding.load())
+        {
+            // The device has changed under the stream, and it goes on with what it still has of what was asked.
+            asked.inputChannels = channelsPresent(std::move(asked.inputChannels), device.inputs());
+            asked.outputChannels = channelsPresent(std::move(asked.outputChannels), device.outputs());
+            if (asked.inputChannels.empty() && asked.outputChannels.empty())
+                return {"The audio device no longer has any of the channels asked for.", "open"};
+        }
         if (asked.sampleRate == device.currentRate)
             asked.sampleRate = 0.0;
         if (asked.blockSize == device.currentBlock)
@@ -449,13 +509,13 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
         lastCycleEnds = -1;
         inputPosition = 0;
         outputPosition = 0;
-        startedAt = system->now();
-        windowAt = startedAt;
         windowFrames = 0;
         stalled = false;
         runawaySaid = false;
         priorityRead = false;
 
+        startedAt = system->now();
+        windowAt = startedAt;
         accepting.store(true);
         if (!opened->start(*this, error))
         {
@@ -465,6 +525,10 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
                     callback->stopped();
             return error ? error : AudioError{"The audio device didn't start.", "start"};
         }
+
+        // The wait for a first block starts now, as a Bluetooth headset's start alone can take seconds.
+        startedAt = system->now();
+        windowAt = startedAt;
 
         stream = std::move(opened);
         {
@@ -532,11 +596,16 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
         accepting.store(false);
         stream->stop();
         const bool out = waitOut();
-        stream.reset();
-        // A stream that failed while the program waited calls nothing of the program's again.
+
+        // A stream that failed while the program waited calls nothing of the program's again, and what its audio thread
+        // is still inside stays where it is.
         if (!out)
+        {
             state = State::failed;
-        else if (state.load() != State::failed)
+            keepForever(std::move(stream));
+        }
+        stream.reset();
+        if (out && state.load() != State::failed)
             for (auto* callback : callbacks)
                 callback->stopped();
         drainNotes();
@@ -676,10 +745,24 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
                     const std::lock_guard hold(lock);
                     before = info;
                 }
-                if (asked || !sameShape(now, before))
+                if (asked || !sameShape(now, before) || channelsMoved(before))
                     rebuild(before, now);
             }
         }
+    }
+
+    // Whether the device now has a different number of the channels asked for, whichever way, than the stream runs with.
+    // A stream knows only those it was opened with, so this asks the device.
+    bool channelsMoved(const AudioStreamInfo& before)
+    {
+        const auto device = system->describe(currentDevice());
+        if (!device.answering)
+            return false;
+        const std::lock_guard hold(lock);
+        return static_cast<int>(channelsPresent(request.inputChannels, device.inputs()).size()) !=
+                   before.inputChannels ||
+               static_cast<int>(channelsPresent(request.outputChannels, device.outputs()).size()) !=
+                   before.outputChannels;
     }
 
     // Opens the device again as it now runs, after it changed under the stream; what another program set is kept.
@@ -1272,6 +1355,10 @@ struct AudioStream::Impl final : AudioSystemClient, AudioSystemListener, std::en
         else if (control.joinable())
             control.detach();   // the device holds it up; its memory stays with the thread
 
+        // The audio thread may still be inside this object, on its way out of a callback that wouldn't return.
+        if (inCycle.load())
+            keepForever(shared_from_this());
+
         if (closed)
             closed();
         if (queue != nullptr)
@@ -1334,7 +1421,7 @@ AudioError AudioStream::remove(AudioCallback& callback)
 
 AudioStream::State AudioStream::state() const noexcept
 {
-    return impl->state.load();
+    return impl->behind.load() ? State::failed : impl->state.load();
 }
 
 AudioStreamInfo AudioStream::info() const

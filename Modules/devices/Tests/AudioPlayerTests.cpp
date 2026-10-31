@@ -451,3 +451,73 @@ TEST_CASE("Playing, jumping and stopping thousands of times while blocks are pla
     audio.join();
     CHECK(deck.player.playing());
 }
+
+namespace
+{
+// A source whose reads wait until they are let go, as a disk that has stopped answering.
+class Stalls final : public AudioPlayerSource
+{
+public:
+    explicit Stalls(double rate = 48000.0) : rate_(rate) {}
+
+    int channels() const override { return 2; }
+    double sampleRate() const override { return rate_; }
+    std::int64_t length() const override { return 480000; }
+
+    void read(float* const* into, std::int64_t, std::size_t frames) override
+    {
+        reading = true;
+        while (stalled.load())
+            std::this_thread::sleep_for(1ms);
+        for (int c = 0; c < 2; ++c)
+            std::fill_n(into[c], frames, 0.25f);
+    }
+
+    std::atomic<bool> stalled{true}, reading{false};
+
+private:
+    double rate_;
+};
+}
+
+TEST_CASE("Preparing a player doesn't wait for a read that has stalled, which holds up the stream that asks")
+{
+    // At a rate of its own, so what the read comes back to has a resampler, which preparing lets go of.
+    Deck deck;
+    const auto source = std::make_shared<Stalls>(44100.0);
+    deck.player.play(source, 0);
+    const auto until = std::chrono::steady_clock::now() + 5s;
+    while (!source->reading.load())
+        REQUIRE(std::chrono::steady_clock::now() < until);
+
+    const auto before = std::chrono::steady_clock::now();
+    deck.player.prepare(96000.0, 2);
+    CHECK(std::chrono::steady_clock::now() - before < 500ms);
+
+    source->stalled = false;
+    deck.waitReady();
+    float* channels[2]{deck.left.data(), deck.right.data()};
+    deck.player.render(channels, 2, 512);
+    deck.player.stop();
+}
+
+TEST_CASE("A player stopped between one play and the next isn't left saying it plays")
+{
+    Deck deck;
+    deck.player.play(std::make_shared<Counting>(480000), 0);
+    deck.waitReady();
+    float* channels[2]{deck.left.data(), deck.right.data()};
+    deck.player.render(channels, 2, 512);
+    CHECK(deck.player.playing());
+
+    // The next play has nothing ready for the block that leaves the first, and then is stopped too.
+    const auto next = std::make_shared<Stalls>();
+    deck.player.play(next, 0);
+    deck.player.render(channels, 2, 512);
+    deck.player.stop();
+    next->stalled = false;
+    deck.player.render(channels, 2, 512);
+    deck.player.render(channels, 2, 512);
+
+    CHECK_FALSE(deck.player.playing());
+}

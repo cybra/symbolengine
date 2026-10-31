@@ -1156,3 +1156,165 @@ TEST_CASE("A change that fails to open leaves the stream running as it was")
     CHECK(rig.device.cycle());
     CHECK(recording.prepares == recording.stops + 1);
 }
+
+TEST_CASE("A slow call says so, and the stream carries on from where it is once the call returns")
+{
+    Rig rig;
+    Recording recording;
+    auto stream = rig.stream({}, [](AudioStream::Options& options) { options.callTimeout = 200ms; });
+    REQUIRE(!stream->add(recording));
+    REQUIRE(!stream->start());
+    REQUIRE(rig.device.cycle());
+
+    rig.device.hangStop = true;
+    CHECK(stream->stop());
+    CHECK(stream->state() == AudioStream::State::failed);
+    CHECK(stream->start());   // not answering, so said at once
+
+    // It wasn't gone, only slow.
+    rig.device.hangStop = false;
+    REQUIRE(soon([&] { return stream->state() == AudioStream::State::stopped; }));
+    CHECK(!stream->start());
+    CHECK(stream->state() == AudioStream::State::running);
+    CHECK(rig.device.running());
+}
+
+TEST_CASE("What a call was refused for not answering isn't done later behind the program's back")
+{
+    Rig rig;
+    Recording recording, refused;
+    auto stream = rig.stream({}, [](AudioStream::Options& options) { options.callTimeout = 300ms; });
+    REQUIRE(!stream->add(recording));
+    REQUIRE(!stream->start());
+    REQUIRE(rig.device.cycle());
+
+    // A call waiting behind one that has the control thread held up, and refused as that one is: the program can let go
+    // of the callback it gave.
+    rig.device.hangStop = true;
+    std::thread stopping([&] { stream->stop(); });
+    std::this_thread::sleep_for(50ms);
+    CHECK(stream->add(refused));
+    stopping.join();
+
+    rig.device.hangStop = false;
+    REQUIRE(soon([&] { return stream->state() == AudioStream::State::stopped; }));
+    REQUIRE(!stream->start());
+    CHECK(refused.prepares == 0);
+    CHECK(recording.prepares == 2);
+}
+
+TEST_CASE("A start that takes its time isn't taken for a device with no sound")
+{
+    Rig rig;
+    Recording recording;
+    auto stream = rig.stream({}, [](AudioStream::Options& options) { options.firstBlockTimeout = 300ms; });
+    REQUIRE(!stream->add(recording));
+
+    // Past the limit for a first block, which only then begins to run.
+    rig.device.startMilliseconds = 500;
+    REQUIRE(!stream->start());
+    std::this_thread::sleep_for(100ms);
+    CHECK(rig.events.count(Kind::noSound) == 0);
+    CHECK(stream->state() == AudioStream::State::running);
+
+    // And after the limit, with still nothing, it is said.
+    rig.system->advance(400ms);
+    CHECK(rig.events.waitFor(Kind::noSound));
+}
+
+TEST_CASE("A stream whose audio thread won't come out frees nothing that thread is inside")
+{
+    struct Held final : AudioCallback
+    {
+        void process(const AudioBlock&) noexcept override
+        {
+            inside = true;
+            while (hold.load())
+                std::this_thread::sleep_for(1ms);
+            inside = false;
+        }
+        std::atomic<bool> hold{true}, inside{false};
+    };
+
+    Rig rig;
+    rig.device.stopLeavesCycle = true;
+    rig.device.run({.speed = 1.0});
+    Held held;
+    {
+        auto stream = rig.stream({}, [](AudioStream::Options& options) { options.callTimeout = 200ms; });
+        REQUIRE(!stream->add(held));
+        REQUIRE(!stream->start());
+        REQUIRE(soon([&] { return held.inside.load(); }));
+
+        CHECK(stream->stop());
+        CHECK(stream->state() == AudioStream::State::failed);
+        CHECK(rig.device.streamsFreed() == 0);
+
+        // Nor does letting go of the stream itself, for which a sanitizer build is the check.
+    }
+    CHECK(rig.device.streamsFreed() == 0);
+    held.hold = false;
+    REQUIRE(soon([&] { return !held.inside.load(); }));
+    std::this_thread::sleep_for(50ms);
+}
+
+TEST_CASE("A stop just after a followed device goes leaves the stream stopped")
+{
+    auto system = std::make_shared<FakeAudioSystem>();
+    auto& speakers = system->add(fakeDevice("speakers", 0, 2));
+    auto& headphones = system->add(fakeDevice("headphones", 0, 2));
+    system->setDefault(AudioDirection::output, "speakers");
+    Events events;
+    auto request = stereo(false, true);
+    request.followDefault = true;
+    Recording recording;
+    AudioStream stream(system, "speakers", request, quick(events));
+    REQUIRE(!stream.add(recording));
+    REQUIRE(!stream.start());
+    REQUIRE(speakers.running());
+
+    // Its device goes, and before the system says what the default now is, the program stops it.
+    system->remove("speakers", true);
+    REQUIRE(soon([&] { return !speakers.running(); }));
+    REQUIRE(!stream.stop());
+    system->setDefault(AudioDirection::output, "headphones");
+    std::this_thread::sleep_for(300ms);
+
+    CHECK(stream.state() == AudioStream::State::stopped);
+    CHECK_FALSE(headphones.running());
+    CHECK(events.count(Kind::moved) == 0);
+}
+
+TEST_CASE("A device losing channels under a stream goes on with what is left, and has them again when they return")
+{
+    auto info = fakeDevice("headset", 0, 2);
+    Rig rig(info);
+    rig.device.run({.speed = 20.0});
+    Recording recording(1 << 16);
+    auto stream = rig.stream(stereo(false, true));
+    REQUIRE(!stream->add(recording));
+    REQUIRE(!stream->start());
+    REQUIRE(soon([&] { return recording.frames > 4800; }));
+    CHECK(stream->info().outputChannels == 2);
+
+    // As AirPods go when something asks for their microphone.
+    const auto outputs = rig.device.info().outputNames;
+    rig.device.changed([](AudioDeviceInfo& device) { device.outputNames.resize(1); });
+    REQUIRE(rig.events.waitFor(Kind::formatChanged));
+    CHECK(rig.events.of(Kind::formatChanged).back().before.outputChannels == 2);
+    CHECK(rig.events.of(Kind::formatChanged).back().after.outputChannels == 1);
+    CHECK(stream->state() == AudioStream::State::running);
+    CHECK(rig.events.count(Kind::lost) == 0);
+
+    rig.device.changed([&](AudioDeviceInfo& device) { device.outputNames = outputs; });
+    REQUIRE(rig.events.waitFor(Kind::formatChanged, 2));
+    CHECK(rig.events.of(Kind::formatChanged).back().after.outputChannels == 2);
+    CHECK(stream->state() == AudioStream::State::running);
+}
+
+TEST_CASE("A stream told to start on a channel its device doesn't have is refused, however often it was told before")
+{
+    Rig rig(fakeDevice("headset", 0, 1));
+    auto stream = rig.stream(stereo(false, true));
+    CHECK(stream->start());
+}

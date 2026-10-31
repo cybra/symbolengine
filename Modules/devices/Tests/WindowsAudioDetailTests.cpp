@@ -31,3 +31,40 @@ TEST_CASE("A USB interface's endpoints are USB, by the class driver or its maker
     CHECK(kindOf("HDAUDIO", "DELL S2725QS (NVIDIA High Definition Audio)").transport == AudioTransport::unknown);
     CHECK(kindOf("", "Speakers").transport == AudioTransport::unknown);
 }
+
+TEST_CASE("A short run of errors a buffer call can recover from doesn't end a stream, and anything else does at once")
+{
+    using windowsAudio::detail::ErrorRun;
+    constexpr std::int32_t ok = 0;
+    constexpr auto bufferError = static_cast<std::int32_t>(0x88890018u);
+    constexpr auto resetInProgress = static_cast<std::int32_t>(0x8889000Bu);
+    constexpr auto tooLarge = static_cast<std::int32_t>(0x88890006u);
+    constexpr auto invalidated = static_cast<std::int32_t>(0x88890004u);
+
+    ErrorRun run;
+    CHECK_FALSE(run.ends(ok));
+    CHECK_FALSE(run.ends(bufferError));
+    CHECK_FALSE(run.ends(resetInProgress));
+    CHECK_FALSE(run.ends(tooLarge));
+    CHECK_FALSE(run.ends(ok));
+
+    // A run that goes on is no longer one it can recover from, and one good call starts the count again.
+    int heard = 0;
+    while (!run.ends(bufferError) && heard < 1000)
+        ++heard;
+    CHECK(heard == ErrorRun::mostInARow);
+    CHECK_FALSE(run.ends(ok));
+    CHECK_FALSE(run.ends(bufferError));
+
+    CHECK(run.ends(invalidated));
+    ErrorRun fresh;
+    CHECK(fresh.ends(static_cast<std::int32_t>(0x88890010u)));   // the audio service has stopped
+}
+
+TEST_CASE("A session disconnected for its format is opened again, and for any other reason is lost")
+{
+    using namespace windowsAudio::detail;
+    CHECK(reopensAfterDisconnect(disconnectReasonFormatChanged));
+    CHECK_FALSE(reopensAfterDisconnect(0));   // the device removed
+    CHECK_FALSE(reopensAfterDisconnect(5));   // another program taking it for itself
+}

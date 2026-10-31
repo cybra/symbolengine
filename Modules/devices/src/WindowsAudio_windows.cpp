@@ -346,8 +346,8 @@ public:
     {
         if (auto* to = client.load())
         {
-            if (reason == DisconnectReasonFormatChanged)
-                to->changed();
+            if (windowsAudio::detail::reopensAfterDisconnect(static_cast<int>(reason)))
+                to->reopen();
             else
                 to->lost(lossOf(reason), static_cast<std::int64_t>(reason));
         }
@@ -386,6 +386,7 @@ public:
     {
         capture = capturing;
         request = asked;
+        device->QueryInterface(__uuidof(IMMDevice), reinterpret_cast<void**>(endpoint.put()));
         const auto& wanted = capture ? request.inputChannels : request.outputChannels;
         if ((capture && !request.outputChannels.empty()) || (!capture && !request.inputChannels.empty()))
         {
@@ -492,10 +493,28 @@ public:
 
     AudioWorkgroup workgroup() const override { return devices::detail::proAudioWorkgroup(); }
 
+    // The rate the device runs at now. A client's format is as it was when the client was made, and in shared mode the
+    // system's own can change under it, in Sound settings, so a new client is asked.
+    double liveRate() const
+    {
+        const double opened = format.Format.nSamplesPerSec;
+        if (request.exclusive || !endpoint)
+            return opened;
+        Com<IAudioClient> fresh;
+        WAVEFORMATEX* mix = nullptr;
+        if (FAILED(endpoint->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
+                                      reinterpret_cast<void**>(fresh.put()))) ||
+            FAILED(fresh->GetMixFormat(&mix)) || mix == nullptr)
+            return opened;
+        const double rate = mix->nSamplesPerSec;
+        CoTaskMemFree(mix);
+        return rate;
+    }
+
     AudioStreamInfo info() const override
     {
         AudioStreamInfo now;
-        now.sampleRate = format.Format.nSamplesPerSec;
+        now.sampleRate = liveRate();
         now.maxBlock = static_cast<int>(std::max(periodFrames, request.exclusive ? bufferFrames : periodFrames * 2));
         now.inputChannels = capture ? static_cast<int>(request.inputChannels.size()) : 0;
         now.outputChannels = capture ? 0 : static_cast<int>(request.outputChannels.size());
@@ -674,11 +693,20 @@ private:
             if (woke != WAIT_OBJECT_0 + 1 || lostDevice)
                 continue;
             const auto result = capture ? takeInput() : giveOutput();
-            if (FAILED(result))
+            if (errors.ends(static_cast<std::int32_t>(result)))
             {
                 lostDevice = true;
                 if (auto* to = client.load())
-                    to->lost(result == AUDCLNT_E_DEVICE_INVALIDATED ? AudioLoss::unplugged : AudioLoss::other, result);
+                {
+                    // A client is made invalid by its format changing too, for which the device is still there.
+                    DWORD endpointState = 0;
+                    if (result == AUDCLNT_E_DEVICE_INVALIDATED && endpoint &&
+                        SUCCEEDED(endpoint->GetState(&endpointState)) && endpointState == DEVICE_STATE_ACTIVE)
+                        to->reopen();
+                    else
+                        to->lost(result == AUDCLNT_E_DEVICE_INVALIDATED ? AudioLoss::unplugged : AudioLoss::other,
+                                 result);
+                }
             }
         }
 
@@ -784,6 +812,8 @@ private:
 
     bool capture = false;
     AudioStreamRequest request;
+    Com<IMMDevice> endpoint;
+    windowsAudio::detail::ErrorRun errors;
     Com<IAudioClient> audioClient;
     Com<IAudioCaptureClient> captureClient;
     Com<IAudioRenderClient> renderClient;

@@ -117,6 +117,10 @@ if(SYMBOLENGINE_TESTS)
                      Tests/ParameterTests.cpp Tests/PluginLifeTests.cpp Tests/PluginListTests.cpp
                      Tests/PluginTimingTests.cpp Tests/ScanTests.cpp Tests/ScanWorkerTests.cpp Tests/TimeTests.cpp
                      Tests/Vst3Tests.cpp Tests/WalkTests.cpp)
+    # It tells one place in the code from another by where each call is made from, which optimizing moves.
+    if(NOT MSVC)
+        set_source_files_properties(Tests/UnsafeCallsAbsentTests.cpp PROPERTIES COMPILE_OPTIONS "-O0")
+    endif()
     if(APPLE)
         add_subdirectory(Tests/AudioUnits)
         list(APPEND test_sources Tests/AudioUnitTests.cpp Tests/ScanWorkerTests_mac.mm Tests/SignatureTests.cpp)

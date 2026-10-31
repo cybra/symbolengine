@@ -181,7 +181,7 @@ Every stream it opens delivers there too, and a stream's events name its `system
 |---|---|---|
 | `started`, `stopped` | The stream started, or stopped as you asked | `after`, for `started` |
 | `lost` | The device stopped while it ran. The stream stays stopped until you start it again | `loss`, `error` |
-| `formatChanged` | Its rate, format, channels or block size changed, and it was opened again as it now is | `before`, `after` |
+| `formatChanged` | Its rate, format, channels or block size changed, and it was opened again as it now is, with what it still has of the channels asked for, and those that come back when they do | `before`, `after` |
 | `dropout` | Frames were lost | `direction`, `position`, `frames`, -1 when the system didn't say how many |
 | `stalled`, `resumed` | It stopped calling back while saying it ran, then started again | `position` |
 | `runaway` | It called back far faster than its rate | `position` |

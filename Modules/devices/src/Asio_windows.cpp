@@ -846,7 +846,13 @@ public:
         runtime.running = false;
         // A reset the driver asks for as it stops is for a stream that is going.
         runtime.client.store(nullptr);
-        call([](IASIO& d, Scratch&) { d.stop(); });
+        bool later = false;
+        {
+            const std::lock_guard hold(panelGuard);
+            later = stopAfterPanel = runtime.panelOpen.load();
+        }
+        if (!later)
+            call([](IASIO& d, Scratch&) { d.stop(); });
         runtime.silence(0);
         runtime.silence(1);
     }
@@ -854,10 +860,21 @@ public:
     // Back through ASIO's states: stopped, its buffers let go of, then the driver. The callbacks stop reaching the
     // runtime first, so one the driver makes after this touches no buffer of its own it has let go of. Letting go of
     // the driver is always tried, even after a fault; one that faults then, or a thread held up in it, is left be.
-    void close() noexcept
+    // With its control panel open the driver's thread is the panel's, for as long as the user leaves it open, which isn't a
+    // driver gone wrong: the rest waits for the panel to close, and this says it did. A driver held up in a call, or that
+    // faults, is left as said above.
+    bool close() noexcept
     {
         stop();
         letGoOfRuntime();
+        {
+            const std::lock_guard hold(panelGuard);
+            if (runtime.panelOpen.load())
+            {
+                closeAfterPanel = true;
+                return false;
+            }
+        }
         if (prepared)
         {
             call([](IASIO& d, Scratch&) { d.disposeBuffers(); });
@@ -874,6 +891,7 @@ public:
                 },
                 host.callTimeout);
         }
+        return true;
     }
 
     // The driver's control panel, opened from its thread without waiting, as some return only when the user closes
@@ -890,7 +908,13 @@ public:
             IASIO* d = self->driver;
             if (!guarded([d] { d->controlPanel(); }))
                 self->faulted = true;
-            self->runtime.panelOpen = false;
+            bool stopNow = false, closeNow = false;
+            {
+                const std::lock_guard hold(self->panelGuard);
+                self->runtime.panelOpen = false;
+                stopNow = std::exchange(self->stopAfterPanel, false);
+                closeNow = std::exchange(self->closeAfterPanel, false);
+            }
             const bool reopen = self->runtime.reopenAfterPanel.exchange(false);
             if (auto* to = self->runtime.client.load())
             {
@@ -898,6 +922,21 @@ public:
                     to->reopen();
                 else
                     to->changed();
+            }
+
+            // What the stream asked while the panel had the thread, on this thread as every call to the driver is.
+            if (stopNow)
+                guarded([d] { d->stop(); });
+            if (closeNow)
+            {
+                if (self->prepared)
+                {
+                    guarded([d] { d->disposeBuffers(); });
+                    self->prepared = false;
+                }
+                if (guarded([d] { d->Release(); }))
+                    self->driver = nullptr;
+                holding = false;
             }
         });
         if (!posted)
@@ -1017,6 +1056,8 @@ private:
 
     Host host;
     std::string id, name, problem;
+    std::mutex panelGuard;   // what the control panel's return and the stream's calls settle between them
+    bool stopAfterPanel = false, closeAfterPanel = false;
     DriverThread thread;
     IASIO* driver = nullptr;
     std::atomic<bool> faulted{false};
@@ -1034,8 +1075,8 @@ public:
 
     ~AsioStream() override
     {
-        loaded->close();
-        holding = false;
+        if (loaded->close())
+            holding = false;
     }
 
     AsioStream(const AsioStream&) = delete;

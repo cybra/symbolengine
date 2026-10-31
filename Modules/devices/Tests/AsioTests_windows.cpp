@@ -1291,6 +1291,46 @@ TEST_CASE("A driver's control panel opens from its thread without the program wa
     checkCalledProperly(*first);
 }
 
+TEST_CASE("A stream stopped with its driver's control panel open lets go of the driver as the panel closes")
+{
+    TestDrivers installed;
+    FakeSettings modal;
+    modal.panelModal = true;
+    installed.add("{A}", "Interface ASIO", modal);
+    Events events;
+    AudioDevices devices(optionsFor(installed, events));
+
+    Recording recording(1 << 16);
+    AudioError error;
+    auto stream = devices.open("ASIO", "{A}", stereo(), error);
+    REQUIRE(stream != nullptr);
+    REQUIRE(!stream->add(recording));
+    REQUIRE(!stream->start());
+    REQUIRE(soon([&] { return recording.frames > 4800; }));
+    const auto first = installed.last("{A}");
+    REQUIRE(!stream->showDeviceSettings());
+    REQUIRE(soon([&] { return first->panelOpenNow(); }));
+
+    // The user has left the panel open, which isn't the driver stopping answering.
+    const auto began = std::chrono::steady_clock::now();
+    REQUIRE(!stream->stop());
+    stream.reset();
+    CHECK(std::chrono::steady_clock::now() - began < 1s);
+    CHECK_FALSE(first->released.load());
+
+    first->closePanel();
+    REQUIRE(soon([&] { return first->released.load(); }));
+    checkCalledProperly(*first);
+
+    // Nothing of it is left in the way of the next.
+    auto next = devices.open("ASIO", "{A}", stereo(), error);
+    REQUIRE(next != nullptr);
+    Recording again(1 << 16);
+    REQUIRE(!next->add(again));
+    CHECK(!next->start());
+    CHECK(soon([&] { return again.frames > 4800; }));
+}
+
 TEST_CASE("A driver asking to reset as every open makes its buffers is opened again once, and asking as it stops reopens nothing")
 {
     SECTION("while its buffers are made")

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -95,4 +96,30 @@ inline std::vector<Place> placesOf(const std::vector<int>& requested, const std:
     return places;
 }
 
+/** Reads one channel out of a buffer Core Audio gave, going by the buffer as it is. A device can change its channels some
+    cycles before the stream hears of it, as AirPods going mono do, so a channel it no longer has is false, with nothing read,
+    and a buffer shorter than the cycle is read as far as it goes, the rest silence. */
+inline bool readChannel(const float* from, std::size_t bytes, int across, int channel, std::size_t frames, float* to)
+{
+    if (from == nullptr || across <= 0 || channel < 0 || channel >= across)
+        return false;
+    const auto step = static_cast<std::size_t>(across);
+    const auto within = std::min(frames, bytes / (step * sizeof(float)));
+    for (std::size_t i = 0; i < within; ++i)
+        to[i] = from[i * step + static_cast<std::size_t>(channel)];
+    std::fill(to + within, to + frames, 0.0f);
+    return true;
+}
+
+/** Writes one channel into a buffer Core Audio gave, on the same terms, and no further than it goes. */
+inline bool writeChannel(const float* from, std::size_t frames, float* into, std::size_t bytes, int across, int channel)
+{
+    if (into == nullptr || across <= 0 || channel < 0 || channel >= across)
+        return false;
+    const auto step = static_cast<std::size_t>(across);
+    const auto within = std::min(frames, bytes / (step * sizeof(float)));
+    for (std::size_t i = 0; i < within; ++i)
+        into[i * step + static_cast<std::size_t>(channel)] = from[i];
+    return true;
+}
 }

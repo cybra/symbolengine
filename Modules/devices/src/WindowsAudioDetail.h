@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <string>
 
 // Windows Audio's reading of what an endpoint is, apart from Windows itself so the tests check it on any computer.
@@ -34,4 +35,38 @@ inline EndpointKind kindOf(std::string enumerator, const std::string& name)
     return kind;
 }
 
+/** Whether a stream ends for what a call for its buffer answered. A few say the buffer isn't to be had just now, as a stream
+    reset is under way, so the next period may do better, which a run of them says it won't; anything else is the end. */
+class ErrorRun
+{
+public:
+    static constexpr int mostInARow = 16;
+
+    bool ends(std::int32_t result) noexcept
+    {
+        if (result >= 0)
+        {
+            inARow = 0;
+            return false;
+        }
+        const auto code = static_cast<std::uint32_t>(result);
+        const bool recoverable = code == 0x88890018u       // AUDCLNT_E_BUFFER_ERROR
+                                 || code == 0x8889000Bu    // AUDCLNT_E_BUFFER_OPERATION_PENDING
+                                 || code == 0x88890006u;   // AUDCLNT_E_BUFFER_TOO_LARGE
+        return !recoverable || ++inARow > mostInARow;
+    }
+
+private:
+    int inARow = 0;
+};
+
+/** DisconnectReasonFormatChanged, as a number. */
+constexpr int disconnectReasonFormatChanged = 2;
+
+/** A session the system ended because its format changed, in Sound settings, runs again as it now is; for any other
+    reason it is lost. */
+inline bool reopensAfterDisconnect(int reason) noexcept
+{
+    return reason == disconnectReasonFormatChanged;
+}
 }

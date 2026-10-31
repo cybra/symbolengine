@@ -9,18 +9,34 @@
     #include <malloc.h>
 #endif
 
+// The thread sanitizer on Linux links its own operators into every program whole, so nothing can replace them there, and
+// nothing is counted in that build; every other build counts.
+#define SYMBOLENGINE_SANITIZER_KEEPS_NEW 0
+#if defined(__linux__)
+    #if defined(__SANITIZE_THREAD__)
+        #undef SYMBOLENGINE_SANITIZER_KEEPS_NEW
+        #define SYMBOLENGINE_SANITIZER_KEEPS_NEW 1
+    #elif defined(__has_feature)
+        #if __has_feature(thread_sanitizer)
+            #undef SYMBOLENGINE_SANITIZER_KEEPS_NEW
+            #define SYMBOLENGINE_SANITIZER_KEEPS_NEW 1
+        #endif
+    #endif
+#endif
+
 namespace
 {
 
 thread_local bool counting = false;
 std::atomic<std::uint64_t> counted{0};
 
-void note() noexcept
+[[maybe_unused]] void note() noexcept
 {
     if (counting)
         ++counted;
 }
 
+#if !SYMBOLENGINE_SANITIZER_KEEPS_NEW
 void* allocate(std::size_t size)
 {
     note();
@@ -66,6 +82,7 @@ void releaseAligned(void* memory) noexcept
 #endif
 }
 
+#endif
 }
 
 namespace allocations
@@ -88,6 +105,7 @@ std::uint64_t count()
 
 }
 
+#if !SYMBOLENGINE_SANITIZER_KEEPS_NEW
 void* operator new(std::size_t size)
 {
     return allocate(size);
@@ -198,3 +216,4 @@ void operator delete[](void* memory, std::size_t, std::align_val_t) noexcept
 {
     releaseAligned(memory);
 }
+#endif

@@ -81,6 +81,9 @@ public:
     /** stop() waits while this is set, as a system whose stop never returns. */
     std::atomic<bool> hangStop{false};
 
+    /** stop() returns with a cycle still under way, as some drivers' do. */
+    std::atomic<bool> stopLeavesCycle{false};
+
     /** 20 ms after stop() returns, one more cycle comes from another thread, as some systems give, before the
         system's stream object is destroyed. */
     std::atomic<bool> callAfterStop{false};
@@ -123,6 +126,9 @@ public:
     int opens() const noexcept;
     int starts() const noexcept;
     int stops() const noexcept;
+
+    /** How many of the streams opened on it have been freed. */
+    int streamsFreed() const noexcept;
 
     /** The request it was last opened with. */
     AudioStreamRequest lastRequest() const;

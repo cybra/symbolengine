@@ -79,6 +79,11 @@ struct AudioPlayer::Impl
 
     // Made by prepare, which the reader is kept out of while it runs.
     std::mutex fillLock;
+    std::unique_lock<std::mutex>* fillHeld = nullptr;   // the reader's hold on it
+    std::uint64_t preparedTimes = 0;                    // under it, so a read can tell it came back to something new
+    struct PreparedWhileReading
+    {
+    };
     double rate = 48000.0;
     int channels = 2;
     double fadeStep = 1.0;
@@ -175,7 +180,10 @@ struct AudioPlayer::Impl
             if (current == 0)
             {
                 if (want == 0 || want == finishedGeneration.load())
+                {
+                    sounding = false;
                     break;
+                }
                 if (!holding && !takeChunk())
                     break;
                 if (chunk.generation != want)
@@ -351,13 +359,20 @@ struct AudioPlayer::Impl
             const auto now = request;
             hold.unlock();
             {
-                const std::lock_guard filling(fillLock);
+                std::unique_lock filling(fillLock);
+                fillHeld = &filling;
                 if (chunks != nullptr)
                 {
-                    if (now.generation != fill.generation)
-                        begin(now);
-                    if (fill.source != nullptr && !fill.ended)
-                        fillSome();
+                    try
+                    {
+                        if (now.generation != fill.generation)
+                            begin(now);
+                        if (fill.source != nullptr && !fill.ended)
+                            fillSome();
+                    }
+                    catch (const PreparedWhileReading&)
+                    {
+                    }
                 }
             }
             tellEvents();
@@ -557,16 +572,28 @@ struct AudioPlayer::Impl
 
     // A source that can't be read leaves silence where it was to play, the program told, rather than an exception
     // ending the program from this thread.
+    // A read can take as long as its disk does, so the lock is let go of through it: preparing the player, which a stream's
+    // control thread does, doesn't wait for it. What that started over leaves this read with nothing to go on with.
     void readSource(float* const* into, std::int64_t at, std::size_t frames)
     {
+        const auto source = fill.source;
+        const auto since = preparedTimes;
+        bool failed = false;
+        fillHeld->unlock();
         try
         {
-            fill.source->read(into, at, frames);
-            return;
+            source->read(into, at, frames);
         }
         catch (...)
         {
+            failed = true;
         }
+        fillHeld->lock();
+        if (preparedTimes != since)
+            throw PreparedWhileReading{};
+        if (!failed)
+            return;
+
         for (int c = 0; c < fill.sourceChannels; ++c)
             std::fill_n(into[c], frames, 0.0f);
         if (!fill.readFailed)
@@ -603,6 +630,7 @@ void AudioPlayer::prepare(double sampleRate, int channels)
 {
     {
         const std::lock_guard filling(impl->fillLock);
+        ++impl->preparedTimes;
         impl->rate = sampleRate;
         impl->channels = std::max(1, channels);
         const auto fadeFrames = std::chrono::duration<double>(impl->options.fade).count() * sampleRate;

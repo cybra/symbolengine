@@ -59,7 +59,7 @@ struct FakeAudioDevice::State
     bool listed = true;
     bool quiet = false;
 
-    std::atomic<int> opens{0}, starts{0}, stops{0};
+    std::atomic<int> opens{0}, starts{0}, stops{0}, streamsFreed{0};
 
     // The stream open on it, behind a lock of its own that is never held while the devices module is called.
     mutable std::mutex streamLock;
@@ -308,6 +308,7 @@ public:
 
     ~FakeStream() override
     {
+        ++state->device->streamsFreed;
         state->stopRunning();
         state->client = nullptr;
         // A late cycle comes before the stream is gone, as a system's does before it lets go of the stream.
@@ -389,6 +390,12 @@ public:
         ++device.stops;
         while (device.owner->hangStop.load())
             std::this_thread::sleep_for(1ms);
+
+        if (device.owner->stopLeavesCycle.load())
+        {
+            state->running = false;
+            return;
+        }
 
         auto* client = state->client.exchange(nullptr);
         state->stopRunning();
@@ -475,6 +482,11 @@ bool FakeAudioDevice::running() const
 {
     const auto stream = state->current();
     return stream != nullptr && stream->client.load() != nullptr;
+}
+
+int FakeAudioDevice::streamsFreed() const noexcept
+{
+    return state->streamsFreed.load();
 }
 
 int FakeAudioDevice::opens() const noexcept
