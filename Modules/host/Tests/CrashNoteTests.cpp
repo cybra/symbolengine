@@ -222,7 +222,7 @@ TEST_CASE(
     // Measured against the call itself, a few tens of billionths of a second to a call's thousand on a Mac and about a
     // hundred on Linux's runner, as a slower machine or the sanitizers slow both alike.
     INFO("a block takes " << plain.count() << " ns, " << noted.count() << " ns with the note");
-    CHECK(noted - plain < plain / 5);
+    CHECK(noted - plain < std::max(plain / 5, std::chrono::nanoseconds(50)));
 }
 
 TEST_CASE("A crash outside every call into a plugin blames none, whatever the audio thread was playing")

@@ -275,8 +275,11 @@ crashNote::InCall::InCall(PluginCrashNote* note, int slot, const char* call, boo
 
         // The call before it, of a call made from inside it, put back as this one ends.
         previousSlot = fresh ? -1 : found->slot;
-        previousAudio = found->audio;
-        std::memcpy(previousCall, found->call, sizeof previousCall);
+        if (previousSlot >= 0)
+        {
+            previousAudio = found->audio;
+            std::memcpy(previousCall, found->call, sizeof previousCall);
+        }
         put(found->call, call);
         found->audio = audioThread ? 1 : 0;
         set(found->slot, static_cast<std::int32_t>(slot));

@@ -84,7 +84,7 @@ std::uint64_t thisThread() noexcept
     return static_cast<std::uint64_t>(GetCurrentThreadId()) + 1;
 }
 
-Layout* map(const std::filesystem::path& file, void*& handle, std::string& before, bool& anotherCopy)
+Layout* map(const std::filesystem::path& file, void*& handle, std::string& had, bool& anotherCopy)
 {
     auto* handles = new Handles;
     handles->file =
@@ -109,14 +109,14 @@ Layout* map(const std::filesystem::path& file, void*& handle, std::string& befor
         return nullptr;
     }
 
-    LARGE_INTEGER had{};
-    if (GetFileSizeEx(handles->file, &had) && had.QuadPart > 0 && had.QuadPart < 64 * 1024 * 1024)
+    LARGE_INTEGER length{};
+    if (GetFileSizeEx(handles->file, &length) && length.QuadPart > 0 && length.QuadPart < 64 * 1024 * 1024)
     {
-        before.resize(static_cast<std::size_t>(had.QuadPart));
+        had.resize(static_cast<std::size_t>(length.QuadPart));
         DWORD got = 0;
-        if (!ReadFile(handles->file, before.data(), static_cast<DWORD>(before.size()), &got, nullptr))
+        if (!ReadFile(handles->file, had.data(), static_cast<DWORD>(had.size()), &got, nullptr))
             got = 0;
-        before.resize(got);
+        had.resize(got);
     }
     LARGE_INTEGER start{};
     SetFilePointerEx(handles->file, start, nullptr, FILE_BEGIN);
