@@ -117,7 +117,7 @@ std::string unique(std::string_view stem)
     return std::string(stem) + "-" + std::to_string(random());
 }
 
-void setVariable(const char* name, const char* value)
+[[maybe_unused]] void setVariable(const char* name, const char* value)
 {
 #if defined(_WIN32)
     _putenv_s(name, value);

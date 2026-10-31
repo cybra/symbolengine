@@ -92,6 +92,29 @@ void* operator new[](std::size_t size, std::align_val_t alignment)
 {
     return symbolengine::audioThread::detail::allocateAligned(size, alignment);
 }
+void* operator new(std::size_t size, std::align_val_t alignment, const std::nothrow_t&) noexcept
+{
+    try
+    {
+        return symbolengine::audioThread::detail::allocateAligned(size, alignment);
+    }
+    catch (...)
+    {
+        return nullptr;
+    }
+}
+void* operator new[](std::size_t size, std::align_val_t alignment, const std::nothrow_t& tag) noexcept
+{
+    return operator new(size, alignment, tag);
+}
+void operator delete(void* memory, std::align_val_t, const std::nothrow_t&) noexcept
+{
+    symbolengine::audioThread::detail::releaseAligned(memory);
+}
+void operator delete[](void* memory, std::align_val_t, const std::nothrow_t&) noexcept
+{
+    symbolengine::audioThread::detail::releaseAligned(memory);
+}
 void operator delete(void* memory, std::align_val_t) noexcept
 {
     symbolengine::audioThread::detail::releaseAligned(memory);

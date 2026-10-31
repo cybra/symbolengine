@@ -132,6 +132,23 @@ void* operator new[](std::size_t size, std::align_val_t alignment)
     return allocateAligned(size, alignment);
 }
 
+void* operator new(std::size_t size, std::align_val_t alignment, const std::nothrow_t&) noexcept
+{
+    try
+    {
+        return allocateAligned(size, alignment);
+    }
+    catch (...)
+    {
+        return nullptr;
+    }
+}
+
+void* operator new[](std::size_t size, std::align_val_t alignment, const std::nothrow_t& tag) noexcept
+{
+    return operator new(size, alignment, tag);
+}
+
 void operator delete(void* memory) noexcept
 {
     release(memory);
@@ -158,6 +175,16 @@ void operator delete(void* memory, std::align_val_t) noexcept
 }
 
 void operator delete[](void* memory, std::align_val_t) noexcept
+{
+    releaseAligned(memory);
+}
+
+void operator delete(void* memory, std::align_val_t, const std::nothrow_t&) noexcept
+{
+    releaseAligned(memory);
+}
+
+void operator delete[](void* memory, std::align_val_t, const std::nothrow_t&) noexcept
 {
     releaseAligned(memory);
 }

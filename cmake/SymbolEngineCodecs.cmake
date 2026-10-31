@@ -138,7 +138,21 @@ foreach(file apply_sine_window_FLP corrMatrix_FLP encode_frame_FLP find_LPC_FLP 
     list(APPEND opus_sources ${opus}/silk/float/${file}.c)
 endforeach()
 
-set(opusfile_sources ${opusfile}/src/info.c ${opusfile}/src/internal.c ${opusfile}/src/opusfile.c ${opusfile}/src/stream.c)
+# Opening a chained file, it keeps a link's tags and then goes looking for that link's audio, and on finding none forgets
+# the tags; a copy of opusfile.c lets them go, until opusfile has the fix (Docs/Upstream/opusfile-chained-tags-leak.md).
+file(READ ${opusfile}/src/opusfile.c opusfile_c)
+set(opusfile_link_audio "    ret=op_find_initial_pcm_offset(_of,links+nlinks,NULL);\n    if(OP_UNLIKELY(ret<0))return ret;\n    links[nlinks].pcm_file_offset=total_duration;")
+string(FIND "${opusfile_c}" "${opusfile_link_audio}" found)
+if(found EQUAL -1)
+    message(FATAL_ERROR "opusfile's opusfile.c no longer opens a chained file's links as SymbolEngine's copy of it expects")
+endif()
+string(REPLACE "${opusfile_link_audio}"
+    "    ret=op_find_initial_pcm_offset(_of,links+nlinks,NULL);\n    if(OP_UNLIKELY(ret<0)){\n      opus_tags_clear(&links[nlinks].tags);\n      return ret;\n    }\n    links[nlinks].pcm_file_offset=total_duration;"
+    opusfile_c "${opusfile_c}")
+file(WRITE ${codec_generated}/opusfile.c.new "${opusfile_c}")
+file(COPY_FILE ${codec_generated}/opusfile.c.new ${codec_generated}/opusfile.c ONLY_IF_DIFFERENT)
+
+set(opusfile_sources ${opusfile}/src/info.c ${opusfile}/src/internal.c ${codec_generated}/opusfile.c ${opusfile}/src/stream.c)
 
 set(opusenc_sources)
 foreach(file ogg_packer opus_header opusenc picture resample unicode_support)
@@ -154,6 +168,7 @@ target_include_directories(symbolengine_codecs SYSTEM PRIVATE ${codec_includes})
 # Each library's own private headers, apart, as some share names, such as Vorbis' and Opus' mdct.h.
 set_source_files_properties(${vorbis_sources} PROPERTIES INCLUDE_DIRECTORIES "${vorbis}/lib")
 set_source_files_properties(${flac_sources} PROPERTIES INCLUDE_DIRECTORIES "${flac}/src/libFLAC/include")
+set_source_files_properties(${codec_generated}/opusfile.c PROPERTIES INCLUDE_DIRECTORIES "${opusfile}/src")
 set_source_files_properties(${opus_sources} PROPERTIES INCLUDE_DIRECTORIES "${opus};${opus}/celt;${opus}/silk;${opus}/silk/float;${opus}/src")
 
 # Their code isn't held to SymbolEngine's warnings.
