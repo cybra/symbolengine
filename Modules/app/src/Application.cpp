@@ -77,6 +77,11 @@ void Application::quit(int code)
     ui::messageLoop::stop();
 }
 
+void Application::declineQuit()
+{
+    app::platform::declineQuit();
+}
+
 bool Application::isQuitting() const noexcept
 {
     return impl->quitPosted;

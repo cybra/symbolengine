@@ -10,6 +10,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <limits>
@@ -543,6 +544,34 @@ TEST_CASE("A plugin that throws while preparing refuses activation instead of cr
     CHECK_FALSE(made.plugin->activate(made.plugin, 44100.0, 1, 256));
     TestGain::failToPrepare = false;
     CHECK(made.plugin->activate(made.plugin, 44100.0, 1, 256));
+}
+
+TEST_CASE("A plugin that throws while processing leaves silence in its outputs rather than what was there")
+{
+    TestHost host;
+    Made made(host, "test.gain");
+    REQUIRE(made.plugin->activate(made.plugin, 44100.0, 1, 256));
+    REQUIRE(made.plugin->start_processing(made.plugin));
+
+    Stereo audio(64);
+    Changes none;
+    TestGain::failToProcess = true;
+    const auto status = audio.run(made.plugin, none);
+    TestGain::failToProcess = false;
+
+    CHECK(status == CLAP_PROCESS_ERROR);
+    for (const auto& channel : audio.out)
+        CHECK(std::all_of(channel.begin(), channel.end(), [](float sample) { return sample == 0.0f; }));
+
+    made.plugin->stop_processing(made.plugin);
+    made.plugin->deactivate(made.plugin);
+}
+
+TEST_CASE("A plugin with no editor doesn't offer the host a way to open one")
+{
+    TestHost host;
+    Made made(host, "test.spread");
+    CHECK(made.plugin->get_extension(made.plugin, CLAP_EXT_GUI) == nullptr);
 }
 
 TEST_CASE("A VST3 class ID is read as Steinberg's validator prints it")

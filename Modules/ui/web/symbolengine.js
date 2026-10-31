@@ -54,6 +54,10 @@
         // Calls a function the native side exposed, and gives what it returned.
         call: (name, ...args) => callNative(String(name), args),
 
+        // Opens a web address in the user's browser, as a page itself goes nowhere but its own files. Gives whether
+        // the system took it; anything but an http or https address it doesn't.
+        openLink: address => callNative("__openLink", [String(address)]),
+
         // Adds a handler for an event the native side sends, and gives a function that removes it.
         on: (event, handler) => {
             if (!handlers.has(event))

@@ -2,7 +2,9 @@
 
 #include <symbolengine/core/Json.h>
 #include <symbolengine/core/Paths.h>
+#include <symbolengine/core/System.h>
 #include <symbolengine/core/Text.h>
+#include <symbolengine/ui/MessageLoop.h>
 
 #include <choc/gui/choc_WebView.h>
 #include <choc/text/choc_JSON.h>
@@ -63,6 +65,36 @@ std::string addressFor(std::string_view name)
 }
 }
 
+#if defined(_WIN32)
+namespace
+{
+std::string decodedPath(const std::string& path)
+{
+    const auto digit = [](char c) {
+        return c >= '0' && c <= '9'   ? c - '0'
+               : c >= 'a' && c <= 'f' ? c - 'a' + 10
+               : c >= 'A' && c <= 'F' ? c - 'A' + 10
+                                      : -1;
+    };
+
+    std::string decoded;
+    for (std::size_t i = 0; i < path.size(); ++i)
+    {
+        if (path[i] == '%' && i + 2 < path.size() && digit(path[i + 1]) >= 0 && digit(path[i + 2]) >= 0)
+        {
+            decoded += static_cast<char>(digit(path[i + 1]) * 16 + digit(path[i + 2]));
+            i += 2;
+        }
+        else
+        {
+            decoded += path[i];
+        }
+    }
+    return decoded;
+}
+}
+#endif
+
 struct WebView::Impl
 {
     explicit Impl(Options given) : options(std::move(given)) {}
@@ -73,6 +105,7 @@ struct WebView::Impl
     std::map<std::string, std::function<void(const Value&, Reply)>, std::less<>> laterFunctions;
     std::vector<std::pair<std::string, choc::ui::WebView::CompletionHandler>> waiting;   // held until the page is ready
     bool ready = false;
+    bool failed = false;   // WebView2 turned out not to be able to start, or has gone
 
     // Held by each answer still to come, which goes nowhere once the web view has gone.
     std::shared_ptr<Impl*> self = std::make_shared<Impl*>(this);
@@ -82,6 +115,11 @@ struct WebView::Impl
         std::string path = requested.empty() || requested == "/" ? "/index.html" : requested;
         if (const auto query = path.find_first_of("?#"); query != std::string::npos)
             path.resize(query);
+
+#if defined(_WIN32)
+        // WebView2 gives the address as the page spelled it; a Mac's web view has already read it.
+        path = decodedPath(path);
+#endif
 
         if (path == "/symbolengine.js")
         {
@@ -112,6 +150,9 @@ struct WebView::Impl
                     view->evaluateJavascript(script, std::move(done));
                 return json::write(Object{{"value", nullptr}});
             }
+
+            if (name == "__openLink")
+                return json::write(Object{{"value", system::openInBrowser(json::parse(arguments)[0].stringOr(""))}});
 
             if (const auto later = laterFunctions.find(name); later != laterFunctions.end())
             {
@@ -144,6 +185,9 @@ struct WebView::Impl
 
     void run(std::string script, choc::ui::WebView::CompletionHandler done = {})
     {
+        if (failed)
+            return;
+
         if (ready)
             view->evaluateJavascript(script, std::move(done));
         else
@@ -153,12 +197,26 @@ struct WebView::Impl
 
 WebView::WebView(Options options) : impl(std::make_unique<Impl>(std::move(options)))
 {
+    // On the thread making it, the message thread, whatever thread asked for a call first.
+    messageLoop::initialize();
+
     choc::ui::WebView::Options settings;
     settings.enableDebugMode = impl->options.developerTools;
     settings.enableDefaultClipboardKeyShortcutsInSafari = impl->options.editingKeys;
     settings.acceptsFirstMouseClick = true;
     settings.transparentBackground = true;
     settings.fetchResource = [this](const std::string& path) { return impl->fetch(path); };
+    settings.shouldAllowRequest = [this](const choc::ui::WebView::Options::Request& request) {
+        return impl->options.allowAddress && impl->options.allowAddress(request.uri);
+    };
+    settings.webviewFailed = [this] {
+        impl->failed = true;
+        for (auto& [script, done] : std::exchange(impl->waiting, {}))
+            if (done)
+                done("there is no web view", {});
+    };
+    // What is sent meanwhile waits for the new page.
+    settings.webviewRendererLost = [this] { impl->ready = false; };
     settings.customSchemeURI = addressFor(impl->options.name);
     settings.userDataFolder = paths::toUtf8(impl->options.dataFolder);
 #if defined(_WIN32)
@@ -193,7 +251,7 @@ WebView::~WebView() = default;
 
 bool WebView::available() const noexcept
 {
-    return impl->view != nullptr;
+    return impl->view != nullptr && !impl->failed;
 }
 
 void* WebView::nativeView() const noexcept
@@ -239,7 +297,7 @@ void WebView::run(std::string script)
 
 void WebView::run(std::string script, std::function<void(const Value& result, const std::string& error)> done)
 {
-    if (impl->view == nullptr)
+    if (!available())
     {
         done(nullptr, "there is no web view");
         return;

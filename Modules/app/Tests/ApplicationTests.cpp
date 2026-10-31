@@ -215,7 +215,36 @@ TEST_CASE("A second instance hands its arguments to the one running, and runs al
     CHECK(Program::start(SYMBOLENGINE_SECOND_INSTANCE, {identifier + ".nobody"}).wait() == 1);
 }
 
+TEST_CASE("A hand-over works whatever the length of the program's identifier")
+{
+    const auto identifier = "dev.symbolengine.tests." + std::string(150, 'x') + "." + processId();
+    Application app({.name = "SymbolEngine app tests", .identifier = identifier}, 0, nullptr);
+    REQUIRE_FALSE(app.sendToRunningInstance());
+
+    bool heard = false;
+    app.onAnotherInstance = [&](std::vector<std::string>) { heard = true; };
+    auto second = Program::start(SYMBOLENGINE_SECOND_INSTANCE, {identifier, "one"});
+    CHECK(runUntil(app, [&] { return heard; }));
+    CHECK(second.wait() == 0);
+}
+
 #if defined(_WIN32)
+TEST_CASE("When the session is ending for certain the program has a last word, as nothing runs after it")
+{
+    const auto identifier = "dev.symbolengine.tests.ended." + processId();
+    Application app({.name = "SymbolEngine app tests", .identifier = identifier}, 0, nullptr);
+    const std::wstring wide(identifier.begin(), identifier.end());
+    HWND window = FindWindowW(L"SymbolEngineApplication", wide.c_str());
+    REQUIRE(window != nullptr);
+
+    int told = 0;
+    app.onSessionEnding = [&] { ++told; };
+    SendMessageW(window, WM_ENDSESSION, FALSE, 0);
+    CHECK(told == 0);
+    SendMessageW(window, WM_ENDSESSION, TRUE, 0);
+    CHECK(told == 1);
+}
+
 TEST_CASE("On Windows the session ending asks the program to quit, and is told whether it is going to")
 {
     const auto identifier = "dev.symbolengine.tests.session." + processId();

@@ -33,6 +33,15 @@ add_executable(symbolengine_clap_loader ${PROJECT_SOURCE_DIR}/Tests/ClapLoader/C
 target_link_libraries(symbolengine_clap_loader PRIVATE clap ${CMAKE_DL_LIBS})
 symbolengine_set_warnings(symbolengine_clap_loader)
 
+if(APPLE OR WIN32)
+    add_executable(symbolengine_clap_two_copies ${PROJECT_SOURCE_DIR}/Tests/ClapLoader/TwoCopies.cpp)
+    target_link_libraries(symbolengine_clap_two_copies PRIVATE clap ${CMAKE_DL_LIBS})
+    if(APPLE)
+        target_link_libraries(symbolengine_clap_two_copies PRIVATE "-framework CoreFoundation")
+    endif()
+    symbolengine_set_warnings(symbolengine_clap_two_copies)
+endif()
+
 function(symbolengine_vst3_validator out)
     if(NOT TARGET symbolengine_vst3_validator)
         symbolengine_fetch_vst3_sdk()
@@ -137,11 +146,18 @@ function(symbolengine_validate_plugin target)
             list(APPEND bundles $<TARGET_BUNDLE_DIR:${target}_${suffix}>)
         endforeach()
         add_test(NAME "${target}: signatures" COMMAND codesign --verify --strict --verbose=1 ${bundles})
+        add_test(NAME "${target}: exports only its entry point"
+            COMMAND ${CMAKE_COMMAND} -DBINARY=$<TARGET_FILE:${target}_clap>
+                -P ${SYMBOLENGINE_VALIDATION_SCRIPTS}/CheckPluginExports.cmake)
     endif()
 
     # Every build, whether or not auval runs: the Audio Unit's Info.plist names it, as macOS needs to find it.
     if(APPLE AND AUV2 IN_LIST formats)
         list(GET au_codes 2 manufacturer)
+        list(GET au_codes 1 subtype)
+        add_test(NAME "${target}: Audio Unit's view class is its own"
+            COMMAND ${CMAKE_COMMAND} -DBINARY=$<TARGET_FILE:${target}_auv2> -DSUBTYPE=${subtype}
+                -P ${SYMBOLENGINE_VALIDATION_SCRIPTS}/CheckAudioUnitView.cmake)
         add_test(NAME "${target}: Audio Unit's Info.plist"
             COMMAND ${CMAKE_COMMAND} -DPLIST=$<TARGET_BUNDLE_CONTENT_DIR:${target}_auv2>/Info.plist
                 -DMANUFACTURER=${manufacturer} "-DNAME=${au_name}" -P ${SYMBOLENGINE_VALIDATION_SCRIPTS}/CheckAudioUnitInfo.cmake)

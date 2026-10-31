@@ -70,12 +70,13 @@ The page starts at `/index.html`. Every page is also served `symbolengine.js`, i
 <script src="symbolengine.js"></script>
 ```
 
-`name` becomes the page's address, so pages with different names never share what they store, even in one program, and pages with the same name always do. `available()` says whether the system's web view could be made, as Windows without the WebView2 runtime has none. The other options are these:
+`name` becomes the page's address, so pages with different names never share what they store, even in one program, and pages with the same name always do. `available()` says whether the system's web view is there to use: Windows without the WebView2 runtime has none, which it may only find out a moment after the view is made, so a program that shows something else in its place looks again once its page should have loaded. The other options are these:
 
 - **`developerTools`** puts the browser's inspector on the page's context menu.
 - **`editingKeys`** has Command-C, X, V, Z and A act on the page's text on a Mac. It is on by default. A program with those keys in its own Edit menu turns it off, so they reach the menu.
 - **`dataFolder`** is where WebView2 keeps its data on Windows, which it must be able to write to. Empty means a folder named after the program in `AppData\Roaming`.
 - **`background`** is the color WebView2 shows on Windows where the page hasn't drawn, as `0xRRGGBB`. Without one that shows white. A Mac's web view always shows its window's own background.
+- **`allowAddress`** says whether the page, or a frame in it, may go to an address other than its own files, or open a new window there. Without it, it goes nowhere else: a link to another address does nothing, and the native functions a page is given stay with the program's own pages.
 
 While you work on a page, `SYMBOLENGINE_LIVE_FILES=1` in the environment of a debug build reads each file from the folder it was built from, so a change shows on a reload with no build. A release build doesn't have this. A file changed is built in again by the next build, and a file added or removed is found the next time the build runs.
 
@@ -105,6 +106,12 @@ view.exposeLater("pickFile", [&window](const Value&, ui::WebView::Reply reply) {
 });
 ```
 
+A link meant for the user's browser goes through `symbolengine.openLink`, which opens an http or https address there and gives whether the system took it:
+
+```js
+document.querySelector("#website").onclick = () => symbolengine.openLink("https://example.com/");
+```
+
 `send` sends an event to the page's handlers, and `symbolengine.on` adds one, giving back a function that removes it:
 
 ```cpp
@@ -115,7 +122,9 @@ view.send("progress", Object{{"done", 3}, {"total", 10}});
 const stop = symbolengine.on("progress", ({ done, total }) => show(done / total));
 ```
 
-The native side holds what it sends or runs until the page has loaded `symbolengine.js`, so nothing sent early is lost. `pageReady()` says whether the page is taking what it sends.
+The native side holds what it sends or runs until the page has loaded `symbolengine.js`, so nothing sent early is lost. `pageReady()` says whether the page is taking what it sends. If the process drawing the page dies, the page is loaded again by itself, and `pageReady()` is false until it has, with what is sent meanwhile held for it. So a page loaded a second time is something a program can see: it asks for what it shows as it loads, rather than being told once.
+
+Unless `developerTools` is on, a page behaves as a part of the program, not a browser: its context menu has nothing that leaves the page, and on Windows there is no browser menu at all, no reload key and no zooming with the wheel. A page can ask for part of a file, which is what lets an `<audio>` or `<video>` element play one built in.
 
 `run` runs a script in the page. Given a function too, it gives what the script's last expression came to, as JSON has it, or null if it threw, and on a Mac what went wrong:
 

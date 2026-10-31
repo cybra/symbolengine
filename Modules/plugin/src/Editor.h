@@ -8,6 +8,7 @@
 
 #include <functional>
 #include <memory>
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -50,6 +51,10 @@ public:
     /** The editor has been resized, by the host or after the host agreed to the page's or the plugin's request. */
     void resizedTo(std::uint32_t width, std::uint32_t height);
 
+    /** The host has said how many pixels a point is, as it may only after the editor is made: the opening size is worked
+        out again for it. */
+    void fitToScale(double pixelsPerPoint);
+
     void expose(std::string name, std::function<Value(const Value& arguments)> function) override;
     void send(std::string_view event, const Value& data) override;
     void snapshot(const std::filesystem::path& png, std::function<void(bool written)> done) override;
@@ -64,6 +69,7 @@ private:
     Host host;
     ui::WebView view;
     std::vector<double> sent;   // each parameter's value as the page last had it
+    std::set<std::uint32_t> openGestures;   // the parameters with a gesture begun and not yet ended
     std::pair<std::uint32_t, std::uint32_t> size;
     std::pair<std::uint32_t, std::uint32_t> kept;   // the size last kept in the size file
     std::uint32_t tickMilliseconds;

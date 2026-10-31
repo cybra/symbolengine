@@ -77,7 +77,8 @@ ui::WebView::Options pageOptions(const Description& description, const Editor& e
 
 std::uint32_t whole(const Value& number)
 {
-    return static_cast<std::uint32_t>(std::clamp<std::int64_t>(number.intOr(0), 0, 100000));
+    const auto value = number.numberOr(0.0);
+    return value > 0.0 ? static_cast<std::uint32_t>(std::round(std::min(value, 100000.0))) : 0;
 }
 }
 
@@ -152,16 +153,36 @@ EditorSession::EditorSession(Plugin& owner, const Description& about, Editor des
         return;
 
     plugin.editorOpened(*this);
-    timer = std::make_unique<ui::Timer>(tickMilliseconds, [this] { tick(); });
+    timer = std::make_unique<ui::Timer>(tickMilliseconds, [this] {
+        // A plugin's code, on the host's message thread, where nothing would catch it.
+        try
+        {
+            tick();
+        }
+        catch (...)
+        {
+        }
+    });
 }
 
 EditorSession::~EditorSession()
 {
     timer.reset();
+
+    // The host would otherwise go on taking the parameter as the user's to move, and ignore its automation.
+    for (const auto id : openGestures)
+        record(EditorChange::Kind::end, id, 0.0);
+
     if (view.available())
     {
-        keepSize(true);
-        plugin.editorClosed();
+        try
+        {
+            keepSize(true);
+            plugin.editorClosed();
+        }
+        catch (...)
+        {
+        }
         ui::native::detach(view.nativeView());
     }
 }
@@ -221,6 +242,13 @@ std::pair<std::uint32_t, std::uint32_t> EditorSession::openingSize() const
     return heldToLimits(w, h);
 }
 
+void EditorSession::fitToScale(double pixelsPerPoint)
+{
+    host.pixelsPerPoint = pixelsPerPoint;
+    size = openingSize();
+    kept = size;
+}
+
 void EditorSession::resizedTo(std::uint32_t w, std::uint32_t h)
 {
     if (w == size.first && h == size.second)
@@ -277,9 +305,14 @@ std::size_t EditorSession::indexOf(std::uint32_t id) const
     return *index;
 }
 
+// Every gesture begun is sure of room for its end, whatever else the host hasn't collected: one with no room for its
+// beginning and end doesn't begin, and values stop short of the room the ends need.
 void EditorSession::beginGesture(std::uint32_t id)
 {
     indexOf(id);
+    if (openGestures.contains(id) || changes.room() < openGestures.size() + 2)
+        return;
+    openGestures.insert(id);
     record(EditorChange::Kind::begin, id, 0.0);
 }
 
@@ -288,14 +321,18 @@ double EditorSession::setParameter(std::uint32_t id, double value)
     const auto index = indexOf(id);
     Access::set(plugin, index, value);
     const auto held = Access::value(plugin, index);
-    record(EditorChange::Kind::value, id, held);
+    if (changes.room() > openGestures.size())
+        record(EditorChange::Kind::value, id, held);
+    else if (host.told)
+        host.told();
     return held;
 }
 
 void EditorSession::endGesture(std::uint32_t id)
 {
     indexOf(id);
-    record(EditorChange::Kind::end, id, 0.0);
+    if (openGestures.erase(id) > 0)
+        record(EditorChange::Kind::end, id, 0.0);
 }
 
 void EditorSession::record(EditorChange::Kind kind, std::uint32_t id, double value)

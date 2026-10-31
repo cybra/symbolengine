@@ -41,6 +41,14 @@ public:
         return true;
     }
 
+    // How many more can be added, at least: whoever takes them can only make this more.
+    std::size_t room() const noexcept
+    {
+        const auto at = writeAt.load(std::memory_order_relaxed);
+        const auto taken = readAt.load(std::memory_order_acquire);
+        return capacity - 1 - (at + capacity - taken) % capacity;
+    }
+
     template <typename Take>
     void drain(Take&& take) noexcept
     {

@@ -13,6 +13,7 @@ include(SymbolEngineResources)
 # The patch's checksum goes with it, so a CHOC patched by an earlier version of it, as a kept build folder has, is
 # patched again.
 file(SHA256 ${PROJECT_SOURCE_DIR}/cmake/PatchChoc.cmake choc_patch)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/cmake/PatchChoc.cmake)
 FetchContent_Declare(symbolengine_choc
     URL https://github.com/Tracktion/choc/archive/8af031c2ba4f5723f4b0a5ca14e0b4984af15b0e.tar.gz
     URL_HASH SHA256=930607066e0120438e6452d6caac21f886bf0289ae6db4717b3ce892e4d09b8a
@@ -41,7 +42,7 @@ if(SYMBOLENGINE_TESTS)
                            ALONE "[webview]")
     target_include_directories(symbolengine_ui_tests SYSTEM PRIVATE ${symbolengine_choc_SOURCE_DIR})
     if(APPLE)
-        target_sources(symbolengine_ui_tests PRIVATE Tests/MenuBarTests.mm)
+        target_sources(symbolengine_ui_tests PRIVATE Tests/MenuBarTests.mm Tests/WebViewTests_mac.mm)
         target_link_libraries(symbolengine_ui_tests PRIVATE "-framework ImageIO" "-framework CoreGraphics")
     endif()
 

@@ -41,6 +41,14 @@ NSArray<UTType*>* typesFor(const std::vector<std::string>& extensions)
     }
     return types;
 }
+
+// Through the run loop itself: a dialog shown from inside a call on the main dispatch queue holds that queue for as long as
+// it is up, and with it every timer and call the program posts.
+void onRunLoop(void (^block)())
+{
+    CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes, block);
+    CFRunLoopWakeUp(CFRunLoopGetMain());
+}
 }
 
 void ask(const Question& question, void* parent, std::function<void(std::size_t chosen)> answered)
@@ -48,7 +56,7 @@ void ask(const Question& question, void* parent, std::function<void(std::size_t 
     NSWindow* window = [windowOf(parent) retain];
     auto asked = question;
 
-    dispatch_async(dispatch_get_main_queue(), ^{
+    onRunLoop(^{
       @autoreleasepool
       {
           NSAlert* alert = [[NSAlert alloc] init];
@@ -95,7 +103,7 @@ void chooseFile(const FileChoice& choice, void*, std::function<void(std::optiona
 {
     auto asked = choice;
 
-    dispatch_async(dispatch_get_main_queue(), ^{
+    onRunLoop(^{
       @autoreleasepool
       {
           NSSavePanel* panel = nil;

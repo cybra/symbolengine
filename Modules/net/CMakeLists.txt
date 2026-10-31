@@ -16,6 +16,10 @@ symbolengine_add_module(net SOURCES ${sources} DEPENDS core LIBRARIES ${librarie
 
 if(SYMBOLENGINE_TESTS)
     symbolengine_add_tests(net SOURCES Tests/HttpTests.cpp Tests/ServedTests.cpp)
+    if(APPLE)
+        target_sources(symbolengine_net_tests PRIVATE Tests/HttpTests_mac.mm)
+        target_link_libraries(symbolengine_net_tests PRIVATE "-framework Foundation")
+    endif()
     find_package(Threads REQUIRED)
     target_sources(symbolengine_net_tests PRIVATE Tests/TestServer.cpp)
     target_link_libraries(symbolengine_net_tests PRIVATE Threads::Threads)

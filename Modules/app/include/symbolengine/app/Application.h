@@ -67,6 +67,10 @@ public:
     /** Stops the loop, so run() returns code once what is queued has run. From any thread. */
     void quit(int code = 0);
 
+    /** Says the program won't quit after all, having been asked through onQuitRequested. On a Mac this stops at once a
+        logging out or a shutdown that is waiting to hear, which would otherwise wait until the system gives up on it. */
+    void declineQuit();
+
     /** Whether quit() has been called. */
     bool isQuitting() const noexcept;
 
@@ -91,6 +95,10 @@ public:
     /** The system asked the program to quit: Quit in the Dock's menu, logging out or shutting down on a Mac, and the
         session ending on Windows. The program asks what it needs to and calls quit(). Without it, quit() is called. */
     std::function<void()> onQuitRequested;
+
+    /** On Windows, the session really is ending: the process ends when this returns, whatever it was doing, so what
+        comes after run() may not happen. For saving what must be kept, quickly and without asking anything. */
+    std::function<void()> onSessionEnding;
 
     /** The system asked the program to open files: double-clicked, dropped on its icon, or given to it with Open With.
         On a Mac that includes the file the program was started for; on Windows that comes in arguments(). */

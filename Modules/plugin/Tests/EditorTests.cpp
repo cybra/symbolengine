@@ -23,11 +23,15 @@
 
 #include <symbolengine/core/Files.h>
 #include <symbolengine/core/Json.h>
+#include <symbolengine/ui/MessageLoop.h>
+#include <symbolengine/ui/Native.h>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <map>
 #include <random>
+#include <thread>
 #include <tuple>
 #include <vector>
 
@@ -95,8 +99,6 @@ struct Collected
 
 TEST_CASE("An editor opens in the host's window, and its page and the host change each other's parameters", "[webview]")
 {
-    choc::messageloop::initialise();
-
     TestHost host;
     Made made(host, "test.gain");
     REQUIRE(made.plugin != nullptr);
@@ -203,8 +205,6 @@ TEST_CASE("An editor opens in the host's window, and its page and the host chang
 
 TEST_CASE("A resizable editor asks the host for sizes within its limits, and opens again at the size it was given", "[webview]")
 {
-    choc::messageloop::initialise();
-
     std::random_device random;
     const auto folder = std::filesystem::temp_directory_path() / ("symbolengine-editor-" + std::to_string(random()));
     tests::TestLatency::sizeFile = folder / "Editor.json";
@@ -266,8 +266,9 @@ TEST_CASE("A resizable editor asks the host for sizes within its limits, and ope
 
         CHECK(reports["tooSmall"] == Value(Object{{"width", 300}, {"height", 200}, {"agreed", true}}));
         CHECK(reports["larger"] == Value(Object{{"width", 500}, {"height", 320}, {"agreed", true}}));
+        CHECK(reports["halfPoint"] == Value(Object{{"width", 601}, {"height", 300}, {"agreed", true}}));
         using Size = std::pair<std::uint32_t, std::uint32_t>;
-        CHECK(host.resizeRequests == std::vector<Size>{{300, 200}, {500, 320}, {600, 370}});
+        CHECK(host.resizeRequests == std::vector<Size>{{300, 200}, {500, 320}, {601, 300}, {500, 320}, {600, 370}});
         REQUIRE(gui.get_size(made.plugin, &width, &height));
         CHECK(width == 600);
         CHECK(height == 370);
@@ -303,3 +304,214 @@ TEST_CASE("A resizable editor asks the host for sizes within its limits, and ope
     std::error_code ignored;
     std::filesystem::remove_all(folder, ignored);
 }
+
+namespace
+{
+using Event = std::tuple<std::uint16_t, clap_id, double>;
+
+// A plugin with its editor open, for checking what the editor tells the host, the editor's link to it at hand.
+struct OpenEditor
+{
+    OpenEditor() : made(host, "test.gain")
+    {
+        TestGain::onEditorOpened = [this](EditorLink& given) { link = &given; };
+        REQUIRE(gui().create(made.plugin, windowApi, false));
+        REQUIRE(link != nullptr);
+    }
+
+    ~OpenEditor()
+    {
+        TestGain::onEditorOpened = nullptr;
+        close();
+    }
+
+    const clap_plugin_gui& gui() const { return made.extension<clap_plugin_gui>(CLAP_EXT_GUI); }
+
+    void close()
+    {
+        if (!closed)
+            gui().destroy(made.plugin);
+        closed = true;
+    }
+
+    // What the plugin has for the host, as it collects when it isn't processing.
+    std::vector<Event> collected()
+    {
+        Changes none;
+        Collected told;
+        made.extension<clap_plugin_params>(CLAP_EXT_PARAMS).flush(made.plugin, &none.list, &told.list);
+        return told.events;
+    }
+
+    TestHost host;
+    Made made;
+    EditorLink* link = nullptr;
+    bool closed = false;
+};
+
+std::size_t countOf(const std::vector<Event>& events, std::uint16_t type)
+{
+    return static_cast<std::size_t>(
+        std::count_if(events.begin(), events.end(), [&](const Event& event) { return std::get<0>(event) == type; }));
+}
+}
+
+TEST_CASE("An editor's changes reach a host that is processing, which may have stopped rendering", "[webview]")
+{
+    OpenEditor open;
+    REQUIRE(open.made.plugin->activate(open.made.plugin, 44100.0, 1, 256));
+    REQUIRE(open.made.plugin->start_processing(open.made.plugin));
+
+    const auto before = open.host.flushRequests;
+    open.link->setParameter(1, -6.0);
+    CHECK(open.host.flushRequests > before);
+
+    open.made.plugin->stop_processing(open.made.plugin);
+    open.made.plugin->deactivate(open.made.plugin);
+}
+
+TEST_CASE("A gesture left open is ended when the editor closes, and only a gesture begun is ended", "[webview]")
+{
+    OpenEditor open;
+
+    // Nothing to end, and a second beginning of what has begun.
+    open.link->endGesture(2);
+    open.link->beginGesture(1);
+    open.link->beginGesture(1);
+    open.link->setParameter(1, -6.0);
+    open.close();
+
+    CHECK(open.collected() == std::vector<Event>{{CLAP_EVENT_PARAM_GESTURE_BEGIN, 1, 0.0},
+                                                 {CLAP_EVENT_PARAM_VALUE, 1, -6.0},
+                                                 {CLAP_EVENT_PARAM_GESTURE_END, 1, 0.0}});
+}
+
+TEST_CASE("However many changes a host hasn't collected, every gesture begun is ended", "[webview]")
+{
+    SECTION("one long gesture")
+    {
+        OpenEditor open;
+        open.link->beginGesture(1);
+        for (int i = 0; i < 10000; ++i)
+            open.link->setParameter(1, -static_cast<double>(i % 60));
+        open.link->endGesture(1);
+
+        const auto events = open.collected();
+        CHECK(countOf(events, CLAP_EVENT_PARAM_GESTURE_BEGIN) == 1);
+        CHECK(countOf(events, CLAP_EVENT_PARAM_GESTURE_END) == 1);
+        REQUIRE_FALSE(events.empty());
+        CHECK(std::get<0>(events.back()) == CLAP_EVENT_PARAM_GESTURE_END);
+    }
+
+    SECTION("many short ones")
+    {
+        OpenEditor open;
+        for (int i = 0; i < 5000; ++i)
+        {
+            open.link->beginGesture(1);
+            open.link->setParameter(1, -1.0);
+            open.link->setParameter(1, -2.0);
+            open.link->endGesture(1);
+        }
+
+        const auto events = open.collected();
+        const auto begun = countOf(events, CLAP_EVENT_PARAM_GESTURE_BEGIN);
+        CHECK(begun > 0);
+        CHECK(countOf(events, CLAP_EVENT_PARAM_GESTURE_END) == begun);
+    }
+
+    SECTION("nothing but beginnings and ends")
+    {
+        OpenEditor open;
+        for (int i = 0; i < 5000; ++i)
+        {
+            open.link->beginGesture(1);
+            open.link->endGesture(1);
+        }
+
+        const auto events = open.collected();
+        const auto begun = countOf(events, CLAP_EVENT_PARAM_GESTURE_BEGIN);
+        CHECK(begun > 0);
+        CHECK(countOf(events, CLAP_EVENT_PARAM_GESTURE_END) == begun);
+    }
+
+    SECTION("left open as the editor closes, with the queue full")
+    {
+        OpenEditor open;
+        open.link->beginGesture(1);
+        for (int i = 0; i < 10000; ++i)
+            open.link->setParameter(1, -static_cast<double>(i % 60));
+        open.close();
+
+        const auto events = open.collected();
+        CHECK(countOf(events, CLAP_EVENT_PARAM_GESTURE_END) == 1);
+    }
+}
+
+TEST_CASE("An exception from a plugin's editor code never reaches the host", "[webview]")
+{
+    OpenEditor open;
+
+    // Its tick keeps being called, each one throwing.
+    TestGain::failToTick = true;
+    const auto before = TestGain::last->ticks.size();
+    ui::messageLoop::runUntil([&] { return TestGain::last->ticks.size() >= before + 3; },
+                              std::chrono::milliseconds(5000));
+    TestGain::failToTick = false;
+    CHECK(TestGain::last->ticks.size() >= before + 3);
+
+    TestGain::failToClose = true;
+    open.close();
+    TestGain::failToClose = false;
+}
+
+TEST_CASE("An editor's timing still runs after a worker has asked for a call before it opened", "[webview]")
+{
+    TestHost host;
+    Made made(host, "test.gain");
+
+    // As a plugin's worker might, as soon as the plugin is made.
+    bool called = false;
+    std::thread([&] { ui::messageLoop::callAsync([&] { called = true; }); }).join();
+
+    const auto& gui = made.extension<clap_plugin_gui>(CLAP_EXT_GUI);
+    REQUIRE(gui.create(made.plugin, windowApi, false));
+    const auto ticking =
+        ui::messageLoop::runUntil([&] { return called && TestGain::last->ticks.size() >= 2; }, std::chrono::seconds(5));
+    gui.destroy(made.plugin);
+
+    CHECK(called);
+    CHECK(ticking);
+}
+
+#if defined(_WIN32)
+TEST_CASE("An editor told its scale after it is made still opens to fit the screen", "[webview]")
+{
+    std::random_device random;
+    const auto folder = std::filesystem::temp_directory_path() / ("symbolengine-scale-" + std::to_string(random()));
+    std::filesystem::create_directories(folder);
+    tests::TestLatency::sizeFile = folder / "Editor.json";
+    files::writeSafely(tests::TestLatency::sizeFile, R"({"width": 900, "height": 600})");
+
+    TestHost host;
+    {
+        Made made(host, "test.latency");
+        const auto& gui = made.extension<clap_plugin_gui>(CLAP_EXT_GUI);
+        REQUIRE(gui.create(made.plugin, windowApi, false));
+
+        // Enough pixels to a point for its largest size not to fit.
+        const auto screen = ui::native::workAreaAtPointer();
+        const auto scale = std::max(screen.width / 900.0, screen.height / 600.0) * 1.5;
+        REQUIRE(gui.set_scale(made.plugin, scale));
+
+        std::uint32_t width = 0, height = 0;
+        REQUIRE(gui.get_size(made.plugin, &width, &height));
+        CHECK(
+            (width <= static_cast<std::uint32_t>(screen.width) || height <= static_cast<std::uint32_t>(screen.height)));
+        gui.destroy(made.plugin);
+    }
+
+    std::error_code ignored;
+    std::filesystem::remove_all(folder, ignored);
+}
+#endif

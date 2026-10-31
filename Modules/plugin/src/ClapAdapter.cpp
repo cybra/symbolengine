@@ -17,6 +17,8 @@
 
 #if SYMBOLENGINE_EDITORS
     #include "Editor.h"
+
+    #include <symbolengine/ui/MessageLoop.h>
 #endif
 
 #include <algorithm>
@@ -161,6 +163,11 @@ public:
     {
         try
         {
+#if SYMBOLENGINE_EDITORS
+            // On the thread hosts make plugins on, their message thread, before any worker of the plugin's asks for a call.
+            ui::messageLoop::initialize();
+#endif
+
             hostParams = static_cast<const clap_host_params*>(host->get_extension(host, CLAP_EXT_PARAMS));
             hostLatency = static_cast<const clap_host_latency*>(host->get_extension(host, CLAP_EXT_LATENCY));
             hostGui = static_cast<const clap_host_gui*>(host->get_extension(host, CLAP_EXT_GUI));
@@ -416,6 +423,13 @@ public:
         }
         catch (...)
         {
+            // Whatever it got as far as writing, or what was in the buffers before, isn't for the host to play.
+            for (std::uint32_t bus = 0; bus < call.audio_outputs_count; ++bus)
+                for (std::uint32_t channel = 0; channel < call.audio_outputs[bus].channel_count; ++channel)
+                    if (auto* samples = call.audio_outputs[bus].data32 != nullptr
+                                            ? call.audio_outputs[bus].data32[channel]
+                                            : nullptr)
+                        std::fill_n(samples, call.frames_count, 0.0f);
             return CLAP_PROCESS_ERROR;
         }
     }
@@ -774,6 +788,7 @@ public:
 
     std::unique_ptr<detail::EditorSession> editor;
     double scale = 1.0;   // pixels to a point, which a Windows host gives
+    bool parented = false;   // the editor has been put in the host's window
 
     std::uint32_t pixels(std::uint32_t inPoints) const noexcept
     {
@@ -820,13 +835,15 @@ public:
 
             detail::EditorSession::Host link;
             link.told = [this] {
-                // While the plugin isn't processing, the host collects the editor's changes when asked.
-                if (!processing && hostParams != nullptr)
+                // Asked even while the plugin is processing, as a host that has stopped rendering, Logic with a silent
+                // track, is told to process or flush only by this.
+                if (hostParams != nullptr)
                     hostParams->request_flush(host);
             };
             link.resize = [this](std::uint32_t w, std::uint32_t h) { return askHostToResize(w, h); };
             link.pixelsPerPoint = scale;
 
+            parented = false;
             editor = std::make_unique<detail::EditorSession>(*plugin, pluginDescription, *plugin->editor(),
                                                              editorChanges, std::move(link));
             if (!editor->available())
@@ -851,7 +868,12 @@ public:
             return false;
         scale = newScale;
         if (editor != nullptr)
+        {
+            // A host says the scale after making the editor, and its opening size depends on it.
+            if (!parented)
+                editor->fitToScale(scale);
             showSize();
+        }
         return true;
     #else
         (void) newScale;
@@ -916,6 +938,7 @@ public:
             return false;
         if (!ui::native::attach(editor->nativeView(), window.ptr))
             return false;
+        parented = true;
         showSize();
         return true;
     }
@@ -1059,7 +1082,16 @@ const void* Instance::extension(const char* id) const noexcept
         return &tails;
 #if SYMBOLENGINE_EDITORS
     if (std::strcmp(id, CLAP_EXT_GUI) == 0)
-        return &gui;
+    {
+        try
+        {
+            return plugin->editor().has_value() ? &gui : nullptr;
+        }
+        catch (...)
+        {
+            return nullptr;
+        }
+    }
 #endif
     return nullptr;
 }

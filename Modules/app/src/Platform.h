@@ -17,6 +17,9 @@ namespace symbolengine::app::platform
 void start(Application& application, const std::string& identifier);
 void finish();
 
+/** The program isn't quitting, having been asked by the system: says so to the system if it is waiting to hear. */
+void declineQuit();
+
 std::vector<std::string> arguments(int argc, char** argv);
 
 /** Finds an instance already running under the identifier and hands it the arguments, or becomes the running instance

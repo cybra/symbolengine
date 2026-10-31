@@ -14,8 +14,8 @@ FetchContent_Declare(symbolengine_clap
     URL_HASH SHA256=58fdb977c6678859c15d57942378b651399178f49a3a8ecad1813b9f231dc096
     SOURCE_SUBDIR fetched-only)
 FetchContent_Declare(symbolengine_clap_wrapper
-    URL https://github.com/cybra/clap-wrapper/archive/544d0dede7cf697ac70031b0d0b2d8fbf34bba2c.tar.gz # v0.17.0 and ours
-    URL_HASH SHA256=19935243446aaf8164f578743c72de9d56d95b6c2faa9b95255d9bed1b6e3bec
+    URL https://github.com/cybra/clap-wrapper/archive/4af181bd6e3dac102dda4405567a6c9ad4f94404.tar.gz # v0.17.0 and ours
+    URL_HASH SHA256=2d24d11e7282988fa7c2fa77da6a9160c7287d85a6bcd80747e5b8e4eddf6606
     SOURCE_SUBDIR fetched-only)
 FetchContent_MakeAvailable(symbolengine_clap symbolengine_clap_wrapper)
 
@@ -197,8 +197,13 @@ function(symbolengine_add_plugin target)
             string(TOLOWER ${format} suffix)
             list(APPEND bundles $<TARGET_BUNDLE_DIR:${target}_${suffix}>)
         endforeach()
+        # With a real identity, what Apple's notary service asks of a release; an ad hoc signature can't have them.
+        set(signing --force --sign ${SYMBOLENGINE_CODESIGN_IDENTITY})
+        if(NOT SYMBOLENGINE_CODESIGN_IDENTITY STREQUAL "-")
+            list(APPEND signing --timestamp --options runtime)
+        endif()
         add_custom_target(${target}_sign ALL
-            COMMAND codesign --force --sign ${SYMBOLENGINE_CODESIGN_IDENTITY} ${bundles}
+            COMMAND codesign ${signing} ${bundles}
             COMMENT "Signing ${target}'s plugins"
             VERBATIM)
         foreach(format IN LISTS plugin_FORMATS)

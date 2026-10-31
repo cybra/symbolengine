@@ -1,7 +1,9 @@
 #include <symbolengine/core/Files.h>
 #include <symbolengine/core/Json.h>
+#include <symbolengine/ui/MessageLoop.h>
 #include <symbolengine/ui/Native.h>
 #include <symbolengine/ui/WebView.h>
+#include <symbolengine/ui/Window.h>
 
 #include <choc/gui/choc_MessageLoop.h>
 
@@ -10,8 +12,18 @@
 #if defined(__APPLE__)
     #include <CoreGraphics/CoreGraphics.h>
     #include <ImageIO/ImageIO.h>
+#elif defined(_WIN32)
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
+    #ifndef NOMINMAX
+        #define NOMINMAX
+    #endif
+    #include <windows.h>
 #endif
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdlib>
 
 #include <filesystem>
@@ -20,6 +32,7 @@
 #include <random>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 using namespace symbolengine;
 
@@ -356,5 +369,255 @@ TEST_CASE("In a debug build, files built in can be read live from the folder the
     setVariable("SYMBOLENGINE_LIVE_FILES", "");
 
     files::writeSafely(file, builtIn);
+}
+#endif
+
+namespace
+{
+// A native timer for a page to wait on, as one no window shows has its own timers held back.
+void exposeWait(ui::WebView& view)
+{
+    view.exposeLater("wait", [](const Value& arguments, ui::WebView::Reply reply) {
+        ui::messageLoop::callAfter(static_cast<std::uint32_t>(arguments[0].intOr(0)),
+                                   [reply = std::move(reply)] { reply(Value()); });
+    });
+}
+
+// Nowhere there is, so nothing is ever fetched, though going there would take the page away. about:blank wouldn't show
+// this: a web view goes there whatever it is told.
+constexpr std::string_view elsewhere = "https://symbolengine.invalid/";
+
+// A script trying to leave, and reporting where it is once it has had the time.
+const char* const leaving = R"js(
+(async () => {
+    await new Promise(loaded => addEventListener("DOMContentLoaded", loaded));
+    window.open("https://symbolengine.invalid/window");
+    const frame = document.createElement("iframe");
+    frame.src = "https://symbolengine.invalid/frame";
+    document.body.append(frame);
+    await symbolengine.call("wait", 200);
+    location.href = "https://symbolengine.invalid/";
+    await symbolengine.call("wait", 500);
+    await symbolengine.call("report", "at", location.href);
+    await symbolengine.call("done");
+})();
+)js";
+
+bool includes(const std::vector<std::string>& addresses, const std::string& address)
+{
+    return std::find(addresses.begin(), addresses.end(), address) != addresses.end();
+}
+}
+
+TEST_CASE("A page goes only where its program allows", "[webview]")
+{
+    SECTION("Without a function to ask, nowhere")
+    {
+        const auto reports = runPage({.resources = onePage(pageWith(leaving))}, exposeWait);
+        REQUIRE(reports.contains("at"));
+        CHECK_FALSE(reports.at("at").stringOr("").starts_with(elsewhere));
+    }
+
+    SECTION("With one, where it says, as asked of the page and its frames")
+    {
+        std::vector<std::string> asked;
+        const auto reports = runPage({.resources = onePage(pageWith(leaving)),
+                                      .allowAddress =
+                                          [&](std::string_view address) {
+                                              asked.emplace_back(address);
+                                              return false;
+                                          }},
+                                     exposeWait);
+        REQUIRE(reports.contains("at"));
+        CHECK_FALSE(reports.at("at").stringOr("").starts_with(elsewhere));
+        CHECK(includes(asked, std::string(elsewhere) + "frame"));
+        CHECK(includes(asked, std::string(elsewhere)));
+    }
+
+    SECTION("And what it allows, it goes to")
+    {
+        ui::messageLoop::initialize();
+        bool asked = false;
+        ui::WebView view({.resources = onePage(pageWith(R"js(
+window.stayed = "yes";
+symbolengine.call("wait", 100).then(() => { location.href = "https://symbolengine.invalid/"; });
+)js")),
+                          .allowAddress = [&](std::string_view address) {
+                              asked = asked || address == elsewhere;
+                              return address == elsewhere;
+                          }});
+        REQUIRE(view.available());
+        exposeWait(view);
+
+        std::string stayed = "yes";
+        const auto went = ui::messageLoop::runUntil(
+            [&] {
+                if (view.pageReady() && asked)
+                    view.run("String(window.stayed)",
+                             [&](const Value& value, const std::string&) { stayed = value.stringOr(""); });
+                return stayed != "yes";
+            },
+            std::chrono::seconds(20));
+        CHECK(went);
+    }
+}
+
+TEST_CASE("A page can only have a browser open a web address", "[webview]")
+{
+    const auto reports = runPage({.resources = onePage(pageWith(R"js(
+(async () => {
+    await symbolengine.call("report", "file", await symbolengine.openLink("file:///etc/hosts"));
+    await symbolengine.call("report", "script", await symbolengine.openLink("javascript:void(0)"));
+    await symbolengine.call("done");
+})();
+)js"))});
+    REQUIRE(reports.contains("file"));
+    CHECK(reports.at("file") == Value(false));
+    CHECK(reports.at("script") == Value(false));
+}
+
+TEST_CASE("A file with a space in its name is found by the address that spells it", "[webview]")
+{
+    const auto page = pageWith(R"js(
+(async () => {
+    const spaced = await fetch("my%20file.txt");
+    await symbolengine.call("report", "spaced", [spaced.status, await spaced.text()]);
+    await symbolengine.call("done");
+})();
+)js");
+    const auto reports = runPage({.resources = [page](std::string_view path) -> std::optional<ui::Resource> {
+        if (path == "/index.html")
+            return ui::Resource{page, ""};
+        if (path == "/my file.txt")
+            return ui::Resource{"spaced", "text/plain"};
+        return std::nullopt;
+    }});
+    REQUIRE(reports.contains("spaced"));
+    CHECK(reports.at("spaced") == Value(Array{200, "spaced"}));
+}
+
+TEST_CASE("A page can ask for part of a file, as an audio element does", "[webview]")
+{
+    const auto page = pageWith(R"js(
+(async () => {
+    const ask = async range => {
+        const answer = await fetch("data.bin", range ? { headers: { Range: range } } : {});
+        return [answer.status, await answer.text(), answer.headers.get("Content-Range") ?? "", answer.headers.get("Accept-Ranges") ?? ""];
+    };
+    await symbolengine.call("report", "whole", await ask(""));
+    await symbolengine.call("report", "middle", await ask("bytes=2-5"));
+    await symbolengine.call("report", "toTheEnd", await ask("bytes=7-"));
+    await symbolengine.call("report", "lastThree", await ask("bytes=-3"));
+    await symbolengine.call("report", "past", await ask("bytes=8-100"));
+    await symbolengine.call("report", "outside", await ask("bytes=20-30"));
+    await symbolengine.call("done");
+})();
+)js");
+
+    const auto reports = runPage({.resources = [page](std::string_view path) -> std::optional<ui::Resource> {
+        if (path == "/index.html")
+            return ui::Resource{page, ""};
+        if (path == "/data.bin")
+            return ui::Resource{"0123456789", "application/octet-stream"};
+        return std::nullopt;
+    }});
+
+    REQUIRE(reports.contains("whole"));
+    CHECK(reports.at("whole") == Value(Array{200, "0123456789", "", "bytes"}));
+    CHECK(reports.at("middle") == Value(Array{206, "2345", "bytes 2-5/10", "bytes"}));
+    CHECK(reports.at("toTheEnd") == Value(Array{206, "789", "bytes 7-9/10", "bytes"}));
+    CHECK(reports.at("lastThree") == Value(Array{206, "789", "bytes 7-9/10", "bytes"}));
+    CHECK(reports.at("past") == Value(Array{206, "89", "bytes 8-9/10", "bytes"}));
+    CHECK(reports.at("outside") == Value(Array{416, "", "bytes */10", "bytes"}));
+}
+
+TEST_CASE("An audio element plays a page's own file", "[webview]")
+{
+    // A second of silence at 8000 Hz.
+    std::string tone = "RIFF";
+    const auto number = [&](std::uint32_t value, int bytes) {
+        for (int i = 0; i < bytes; ++i)
+            tone += static_cast<char>((value >> (8 * i)) & 0xff);
+    };
+    number(36 + 16000, 4);
+    tone += "WAVEfmt ";
+    number(16, 4);
+    number(1, 2);
+    number(1, 2);
+    number(8000, 4);
+    number(16000, 4);
+    number(2, 2);
+    number(16, 2);
+    tone += "data";
+    number(16000, 4);
+    tone.append(16000, '\0');
+
+    const auto page = pageWith(R"js(
+(async () => {
+    const audio = new Audio("tone.wav");
+    const length = await new Promise(found => {
+        audio.onloadedmetadata = () => found(audio.duration);
+        audio.onerror = () => found(-1);
+        symbolengine.call("wait", 8000).then(() => found(-2));
+    });
+    await symbolengine.call("report", "audio", length);
+    await symbolengine.call("done");
+})();
+)js");
+
+    // In a window that shows, as a page no window shows loads no media, and never in front.
+    ui::messageLoop::initialize();
+    ui::Window window({.title = "SymbolEngine audio test", .size = {300, 200}});
+    std::map<std::string, Value> reports;
+    bool finished = false;
+    ui::WebView view({.resources = [page, tone](std::string_view path) -> std::optional<ui::Resource> {
+        if (path == "/index.html")
+            return ui::Resource{page, ""};
+        if (path == "/tone.wav")
+            return ui::Resource{tone, "audio/wav"};
+        return std::nullopt;
+    }});
+    REQUIRE(view.available());
+    exposeWait(view);
+    view.expose("report", [&](const Value& arguments) {
+        reports[arguments[0].asString()] = arguments[1];
+        return Value();
+    });
+    view.expose("done", [&](const Value&) {
+        finished = true;
+        return Value();
+    });
+    window.setContent(view.nativeView());
+    window.setVisible(true);
+
+    CHECK(ui::messageLoop::runUntil([&] { return finished; }, std::chrono::seconds(20)));
+    window.setVisible(false);
+    REQUIRE(reports.contains("audio"));
+    CHECK(reports.at("audio").numberOr(0.0) > 0.9);
+    CHECK(reports.at("audio").numberOr(0.0) < 1.1);
+}
+
+#if defined(_WIN32)
+TEST_CASE("Without a WebView2 runtime to use, a web view says it isn't available", "[webview]")
+{
+    std::random_device random;
+    const auto empty = std::filesystem::temp_directory_path() / ("symbolengine-no-runtime-" + std::to_string(random()));
+    std::filesystem::create_directories(empty);
+    REQUIRE(SetEnvironmentVariableW(L"WEBVIEW2_BROWSER_EXECUTABLE_FOLDER", empty.c_str()));
+
+    ui::messageLoop::initialize();
+    {
+        ui::WebView view({.resources = onePage(pageWith(""))});
+        ui::messageLoop::runUntil([&] { return !view.available(); }, std::chrono::seconds(20));
+        CHECK_FALSE(view.available());
+
+        // What is sent to it goes nowhere, rather than building up.
+        for (int i = 0; i < 100; ++i)
+            view.send("nobody", Object{{"i", i}});
+    }
+
+    SetEnvironmentVariableW(L"WEBVIEW2_BROWSER_EXECUTABLE_FOLDER", nullptr);
+    std::error_code ignored;
+    std::filesystem::remove_all(empty, ignored);
 }
 #endif

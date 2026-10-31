@@ -74,6 +74,9 @@ public:
 
     void process(Block& block) override
     {
+        if (failToProcess)
+            throw std::runtime_error("couldn't process");
+
         if (blocks < blockSizes.size())
             blockSizes[blocks++] = block.frames();
 
@@ -98,11 +101,25 @@ public:
             onEditorOpened(link);
     }
 
-    void editorTick(EditorLink&) override { ticks.push_back(std::chrono::steady_clock::now()); }
+    void editorTick(EditorLink&) override
+    {
+        ticks.push_back(std::chrono::steady_clock::now());
+        if (failToTick)
+            throw std::runtime_error("couldn't tick");
+    }
+
+    void editorClosed() override
+    {
+        if (failToClose)
+            throw std::runtime_error("couldn't close");
+    }
 
     static inline TestGain* last = nullptr;
     std::vector<std::chrono::steady_clock::time_point> ticks;
     static inline bool failToPrepare = false;
+    static inline bool failToProcess = false;
+    static inline bool failToTick = false;
+    static inline bool failToClose = false;
     static inline std::function<void(EditorLink&)> onEditorOpened;
 
     ParameterValue gain, mode, on;
@@ -123,6 +140,8 @@ inline std::optional<std::string_view> resizePage(std::string_view path)
 (async () => {
     await symbolengine.call("report", "tooSmall", await plugin.resize(10, 10));
     await symbolengine.call("report", "larger", await plugin.resize(500, 320));
+    await symbolengine.call("report", "halfPoint", await plugin.resize(600.5, 300.25));
+    await plugin.resize(500, 320);
 
     // The grip, dragged 100 points right and 50 down.
     const grip = await new Promise(found => {

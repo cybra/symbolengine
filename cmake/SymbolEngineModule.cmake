@@ -36,7 +36,7 @@ function(symbolengine_add_module name)
     add_library(SymbolEngine::${name} ALIAS ${target})
     # Linked into plugins, where nothing but a plugin's entry point may be visible outside it.
     set_target_properties(${target} PROPERTIES
-        EXPORT_NAME ${name} POSITION_INDEPENDENT_CODE ON CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+        EXPORT_NAME ${name} POSITION_INDEPENDENT_CODE ON CXX_VISIBILITY_PRESET hidden OBJCXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
 
     target_compile_features(${target} PUBLIC cxx_std_20)
     target_include_directories(${target} PUBLIC

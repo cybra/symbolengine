@@ -95,6 +95,15 @@ LRESULT CALLBACK windowProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM 
             return app->isQuitting() ? TRUE : FALSE;
         }
 
+        // It really is ending, and the process goes when this returns, whatever it has yet to do.
+        case WM_ENDSESSION:
+        {
+            if (wParam != FALSE)
+                if (auto* app = Application::current(); app != nullptr && app->onSessionEnding)
+                    app->onSessionEnding();
+            return 0;
+        }
+
         default:
             break;
     }
@@ -230,10 +239,17 @@ bool sendToRunningInstance(const std::string& identifier, const std::vector<std:
     data.dwData = argumentsHandedOver;
     data.cbData = static_cast<DWORD>(text.size() * sizeof(wchar_t));
     data.lpData = text.empty() ? nullptr : text.data();
+
+    // Its window can come forward, which only a program in front can allow.
+    DWORD process = 0;
+    GetWindowThreadProcessId(running, &process);
+    AllowSetForegroundWindow(process);
+
+    // Only an answer means it has taken them, and that this one can go.
     DWORD_PTR result = 0;
-    SendMessageTimeoutW(running, WM_COPYDATA, reinterpret_cast<WPARAM>(window), reinterpret_cast<LPARAM>(&data),
-                        SMTO_ABORTIFHUNG | SMTO_BLOCK, 5000, &result);
-    return true;
+    return SendMessageTimeoutW(running, WM_COPYDATA, reinterpret_cast<WPARAM>(window), reinterpret_cast<LPARAM>(&data),
+                               SMTO_ABORTIFHUNG | SMTO_BLOCK, 5000, &result) != 0 &&
+           result == TRUE;
 }
 
 bool isForeground()
@@ -252,6 +268,8 @@ void noteRecentFile(const std::filesystem::path& file)
 {
     SHAddToRecentDocs(SHARD_PATHW, file.c_str());
 }
+
+void declineQuit() {}
 
 void terminate(int code)
 {

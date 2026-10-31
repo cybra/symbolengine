@@ -87,6 +87,16 @@ cmake --build build --target MyGain_all
 
 That leaves each format in `build/Plugins/MyGain`: `My Gain.clap`, `My Gain.vst3` and, on a Mac, `My Gain.component`. Nothing is installed, so copy them where a host looks, such as `~/Library/Audio/Plug-Ins/VST3` or `~/Library/Audio/Plug-Ins/Components` on a Mac. `MyGain_clap`, `MyGain_vst3` and `MyGain_auv2` build one format alone, and `MyGain_impl` is the static library holding your code, which `LIBRARIES` in `symbolengine_add_plugin` links anything else into. On a Mac each bundle is signed whole after every build, ad hoc unless `SYMBOLENGINE_CODESIGN_IDENTITY` names a Developer ID Application.
 
+A release goes to Apple's notary service, for which that identity's signature has a secure timestamp and the hardened runtime, as it does here without being asked. Build with the identity set, then submit each bundle and staple the answer to it:
+
+```sh
+cmake -B build -DSYMBOLENGINE_CODESIGN_IDENTITY="Developer ID Application: My Company (TEAMID)"
+cmake --build build --target MyGain_all
+ditto -c -k --keepParent "build/Plugins/MyGain/My Gain.vst3" MyGain.zip
+xcrun notarytool submit MyGain.zip --keychain-profile my-profile --wait
+xcrun stapler staple "build/Plugins/MyGain/My Gain.vst3"
+```
+
 ## Threads and blocks
 
 A plugin has two threads that matter. `process` and `reset` belong to the audio thread, and everything else a host calls belongs to the message thread. `process` must not allocate, lock or wait, so `prepare` is the place to allocate what it needs:
@@ -383,7 +393,7 @@ And run them:
 ctest --test-dir build -R MyGain
 ```
 
-- **Always**, the plugin is loaded from its CLAP binary as a host does, made, run and destroyed, and a VST3 build goes through Steinberg's validator, built from the same SDK as the plugin. On a Mac each bundle's signature is checked, and that the Audio Unit's Info.plist names it.
+- **Always**, the plugin is loaded from its CLAP binary as a host does, made, run and destroyed, and a VST3 build goes through Steinberg's validator, built from the same SDK as the plugin. On a Mac each bundle's signature is checked, that its CLAP binary makes nothing visible but its entry point, that the Audio Unit's Info.plist names it, and that its view's Objective-C class is its own.
 - **`SYMBOLENGINE_CLAP_VALIDATOR`** naming CLAP's validator runs it. Version 0.4.1 divides by zero on a plugin with no parameters, and can fail a plugin whose only parameter is a switch.
 - **`SYMBOLENGINE_PLUGINVAL`** naming pluginval runs it on the VST3 build at its strictest level. `SYMBOLENGINE_PLUGINVAL_EDITORS` also opens editors, which puts windows on the screen.
 - **`SYMBOLENGINE_AUVAL`** turned on runs Apple's auval. It installs the Audio Unit for the user running the tests, so it is meant for continuous integration.

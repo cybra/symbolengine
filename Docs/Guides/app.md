@@ -40,7 +40,9 @@ int main(int argc, char** argv)
 
 `quit` stops the loop, from any thread, and `run` returns its code once what is queued has run. `requestQuit` asks the program the way the system does, through `onQuitRequested`, and quits at once if there is no handler.
 
-So send every way of quitting through `requestQuit`, and answer them in one place. The system asks too, through the same callback: Quit in the Dock's menu, logging out or shutting down on a Mac, and the session ending on Windows.
+So send every way of quitting through `requestQuit`, and answer them in one place. The system asks too, through the same callback: Quit in the Dock's menu, logging out or shutting down on a Mac, and the session ending on Windows. On a Mac it waits for the answer, which is the program ending, however long the program takes to ask its questions, up to the system's own limit. A program that decides against quitting calls `declineQuit`, which on a Mac stops a logout at once rather than leaving it to give up.
+
+On Windows the session ending asks at once and waits for no answer, so a program that wants to ask first gets to say no and ask afterwards. When the session really is ending, `onSessionEnding` is the last word: the process goes as it returns, with nothing after `run()` having happened, so that is the place to save what must be kept.
 
 ```cpp
 app.onQuitRequested = [&] {
@@ -96,7 +98,7 @@ app.noteRecentFile(file);
 
 ## One instance at a time
 
-A program that runs one instance at a time calls `sendToRunningInstance` as it starts, before it makes a window. If an instance is already running it takes the arguments and this one returns from `main`. Otherwise this one becomes the running instance others find:
+A program that runs one instance at a time calls `sendToRunningInstance` as it starts, before it makes a window. If an instance is already running and has taken the arguments, this one returns from `main`. Otherwise this one becomes the running instance others find, unless the one running didn't answer, when it runs alone without being found:
 
 ```cpp
 if (app.sendToRunningInstance())
@@ -109,7 +111,7 @@ app.onAnotherInstance = [&](std::vector<std::string> arguments) {
 };
 ```
 
-Instances find each other by `identifier`, so give it the name you give `IDENTIFIER` in CMake. Left empty, it is the program's name. The running instance holds a lock the system lets go of however the process ends, so a crash leaves nothing in the way of the next start. A program run several times at once, as for checks from a script, leaves the call out.
+Instances find each other by `identifier`, so give it the name you give `IDENTIFIER` in CMake. Left empty, it is the program's name. `toFront` works here because the instance handing over has given up its place at the front, which the system would otherwise refuse. The running instance holds a lock the system lets go of however the process ends, so a crash leaves nothing in the way of the next start. Arguments come only from the same user's programs. A program run several times at once, as for checks from a script, leaves the call out.
 
 ## The Dock, and being in front
 

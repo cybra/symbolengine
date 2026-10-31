@@ -68,6 +68,11 @@ public:
             program's window, such as a plugin's editor in a host, needs. A program whose own Edit menu has them turns
             this off, so the keys reach its menu. */
         bool editingKeys = true;
+
+        /** Whether the page, or a frame in it, may go to an address other than its own files, or open a new window
+            there. Without this it goes nowhere else. For a link to open in the browser, a page has
+            symbolengine.openLink. */
+        std::function<bool(std::string_view address)> allowAddress{};
     };
 
     explicit WebView(Options options);

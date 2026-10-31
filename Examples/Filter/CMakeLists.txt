@@ -13,4 +13,8 @@ symbolengine_set_warnings(Filter_impl)
 
 if(SYMBOLENGINE_TESTS)
     symbolengine_validate_plugin(Filter)
+    if(TARGET symbolengine_clap_two_copies AND TARGET symbolengine_ui AND SYMBOLENGINE_HOSTS_CAN_LOAD_PLUGINS)
+        add_test(NAME "Filter: two copies in one process" COMMAND symbolengine_clap_two_copies $<TARGET_FILE:Filter_clap>)
+        set_tests_properties("Filter: two copies in one process" PROPERTIES RUN_SERIAL TRUE)
+    endif()
 endif()
