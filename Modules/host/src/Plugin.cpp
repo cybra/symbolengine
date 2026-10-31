@@ -191,6 +191,9 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     std::unique_ptr<PluginFormatInstance> instance;
     PluginError problem;
     PluginLayout layout{};
+
+    // The layout the program asked for, while the plugin takes it.
+    std::optional<PluginLayout> askedLayout;
     PluginSetup setup{};
     int latency = 0, tail = 0;
     int busy = 0;
@@ -808,12 +811,17 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
         });
     }
 
-    // Stereo where it takes it, else mono in and stereo out, else mono, else what it settles on with audio out.
+    // What the program asked for where it takes it, else stereo, else mono in and stereo out, else mono, else what it
+    // settles on with audio out.
     bool settleLayout()
     {
         PluginLayout settled{};
+        std::vector<PluginLayout> layouts{{2, 2}, {1, 2}, {1, 1}};
 
-        for (const PluginLayout wanted : {PluginLayout{2, 2}, PluginLayout{1, 2}, PluginLayout{1, 1}})
+        if (askedLayout.has_value())
+            layouts.insert(layouts.begin(), *askedLayout);
+
+        for (const auto& wanted : layouts)
         {
             if (!call("arrange", [&] { settled = instance->arrange(wanted); }))
                 return false;
@@ -1301,6 +1309,27 @@ PluginError Plugin::problem() const
 PluginLayout Plugin::layout() const
 {
     return inner->layout;
+}
+
+PluginLayout Plugin::arrange(PluginLayout wanted)
+{
+    auto& held = *inner;
+
+    if (!held.usable("arrange"))
+        return held.layout;
+
+    if (held.state != State::inactive)
+    {
+        held.host->misuse("arrange was called while the plugin was prepared");
+        return held.layout;
+    }
+
+    held.askedLayout = wanted;
+
+    if (!held.settleLayout() || held.layout != wanted)
+        held.askedLayout.reset();
+
+    return held.layout;
 }
 
 bool Plugin::prepare(const PluginSetup& setup)

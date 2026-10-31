@@ -280,6 +280,85 @@ TEST_CASE("Calls on a thread other than the main thread are refused and said")
     CHECK(plugin->state() == Plugin::State::inactive);
 }
 
+TEST_CASE("A program can ask a plugin for a layout while it isn't prepared, and it is prepared with what it settles on")
+{
+    Rig rig;
+    FakePluginFormat::Script both;
+    both.takes = {{2, 2}, {1, 1}};
+    rig.fake.script("both", both);
+    FakePluginFormat::Script stereo;
+    stereo.takes = {{2, 2}};
+    rig.fake.script("only stereo", stereo);
+
+    SECTION("one it takes, given back, kept and played with")
+    {
+        auto plugin = rig.made("both");
+        REQUIRE(plugin->layout() == PluginLayout{2, 2});
+        CHECK(plugin->arrange({1, 1}) == PluginLayout{1, 1});
+        CHECK(plugin->layout() == PluginLayout{1, 1});
+        REQUIRE(plugin->prepare({48000.0, 64, false}));
+        CHECK(plugin->layout() == PluginLayout{1, 1});
+        CHECK(rig.wrong.empty());
+    }
+
+    SECTION("back again")
+    {
+        auto plugin = rig.made("both");
+        CHECK(plugin->arrange({1, 1}) == PluginLayout{1, 1});
+        CHECK(plugin->arrange({2, 2}) == PluginLayout{2, 2});
+        CHECK(plugin->layout() == PluginLayout{2, 2});
+    }
+
+    SECTION("one it won't take gives what it would have settled on, with no harm done")
+    {
+        auto plugin = rig.made("only stereo");
+        CHECK(plugin->arrange({1, 1}) == PluginLayout{2, 2});
+        CHECK(plugin->layout() == PluginLayout{2, 2});
+        CHECK(plugin->state() == Plugin::State::inactive);
+        REQUIRE(plugin->prepare({48000.0, 64, false}));
+        CHECK(rig.wrong.empty());
+    }
+
+    SECTION("the one asked for is kept when it changes its buses, as one it wouldn't take isn't")
+    {
+        auto plugin = rig.made("both");
+        REQUIRE(plugin->arrange({1, 1}) == PluginLayout{1, 1});
+        rig.fake.notify("both", PluginNotice::buses);
+        REQUIRE(rig.main.turnUntil([&] { return rig.main.turn() == 0; }));
+        CHECK(plugin->layout() == PluginLayout{1, 1});
+        REQUIRE(plugin->arrange({2, 2}) == PluginLayout{2, 2});
+
+        auto other = rig.made("only stereo");
+        REQUIRE(other->arrange({1, 1}) == PluginLayout{2, 2});
+        rig.fake.notify("only stereo", PluginNotice::buses);
+        REQUIRE(rig.main.turnUntil([&] { return rig.main.turn() == 0; }));
+        CHECK(other->layout() == PluginLayout{2, 2});
+    }
+
+    SECTION("refused while prepared, the plugin never asked")
+    {
+        auto plugin = rig.made("both");
+        REQUIRE(plugin->prepare({48000.0, 64, false}));
+        CHECK(plugin->arrange({1, 1}) == PluginLayout{2, 2});
+        CHECK(plugin->layout() == PluginLayout{2, 2});
+        REQUIRE(rig.wrong.size() == 1);
+        CHECK(rig.wrong[0].find("arrange") != std::string::npos);
+        CHECK(plugin->state() == Plugin::State::active);
+
+        // Once it isn't, it can be.
+        plugin->release();
+        CHECK(plugin->arrange({1, 1}) == PluginLayout{1, 1});
+    }
+
+    SECTION("refused on another thread")
+    {
+        auto plugin = rig.made("both");
+        std::thread([&] { CHECK(plugin->arrange({1, 1}) == PluginLayout{2, 2}); }).join();
+        CHECK(plugin->layout() == PluginLayout{2, 2});
+        CHECK(rig.wrong.size() == 1);
+    }
+}
+
 TEST_CASE("A plugin's notices, from any thread and from inside its own calls, are acted on from the main thread")
 {
     Rig rig;

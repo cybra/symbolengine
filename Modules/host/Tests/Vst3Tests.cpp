@@ -115,6 +115,33 @@ TEST_CASE("A VST3 plugin that takes only mono runs mono, its output on both side
     CHECK(misuses().empty());
 }
 
+TEST_CASE("A VST3 plugin asked for mono is played through its own one channel, and a mono one asked for stereo isn't")
+{
+    Rig rig;
+    auto plugin = rig.made(testIds::gain);
+    REQUIRE(plugin->arrange({1, 1}) == PluginLayout{1, 1});
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+
+    // One channel of ones through a plugin running at half: its output, from one channel in, is one channel out.
+    std::vector<float> only(64, 1.0f);
+    float* channels[] = {only.data()};
+    plugin->process(channels, 1, 64);
+    CHECK(only.back() == 0.5f);
+    plugin->release();
+
+    // And back to stereo, each side its own again.
+    REQUIRE(plugin->arrange({2, 2}) == PluginLayout{2, 2});
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+    CHECK(through(*plugin, 64) == std::vector<float>{0.5f, 1.0f});
+    plugin->release();
+
+    auto mono = rig.made(testIds::mono);
+    CHECK(mono->arrange({2, 2}) == PluginLayout{1, 1});
+    CHECK(mono->state() == Plugin::State::inactive);
+    CHECK(misuses().empty());
+    CHECK(rig.wrong.empty());
+}
+
 TEST_CASE("A VST3 plugin with no audio out is set aside, saying so")
 {
     Rig rig;

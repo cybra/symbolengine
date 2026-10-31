@@ -157,6 +157,25 @@ TEST_CASE("An Audio Unit's component and units are read from its bundle without 
     CHECK(misuses().empty());
 }
 
+TEST_CASE("An Audio Unit asked for mono is played mono, through its own one channel")
+{
+    Rig rig;
+    auto plugin = rig.made("Pass");
+    plugin->release();
+    REQUIRE(plugin->arrange({1, 1}) == PluginLayout{1, 1});
+    REQUIRE(plugin->prepare({48000.0, 512, false}));
+    CHECK(plugin->layout() == PluginLayout{1, 1});
+    std::vector<float> only = numbered(512);
+    float* channels[] = {only.data()};
+    std::thread audio([&] { plugin->process(channels, 1, 512); });
+    audio.join();
+    CHECK(only == numbered(512));
+    plugin.reset();
+    rig.main.settle();
+    CHECK(misuses().empty());
+    CHECK(rig.wrong.empty());
+}
+
 TEST_CASE("An Audio Unit is made without blocking the main thread, set up stereo at the program's rate and played")
 {
     Rig rig;

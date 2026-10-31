@@ -263,6 +263,12 @@ public:
     /** The layout it settled on: stereo where it takes it, else mono in and stereo out, else mono, else its own. */
     PluginLayout layout() const;
 
+    /** Asks it for another layout of its main buses while it isn't prepared, for a program that wants it run mono rather
+        than have its channels fitted to the stereo it settled on. It is prepared with what this gives, the layout it
+        settled on: the one asked for, kept if it later changes its buses, or where it won't take that, the one it would
+        have settled on anyway. */
+    PluginLayout arrange(PluginLayout wanted);
+
     /** Sets it up and activates it, taking it out of processing first if it is active; false, with problem() set, if
         it can't be. */
     bool prepare(const PluginSetup& setup);
