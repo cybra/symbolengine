@@ -14,8 +14,8 @@ namespace symbolengine::detail
 class RandomAccessFile
 {
 public:
-    /** Opens an existing file to read, or creates a file to write, replacing one of that name; nullptr, with the error
-        set, when it can't. */
+    /** Opens an existing file to read, or creates a file to write, replacing one of that name once the first thing is
+        written, and untouched until then; nullptr, with the error set, when it can't. */
     static std::unique_ptr<RandomAccessFile> open(const std::filesystem::path& file, std::error_code& error);
     static std::unique_ptr<RandomAccessFile> create(const std::filesystem::path& file, std::error_code& error);
 
@@ -33,6 +33,11 @@ public:
     /** Writes count bytes at the place given, all of them or an error. */
     void writeAt(std::uint64_t at, const void* bytes, std::size_t count, std::error_code& error);
 
+    /** For a file created: whether one of that name was there already; and whether anything has been written yet,
+        which can be looked at once this has been let go of. */
+    bool replacing() const noexcept;
+    std::shared_ptr<const bool> written() const noexcept { return wroteSomething; }
+
     /** Has the system put everything written so far on disk. */
     void sync(std::error_code& error);
 
@@ -45,7 +50,11 @@ public:
 private:
     explicit RandomAccessFile(std::unique_ptr<Handle>);
 
+    // Empties a file being replaced, the first time anything is written.
+    void startWriting(std::error_code& error);
+
     std::unique_ptr<Handle> handle;
+    std::shared_ptr<bool> wroteSomething = std::make_shared<bool>(false);
 };
 
 }

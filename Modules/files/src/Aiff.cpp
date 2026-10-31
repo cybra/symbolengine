@@ -368,7 +368,8 @@ std::unique_ptr<AudioFileReader> openAiff(std::unique_ptr<RandomAccessFile> file
     if (error)
         return nullptr;
 
-    if (!haveCommon || !dataStart.has_value() || info.channels <= 0 || !(info.sampleRate > 0.0) || info.bits <= 0)
+    if (!haveCommon || !dataStart.has_value() || info.channels <= 0 || !(info.sampleRate > 0.0) ||
+        info.sampleRate > 4294967295.0 || info.bits <= 0)
     {
         error = AudioFileError::damaged;
         return nullptr;

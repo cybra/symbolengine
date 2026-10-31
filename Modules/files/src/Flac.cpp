@@ -57,9 +57,10 @@ public:
         }
 
         FLAC__stream_decoder_set_metadata_respond(decoder, FLAC__METADATA_TYPE_VORBIS_COMMENT);
-        if (FLAC__stream_decoder_init_stream(decoder, &read, &seek, &tell, &length, &endOfFile, &write, &metadata, &problem,
-                                             this) != FLAC__STREAM_DECODER_INIT_STATUS_OK ||
-            !FLAC__stream_decoder_process_until_end_of_metadata(decoder) || information.channels == 0)
+        if (FLAC__stream_decoder_init_stream(decoder, &read, &seek, &tell, &length, &endOfFile, &write, &metadata,
+                                             &problem, this) != FLAC__STREAM_DECODER_INIT_STATUS_OK ||
+            !FLAC__stream_decoder_process_until_end_of_metadata(decoder) || information.channels == 0 ||
+            !(information.sampleRate > 0.0))
         {
             error = stream.error ? stream.error : make_error_code(AudioFileError::damaged);
             return;
@@ -74,9 +75,9 @@ public:
             {
             }
             counting = false;
-            information.frames = counted;
             FLAC__stream_decoder_reset(decoder);
             FLAC__stream_decoder_process_until_end_of_metadata(decoder);
+            information.frames = counted;
         }
     }
 

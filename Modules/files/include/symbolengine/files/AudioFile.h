@@ -90,7 +90,7 @@ struct AudioFileSettings
 {
     std::string format = "WAV";    // "WAV", "AIFF", "FLAC", "Ogg Vorbis" or "Opus"
     double sampleRate = 48000.0;   // Opus takes any rate, and plays at 48 kHz
-    int channels = 2;              // 1 or more; FLAC up to 8, Opus up to 255
+    int channels = 2;              // 1 or more; FLAC and Opus up to 8, Ogg Vorbis up to 255
     int bits = 24;                 // whole numbers in 8, 16, 24 or 32 bits, FLAC in 16 or 24; floats in 32 or 64
     bool floatingPoint = false;    // floats are written as AIFF-C in an AIFF file; Ogg Vorbis and Opus ignore both
 
@@ -196,7 +196,8 @@ std::unique_ptr<AudioFileReader> openAudio(const std::filesystem::path& file, st
 std::vector<std::string> readableExtensions();
 
 /** Creates an audio file, replacing any file of that name, to write with the settings given. Throws as openAudio()
-    does, or, given a std::error_code, sets it and returns nullptr. */
+    does, or, given a std::error_code, sets it and returns nullptr, with any file of that name left as it was where the
+    settings are refused. */
 std::unique_ptr<AudioFileWriter> createAudio(const std::filesystem::path& file, const AudioFileSettings& settings);
 std::unique_ptr<AudioFileWriter> createAudio(const std::filesystem::path& file, const AudioFileSettings& settings,
                                              std::error_code& error);

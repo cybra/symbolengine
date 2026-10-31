@@ -2,6 +2,7 @@
 
 #include <miniz.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -100,24 +101,50 @@ std::string compress(std::string_view bytes)
     return file;
 }
 
-std::optional<std::string> decompress(std::string_view file)
+std::optional<std::string> decompress(std::string_view file, std::size_t limit)
 {
     const auto start = pastHeader(file);
 
     if (!start.has_value())
         return std::nullopt;
 
-    std::size_t size = 0;
-    auto* held = tinfl_decompress_mem_to_heap(file.data() + *start, file.size() - trailerSize - *start, &size, 0);
+    // The most it may hold: its stated length, which is modulo 2^32, wherever that can't have wrapped within the limit.
+    const auto stated = littleEndianAt(file, file.size() - 4);
+    const auto most = limit <= 0xFFFFFFFFu ? std::min<std::size_t>(limit, stated) : limit;
 
-    if (held == nullptr && littleEndianAt(file, file.size() - 4) != 0)
-        return std::nullopt;
+    const auto compressed = file.substr(*start, file.size() - trailerSize - *start);
+    const auto* in = reinterpret_cast<const unsigned char*>(compressed.data());
 
-    std::string bytes(static_cast<const char*>(held), held != nullptr ? size : 0);
-    mz_free(held);
+    // Grown as it fills, with a byte's room past the most, so more than that shows as more to come.
+    constexpr std::size_t first = 64 * 1024;
+    std::string bytes(std::min(first, most) + 1, '\0');
+    std::size_t taken = 0, made = 0;
+    tinfl_decompressor inflater;
+    tinfl_init(&inflater);
 
-    if (checksumOf(bytes) != littleEndianAt(file, file.size() - trailerSize) ||
-        static_cast<std::uint32_t>(bytes.size()) != littleEndianAt(file, file.size() - 4))
+    for (;;)
+    {
+        auto inSize = compressed.size() - taken;
+        auto outSize = bytes.size() - made;
+        auto* out = reinterpret_cast<unsigned char*>(bytes.data());
+        const auto status = tinfl_decompress(&inflater, in + taken, &inSize, out, out + made, &outSize,
+                                             TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF);
+        taken += inSize;
+        made += outSize;
+
+        if (status == TINFL_STATUS_DONE)
+            break;
+        if (status != TINFL_STATUS_HAS_MORE_OUTPUT || bytes.size() > most)
+            return std::nullopt;
+
+        bytes.resize((bytes.size() > most / 2 ? most : bytes.size() * 2) + 1);
+    }
+
+    bytes.resize(made);
+
+    if (taken != compressed.size() || made > most ||
+        checksumOf(bytes) != littleEndianAt(file, file.size() - trailerSize) ||
+        static_cast<std::uint32_t>(made) != stated)
         return std::nullopt;
 
     return bytes;

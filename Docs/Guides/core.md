@@ -146,7 +146,7 @@ if (error)
     report(error.message());
 ```
 
-`SettingsFile` keeps named settings in a JSON file, written with `writeSafely`. A missing file starts empty. A file that can't be read as settings is moved aside, its name ending in `.unreadable`, and the settings start empty, so the next save doesn't destroy what the user had. Any thread may use it except the audio thread:
+`SettingsFile` keeps named settings in a JSON file, written with `writeSafely`. A missing file starts empty. A file that reads as something other than settings is moved aside, its name ending in `.unreadable`, and the settings start empty, so the next save doesn't destroy what the user had. A file the system wouldn't read may hold good settings: it is left as it is, the settings start empty, `readProblem()` says why, and saving refuses, so a passing failure costs this run's changes and never the file. Any thread may use it except the audio thread:
 
 ```cpp
 SettingsFile settings(paths::systemFolder(paths::Folder::appData) / "My App" / "settings.json");
@@ -172,7 +172,7 @@ hash.update(secondPiece);
 const auto same = Sha256::hex(hash.finish());
 ```
 
-`gzip` works on whole files held in memory. `decompress` checks the file's checksum and length, and gives nothing for anything else, or for one cut short or changed:
+`gzip` works on whole files held in memory. `decompress` checks the file's checksum and length, and gives nothing for anything else, for one cut short or changed, or for one holding more than its limit, 1 GB unless you give one, as a few megabytes can unpack to gigabytes:
 
 ```cpp
 const auto packed = gzip::compress(files::read("session.json"));

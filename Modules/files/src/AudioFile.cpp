@@ -253,14 +253,16 @@ std::unique_ptr<AudioFileWriter> createAudio(const std::filesystem::path& file, 
     const auto floatBits = settings.bits == 32 || settings.bits == 64;
     const auto rate = settings.sampleRate;
 
-    // What each format holds: WAV a rate in 32 bits, FLAC 16 or 24 bits in up to eight channels at a whole rate it
-    // can say in its frames' headers, and Ogg Vorbis and Opus up to 255 channels.
-    const auto fits = format == "WAV"          ? (settings.floatingPoint ? floatBits : wholeBits) && rate <= 4294967295.0
-                    : format == "AIFF"         ? (settings.floatingPoint ? floatBits : wholeBits)
-                    : format == "FLAC"         ? !settings.floatingPoint && (settings.bits == 16 || settings.bits == 24) &&
-                                                     settings.channels <= 8 && rate == std::floor(rate) && rate <= 655350.0
-                    : format == "Ogg Vorbis"   ? settings.channels <= 255 && rate <= 200000.0
-                    : format == "Opus"         ? settings.channels <= 255 && rate <= 384000.0
+    // What each format holds: WAV a whole rate in 32 bits and AIFF up to the same, FLAC 16 or 24 bits in up to eight
+    // channels at a whole rate its frames' headers can say, which its encoder holds to multiples of ten past 65535, Ogg
+    // Vorbis up to 255 channels and Opus up to eight.
+    const auto fits = format == "WAV"
+                          ? (settings.floatingPoint ? floatBits : wholeBits) && rate >= 1.0 && rate <= 4294967295.0
+                      : format == "AIFF" ? (settings.floatingPoint ? floatBits : wholeBits) && rate <= 4294967295.0
+                      : format == "FLAC" ? !settings.floatingPoint && (settings.bits == 16 || settings.bits == 24) &&
+                                               settings.channels <= 8 && rate == std::floor(rate) && rate <= 655350.0
+                      : format == "Ogg Vorbis" ? settings.channels <= 255 && rate <= 200000.0
+                      : format == "Opus"       ? settings.channels <= 8 && rate <= 384000.0
                                                : false;
 
     if (!fits || settings.channels < 1 || settings.channels > 65535 || !(rate > 0.0))
@@ -272,6 +274,8 @@ std::unique_ptr<AudioFileWriter> createAudio(const std::filesystem::path& file, 
     auto created = detail::RandomAccessFile::create(file, error);
     if (created == nullptr)
         return nullptr;
+    const auto replacing = created->replacing();
+    const auto written = created->written();
 
     std::unique_ptr<AudioFileWriter> writer;
     if (format == "WAV")
@@ -285,8 +289,9 @@ std::unique_ptr<AudioFileWriter> createAudio(const std::filesystem::path& file, 
     else
         writer = detail::createOpus(std::move(created), file, settings, error);
 
-    // A file that couldn't be started isn't left behind.
-    if (writer == nullptr)
+    // A file that couldn't be started isn't left behind, and one it would have replaced is left as it was until the
+    // first thing is written.
+    if (writer == nullptr && (!replacing || *written))
     {
         std::error_code ignored;
         std::filesystem::remove(file, ignored);

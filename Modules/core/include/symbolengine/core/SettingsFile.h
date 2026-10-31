@@ -13,8 +13,10 @@ namespace symbolengine
 /** Named settings kept in a JSON file, such as a program's preferences, saved with files::writeSafely so a crash
     never leaves them half written. Any thread except the audio thread may use it.
 
-    A missing file starts empty. A file that can't be read as settings is moved aside, its name ending in
-    ".unreadable", and the settings start empty, so the next save doesn't destroy what the user had. */
+    A missing file starts empty. A file that reads as something other than settings is moved aside, its name ending in
+    ".unreadable", and the settings start empty, so the next save doesn't destroy what the user had. A file the system
+    wouldn't read, or one that couldn't be moved aside, may hold good settings: it is left as it is, the settings start
+    empty, and saving refuses (readProblem()), so a passing failure costs this run's changes and never the file. */
 class SettingsFile
 {
 public:
@@ -40,6 +42,9 @@ public:
     /** All the settings. */
     Object all() const;
 
+    /** Why the file there couldn't be read or moved aside, so nothing is saved over it; nothing for any other. */
+    std::error_code readProblem() const;
+
     /** Whether anything has changed since the file was read or last saved. */
     bool hasChanges() const;
 
@@ -52,6 +57,7 @@ private:
     mutable std::mutex lock;
     Object settings;
     bool changed = false;
+    std::error_code unread;
 
     void saveLocked(std::error_code& error);
 };

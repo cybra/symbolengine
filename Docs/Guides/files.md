@@ -73,9 +73,9 @@ A whole-number format scales a sample back the way it was read and holds it with
 |---|---|---|
 | `"WAV"` | Whole numbers in 8, 16, 24 or 32 bits, floats in 32 or 64 | `channelMask`, `chunks`. Past 4 GB it becomes RF64 |
 | `"AIFF"` | The same; floats make it AIFF-C | `chunks`. It can't pass 4 GB, and fails with `AudioFileError::tooLong` |
-| `"FLAC"` | Whole numbers in 16 or 24 bits, up to 8 channels, at a whole-number rate | `compression` from 0 to 8, 5 unless you say; `tags` |
+| `"FLAC"` | Whole numbers in 16 or 24 bits, up to 8 channels, at a whole-number rate up to 65535, or a multiple of 10 up to 655350 | `compression` from 0 to 8, 5 unless you say; `tags` |
 | `"Ogg Vorbis"` | Up to 255 channels, at up to 200 kHz; ignores `bits` and `floatingPoint` | `quality` from -0.1 to 1, 0.4 unless you say, about 128 kbps in stereo; `tags` |
-| `"Opus"` | Up to 255 channels, at up to 384 kHz; ignores `bits` and `floatingPoint` | `bitRate` for all channels together, 128000 unless you say; `tags` |
+| `"Opus"` | Up to 8 channels, at up to 384 kHz; ignores `bits` and `floatingPoint` | `bitRate` for all channels together, 128000 unless you say; `tags` |
 
 An Opus file made from another rate plays at 48 kHz with its length in time kept, so 44100 frames written at 44.1 kHz read back as about 48000.
 

@@ -360,3 +360,74 @@ TEST_CASE("A WAV flushed past 4 GB becomes RF64 in place, and reads whole while 
     CHECK(left == std::vector<float>(samples.begin(), samples.begin() + 10));
     writer->finish();
 }
+
+namespace
+{
+void addLittle32(std::string& bytes, std::uint32_t value)
+{
+    for (int shift = 0; shift < 32; shift += 8)
+        bytes += static_cast<char>((value >> shift) & 0xFF);
+}
+
+void addLittle64(std::string& bytes, std::uint64_t value)
+{
+    for (int shift = 0; shift < 64; shift += 8)
+        bytes += static_cast<char>((value >> shift) & 0xFF);
+}
+
+// The start of an RF64 file whose ds64 chunk gives the chunk "abcd" the size, then that chunk.
+std::string rf64Saying(std::uint64_t size)
+{
+    std::string bytes = "RF64";
+    addLittle32(bytes, 0xFFFFFFFF);
+    bytes += "WAVEds64";
+    addLittle32(bytes, 40);
+    addLittle64(bytes, 0);
+    addLittle64(bytes, 0);
+    addLittle64(bytes, 0);
+    addLittle32(bytes, 1);
+    bytes += "abcd";
+    addLittle64(bytes, size);
+    bytes += "abcd";
+    addLittle32(bytes, 0xFFFFFFFF);
+    return bytes;
+}
+}
+
+TEST_CASE("A chunk saying more than the file holds ends the walk, whatever its size says")
+{
+    ScratchFolder folder;
+    const auto file = folder.path / "chunks.wav";
+
+    // Sizes that take the walk back onto the chunk itself, back to the file's start, past the end of 64 bits, and past
+    // the end of the file.
+    const auto header = rf64Saying(0).size();
+    for (const std::uint64_t size : {std::uint64_t{0} - 8, std::uint64_t{0} - header, std::uint64_t{0} - 1,
+                                     std::uint64_t{1} << 62, std::uint64_t{1} << 40})
+    {
+        CAPTURE(size);
+        files::writeSafely(file, rf64Saying(size));
+        std::error_code error;
+        CHECK(files::openAudio(file, error) == nullptr);
+        CHECK(error == AudioFileError::damaged);
+    }
+
+    // A file's samples before such a chunk still read.
+    auto bytes = rf64Saying(std::uint64_t{0} - 8);
+    bytes.resize(bytes.size() - 8);
+    bytes += "fmt ";
+    addLittle32(bytes, 16);
+    bytes += std::string("\x01\x00\x01\x00", 4);
+    addLittle32(bytes, 48000);
+    addLittle32(bytes, 96000);
+    bytes += std::string("\x02\x00\x10\x00", 4);
+    bytes += "data";
+    addLittle32(bytes, 8);
+    bytes += std::string("\x01\x00\x02\x00\x03\x00\x04\x00", 8);
+    bytes += "abcd";
+    addLittle32(bytes, 0xFFFFFFFF);
+    files::writeSafely(file, bytes);
+    const auto reader = files::openAudio(file);
+    CHECK(reader->info().frames == 4);
+    CHECK(reader->info().sampleRate == 48000);
+}

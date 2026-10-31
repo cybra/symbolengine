@@ -11,7 +11,8 @@
 
 // Opus through Xiph.Org's opusfile, which reads at 48 kHz as every Opus file plays, seeking to the sample and leaving out
 // the encoder's start-up samples, and libopusenc, which writes from any rate at the bit rate given. Up to two channels
-// are kept as they come, up to eight in Vorbis' order as Opus' channel mapping 1 has them, and more as they come.
+// are kept as they come and up to eight in Vorbis' order, as Opus' channel mapping 1 has them. Past eight there is no
+// mapping opusfile reads, so none is written.
 namespace symbolengine::detail
 {
 
@@ -22,12 +23,6 @@ std::pair<std::string, std::string> splitComment(const char* entry, int length)
     const std::string text(entry, static_cast<std::size_t>(std::max(length, 0)));
     const auto equals = text.find('=');
     return equals == std::string::npos ? std::pair{text, std::string()} : std::pair{text.substr(0, equals), text.substr(equals + 1)};
-}
-
-// Where a channel of WAV's order is in the file, for the channel mapping a file of so many channels is written with.
-int opusChannelFor(int channels, int channel)
-{
-    return channels <= 8 ? vorbisChannelFor(channels, channel) : channel;
 }
 
 int readCallback(void* source, unsigned char* bytes, int count)
@@ -107,43 +102,39 @@ private:
                 error = stream.error ? stream.error : make_error_code(AudioFileError::damaged);
                 return 0;
             }
+            decodedFrames = decodedAt = 0;
             for (auto skip = from - start; skip > 0;)
             {
-                decoded.resize(std::min<std::uint64_t>(skip, 5760) * static_cast<std::size_t>(information.channels));
-                const auto got = op_read_float(opus, decoded.data(), static_cast<int>(decoded.size()), nullptr);
-                if (got == OP_HOLE)
-                    continue;
-                if (got <= 0)
+                if (decodedAt == decodedFrames && !decodeMore())
                     break;
-                skip -= static_cast<std::uint64_t>(got);
+                const auto now = std::min<std::uint64_t>(skip, decodedFrames - decodedAt);
+                decodedAt += static_cast<std::size_t>(now);
+                skip -= now;
             }
             next = from;
         }
 
-        // opusfile gives up to 120 ms at a time, and keeps what doesn't fit the room given for the next read.
-        constexpr std::size_t most = 5760;
         const auto count = information.channels;
 
         std::size_t done = 0;
         while (done < frames)
         {
-            decoded.resize(std::min(most, frames - done) * static_cast<std::size_t>(count));
-            int link = 0;
-            const auto got = op_read_float(opus, decoded.data(), static_cast<int>(decoded.size()), &link);
-            if (got == OP_HOLE)
-                continue;
-            if (got <= 0)
+            if (decodedAt == decodedFrames && !decodeMore())
                 break;
 
             // A later link of a chained file may have other channels, of which those it shares are kept.
-            const auto have = op_channel_count(opus, link);
+            const auto now = std::min(frames - done, decodedFrames - decodedAt);
             for (int c = 0; c < count; ++c)
             {
-                const auto source = have == count ? opusChannelFor(count, c) : c;
-                for (std::size_t i = 0; i < static_cast<std::size_t>(got); ++i)
-                    channels[c][done + i] = source < have ? decoded[i * static_cast<std::size_t>(have) + static_cast<std::size_t>(source)] : 0.0f;
+                const auto source = decodedChannels == count ? vorbisChannelFor(count, c) : c;
+                for (std::size_t i = 0; i < now; ++i)
+                    channels[c][done + i] = source < decodedChannels
+                                                ? decoded[(decodedAt + i) * static_cast<std::size_t>(decodedChannels) +
+                                                          static_cast<std::size_t>(source)]
+                                                : 0.0f;
             }
-            done += static_cast<std::size_t>(got);
+            decodedAt += now;
+            done += now;
         }
 
         next = from + done;
@@ -152,10 +143,37 @@ private:
         return done;
     }
 
+    // Decodes what comes next into a buffer of its own, with room for the longest a packet can be in the most channels
+    // opusfile reads, as it gives as many frames as fit however many channels the link it reaches has.
+    bool decodeMore()
+    {
+        constexpr std::size_t longest = 5760, mostChannels = 8;
+        decoded.resize(longest * mostChannels);
+        decodedFrames = decodedAt = 0;
+
+        for (;;)
+        {
+            int link = 0;
+            const auto got = op_read_float(opus, decoded.data(), static_cast<int>(decoded.size()), &link);
+            if (got == OP_HOLE)
+                continue;
+            if (got <= 0)
+                return false;
+
+            decodedFrames = static_cast<std::size_t>(got);
+            decodedChannels = op_channel_count(opus, link);
+            return true;
+        }
+    }
+
     std::unique_ptr<RandomAccessFile> file;
     FileStream stream;
     OggOpusFile* opus = nullptr;
+
+    // What was decoded and hasn't been read yet, in the channels of the link it came from.
     std::vector<float> decoded;
+    std::size_t decodedFrames = 0, decodedAt = 0;
+    int decodedChannels = 0;
 
     // Half a second, after which a stretch reads exactly as it does when the file is read through.
     static constexpr std::uint64_t settle = 24000;
@@ -196,7 +214,7 @@ public:
             ope_comments_add(comments, name.c_str(), value.c_str());
 
         const OpusEncCallbacks callbacks{&writeCallback, &closeCallback};
-        const auto family = written.channels <= 2 ? 0 : written.channels <= 8 ? 1 : 255;
+        const auto family = written.channels <= 2 ? 0 : 1;
         int failure = 0;
         encoder = ope_encoder_create_callbacks(&callbacks, &stream, comments, static_cast<opus_int32>(written.sampleRate),
                                                written.channels, family, &failure);
@@ -224,7 +242,7 @@ private:
             interleaved.resize(now * stride);
             for (int c = 0; c < written.channels; ++c)
             {
-                const auto at = static_cast<std::size_t>(opusChannelFor(written.channels, c));
+                const auto at = static_cast<std::size_t>(vorbisChannelFor(written.channels, c));
                 for (std::size_t i = 0; i < now; ++i)
                     interleaved[i * stride + at] = channels[c][done + i];
             }

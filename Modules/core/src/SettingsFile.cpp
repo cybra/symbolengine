@@ -14,19 +14,21 @@ SettingsFile::SettingsFile(std::filesystem::path file) : path(std::move(file))
     if (error == std::errc::no_such_file_or_directory)
         return;
 
-    if (!error)
+    if (error)
     {
-        if (auto parsed = json::tryParse(text); parsed && parsed->isObject())
-        {
-            settings = std::move(parsed->asObject());
-            return;
-        }
+        unread = error;
+        return;
     }
 
-    std::error_code ignored;
+    if (auto parsed = json::tryParse(text); parsed && parsed->isObject())
+    {
+        settings = std::move(parsed->asObject());
+        return;
+    }
+
     auto aside = path;
     aside += ".unreadable";
-    std::filesystem::rename(path, aside, ignored);
+    std::filesystem::rename(path, aside, unread);
 }
 
 SettingsFile::~SettingsFile()
@@ -72,6 +74,11 @@ Object SettingsFile::all() const
     return settings;
 }
 
+std::error_code SettingsFile::readProblem() const
+{
+    return unread;
+}
+
 bool SettingsFile::hasChanges() const
 {
     std::scoped_lock hold(lock);
@@ -97,6 +104,12 @@ void SettingsFile::saveLocked(std::error_code& error)
     error.clear();
     if (!changed)
         return;
+
+    if (unread)
+    {
+        error = unread;
+        return;
+    }
 
     files::writeSafely(path, json::write(settings, json::Layout::pretty) + "\n", error);
     if (!error)

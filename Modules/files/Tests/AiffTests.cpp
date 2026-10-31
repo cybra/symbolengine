@@ -6,7 +6,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <limits>
 #include <string>
+#include <utility>
+#include <vector>
 
 using namespace symbolengine;
 using pattern::reference;
@@ -165,4 +168,41 @@ TEST_CASE("An AIFF flushed has the sizes and length of the samples so far in its
     CHECK(big32(bytes, 22) == 7);
     CHECK(big32(bytes, 42) == 8 + 21);
     CHECK(pattern::readAll(*files::openAudio(file))[0] == std::vector<float>(samples, samples + 7));
+}
+
+TEST_CASE("An AIFF whose rate is past anything real is damaged, and such a rate can't be written")
+{
+    ScratchFolder folder;
+    const auto file = folder.path / "written.aiff";
+    {
+        auto writer = files::createAudio(file, {"AIFF", 48000, 1, 16, false, 0, {}});
+        const std::vector<float> samples(100, 0.5f);
+        const float* channels[] = {samples.data()};
+        writer->write(channels, samples.size());
+    }
+    const auto written = files::read(file);
+    const auto common = written.find("COMM");
+    REQUIRE(common != std::string::npos);
+
+    // COMM's rate comes after its id and size, 2 bytes of channels, 4 of frames and 2 of bits. Its exponent's two bytes
+    // are for infinity as a double, then 2 to the power of 996.
+    for (const auto& [high, low] : {std::pair{0x7F, 0xFE}, std::pair{0x43, 0xE3}})
+    {
+        CAPTURE(high, low);
+        auto bytes = written;
+        bytes[common + 16] = static_cast<char>(high);
+        bytes[common + 17] = static_cast<char>(low);
+        files::writeSafely(file, bytes);
+        std::error_code error;
+        CHECK(files::openAudio(file, error) == nullptr);
+        CHECK(error == AudioFileError::damaged);
+    }
+
+    std::error_code error;
+    const auto infinite = std::numeric_limits<double>::infinity();
+    for (const double rate : {infinite, 1.0e300})
+    {
+        CHECK(files::createAudio(folder.path / "refused.aiff", {"AIFF", rate, 1, 16, false, 0, {}}, error) == nullptr);
+        CHECK(error == AudioFileError::badSettings);
+    }
 }

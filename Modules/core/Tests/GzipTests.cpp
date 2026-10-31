@@ -2,6 +2,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <random>
 #include <string>
 
@@ -60,4 +61,54 @@ TEST_CASE("A file changed or cut short isn't read as gzip")
 
     CHECK_FALSE(gzip::decompress(file.substr(0, file.size() - 1)).has_value());
     CHECK_FALSE(gzip::decompress(file.substr(0, file.size() / 2)).has_value());
+}
+
+namespace
+{
+std::string header()
+{
+    return std::string("\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff", 10);
+}
+}
+
+TEST_CASE("Data that isn't deflate's is refused, whatever its last eight bytes say")
+{
+    // A block of a type that doesn't exist, followed by the checksum and length of nothing, as a tail a crash zeroed
+    // leaves it.
+    CHECK_FALSE(gzip::decompress(header() + std::string("\xff\xff\xff\xff", 4) + std::string(8, '\0')).has_value());
+
+    // Nothing where the data should be.
+    CHECK_FALSE(gzip::decompress(header() + std::string(8, '\0')).has_value());
+
+    // The real thing with its tail zeroed, and cut short.
+    auto file = gzip::compress("some bytes worth keeping");
+    auto zeroed = file;
+    std::fill(zeroed.end() - 8, zeroed.end(), '\0');
+    CHECK_FALSE(gzip::decompress(zeroed).has_value());
+    const auto cut = header() + file.substr(10, 4) + file.substr(file.size() - 8);
+    CHECK_FALSE(gzip::decompress(cut).has_value());
+}
+
+TEST_CASE("Bytes between the data's end and the checksum are refused")
+{
+    auto file = gzip::compress("some bytes worth keeping");
+    file.insert(file.size() - 8, "extra");
+    CHECK_FALSE(gzip::decompress(file).has_value());
+}
+
+TEST_CASE("Data unpacks no further than a limit, or than the length it states")
+{
+    const std::string bytes(1000000, 'x');
+    const auto file = gzip::compress(bytes);
+
+    CHECK(gzip::decompress(file, bytes.size()) == bytes);
+    CHECK_FALSE(gzip::decompress(file, bytes.size() - 1).has_value());
+    CHECK_FALSE(gzip::decompress(file, 1000).has_value());
+
+    // Stating less than it holds.
+    auto understated = file;
+    understated[understated.size() - 3] = '\0';
+    understated[understated.size() - 2] = '\0';
+    understated[understated.size() - 1] = '\0';
+    CHECK_FALSE(gzip::decompress(understated).has_value());
 }

@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 
 using namespace symbolengine;
@@ -229,4 +230,178 @@ TEST_CASE("Settings FLAC can't hold are refused, and an Ogg FLAC file is said to
     files::writeSafely(folder.path / "ogg.flac", page);
     CHECK(files::openAudio(folder.path / "ogg.flac", error) == nullptr);
     CHECK(error == AudioFileError::unsupported);
+}
+
+TEST_CASE("Opus files joined into one read in stretches of any size, never past the room given and never short")
+{
+    ScratchFolder folder;
+    constexpr std::uint64_t each = 24000;
+    const auto made = [&](const char* name, int channels) {
+        const auto file = folder.path / name;
+        auto writer = files::createAudio(file, {"Opus", 48000, channels, 0, false, 0, {}});
+        writeAll(*writer, tones(channels, 48000, each));
+        writer->finish();
+        return files::read(file);
+    };
+    const auto stereo = made("stereo.opus", 2);
+    const auto mono = made("mono.opus", 1);
+    files::writeSafely(folder.path / "stereo then mono.opus", stereo + mono);
+    files::writeSafely(folder.path / "mono then stereo.opus", mono + stereo);
+
+    for (const char* name : {"stereo then mono.opus", "mono then stereo.opus"})
+        for (const std::size_t piece : {std::size_t{1}, std::size_t{480}, std::size_t{1000}, std::size_t{7000}})
+        {
+            CAPTURE(name, piece);
+            const auto reader = files::openAudio(folder.path / name);
+            const auto channels = static_cast<std::size_t>(reader->info().channels);
+            const auto frames = reader->info().frames;
+            REQUIRE(frames == 2 * each);
+
+            // Each buffer has room past what a read asks for, which must stay as it was.
+            constexpr float untouched = 1234.5f;
+            constexpr std::size_t past = 12000;
+            std::vector<std::vector<float>> room(channels, std::vector<float>(piece + past, untouched));
+            std::vector<float*> pointers;
+            for (auto& channel : room)
+                pointers.push_back(channel.data());
+
+            for (std::uint64_t at = 0; at < frames;)
+            {
+                const auto got = reader->read(at, pointers.data(), piece);
+                REQUIRE(got == std::min<std::uint64_t>(piece, frames - at));
+                for (const auto& channel : room)
+                    REQUIRE(std::all_of(channel.begin() + static_cast<std::ptrdiff_t>(piece), channel.end(),
+                                        [](float sample) { return sample == untouched; }));
+                at += got;
+            }
+        }
+
+    // What is read is each link's own audio, and a channel a link hasn't is silent.
+    const auto reader = files::openAudio(folder.path / "stereo then mono.opus");
+    const auto all = pattern::readAll(*reader, 999);
+    const auto first = [&](std::size_t c) {
+        return std::vector<float>(all[c].begin(), all[c].begin() + static_cast<std::ptrdiff_t>(each));
+    };
+    const auto second = [&](std::size_t c) {
+        return std::vector<float>(all[c].begin() + static_cast<std::ptrdiff_t>(each), all[c].end());
+    };
+    CHECK(pattern::toneMatch(first(0), 0, 48000) > 20.0);
+    CHECK(pattern::toneMatch(first(1), 1, 48000) > 20.0);
+    CHECK(pattern::toneMatch(second(0), 0, 48000) > 20.0);
+    const auto right = second(1);
+    CHECK(std::all_of(right.begin(), right.end(), [](float sample) { return sample == 0.0f; }));
+
+    // A stretch read on its own, in the second link and across the join, matches the same one read from the start.
+    for (const std::uint64_t from : {each + 6000, each - 2400})
+    {
+        CAPTURE(from);
+        const auto part = pattern::stretch(*reader, from, 4800);
+        for (std::size_t c = 0; c < all.size(); ++c)
+        {
+            float most = 0.0f;
+            for (std::size_t i = 0; i < part[c].size(); ++i)
+                most = std::max(most, std::abs(part[c][i] - all[c][static_cast<std::size_t>(from) + i]));
+            CHECK(most < 1.0e-5f);
+        }
+    }
+}
+
+TEST_CASE("Every number of channels a format is said to take reads back")
+{
+    ScratchFolder folder;
+    struct Kind
+    {
+        const char* format;
+        const char* name;
+        int channels;
+    };
+    for (const Kind& kind : {Kind{"Opus", "most.opus", 8}, Kind{"Ogg Vorbis", "nine.ogg", 9},
+                             Kind{"Ogg Vorbis", "most.ogg", 255}, Kind{"FLAC", "most.flac", 8}})
+    {
+        CAPTURE(kind.format, kind.channels);
+        const auto file = folder.path / kind.name;
+        AudioFileSettings settings{kind.format, 48000, kind.channels, 24, false, 0, {}};
+        {
+            auto writer = files::createAudio(file, settings);
+            writeAll(*writer, tones(kind.channels, 48000, 4800));
+            writer->finish();
+        }
+        std::error_code error;
+        const auto reader = files::openAudio(file, error);
+        REQUIRE(reader != nullptr);
+        CHECK(reader->info().channels == kind.channels);
+        CHECK(reader->info().frames == 4800);
+    }
+
+    std::error_code error;
+    CHECK(files::createAudio(folder.path / "nine.opus", {"Opus", 48000, 9, 0, false, 0, {}}, error) == nullptr);
+    CHECK(error == AudioFileError::badSettings);
+}
+
+TEST_CASE("A FLAC that doesn't say its length, as one piped or stopped short, is measured and reads whole")
+{
+    ScratchFolder folder;
+    const auto file = folder.path / "written.flac";
+    const auto samples = wholePattern(2, 24, 30000);
+    {
+        auto writer = files::createAudio(file, {"FLAC", 48000, 2, 24, false, 0, {}, {{"TITLE", "Écoute"}}});
+        writeAll(*writer, samples, 777);
+    }
+
+    // Past "fLaC", the block's header and the first ten bytes of STREAMINFO: 20 bits of rate, 3 of channels, 5 of bits
+    // and 36 of length.
+    auto bytes = files::read(file);
+    REQUIRE(bytes.size() > 26);
+    bytes[21] = static_cast<char>(static_cast<unsigned char>(bytes[21]) & 0xF0);
+    bytes[22] = bytes[23] = bytes[24] = bytes[25] = 0;
+
+    const auto unsaid = folder.path / "unsaid.flac";
+    files::writeSafely(unsaid, bytes);
+    {
+        auto reader = files::openAudio(unsaid);
+        CHECK(reader->info().sampleRate == 48000);
+        CHECK(reader->info().channels == 2);
+        CHECK(reader->info().tags.size() == 1);
+        REQUIRE(reader->info().frames == 30000);
+        CHECK(pattern::readAll(*reader, 4321) == samples);
+
+        for (const std::uint64_t from : {29000u, 5u, 17000u, 4096u, 0u, 29999u})
+        {
+            CAPTURE(from);
+            const auto part = pattern::stretch(*reader, from, 900);
+            for (std::size_t c = 0; c < part.size(); ++c)
+                CHECK(
+                    std::equal(part[c].begin(), part[c].end(), samples[c].begin() + static_cast<std::ptrdiff_t>(from)));
+        }
+    }
+
+    // Stopped partway, as a crash leaves one: its whole frames, as far as they go.
+    const auto cut = folder.path / "cut.flac";
+    files::writeSafely(cut, bytes.substr(0, bytes.size() * 2 / 3));
+    auto reader = files::openAudio(cut);
+    const auto frames = reader->info().frames;
+    CHECK(frames > 10000);
+    CHECK(frames < 30000);
+    const auto part = pattern::readAll(*reader, 999);
+    REQUIRE(part.front().size() == frames);
+    for (std::size_t c = 0; c < part.size(); ++c)
+        CHECK(std::equal(part[c].begin(), part[c].end(), samples[c].begin()));
+}
+
+TEST_CASE("A FLAC whose rate is nothing is damaged")
+{
+    ScratchFolder folder;
+    const auto file = folder.path / "written.flac";
+    {
+        auto writer = files::createAudio(file, {"FLAC", 48000, 2, 16, false, 0, {}});
+        writeAll(*writer, wholePattern(2, 16, 4096));
+    }
+    auto bytes = files::read(file);
+    bytes[18] = bytes[19] = 0;
+    bytes[20] = static_cast<char>(static_cast<unsigned char>(bytes[20]) & 0x0F);
+    files::writeSafely(file, bytes);
+
+    std::error_code error;
+    CHECK(files::openAudio(file, error) == nullptr);
+    CHECK(error == AudioFileError::damaged);
 }

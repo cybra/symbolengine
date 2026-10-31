@@ -93,6 +93,52 @@ TEST_CASE("A settings file that can't be read is kept aside, not overwritten")
     }
 }
 
+TEST_CASE("A settings file that exists but couldn't be read is left as it was, and isn't saved over")
+{
+    ScratchFolder scratch;
+    const auto file = scratch.path / "settings.json";
+
+    // A folder by that name can be read nowhere, on any system.
+    std::filesystem::create_directories(file);
+    {
+        SettingsFile settings(file);
+        CHECK(settings.all().empty());
+        CHECK(settings.readProblem());
+        settings.set("fresh", true);
+        std::error_code error;
+        settings.save(error);
+        CHECK(error);
+        CHECK_THROWS_AS(settings.save(), std::filesystem::filesystem_error);
+    }
+    CHECK(std::filesystem::is_directory(file));
+    CHECK_FALSE(std::filesystem::exists(scratch.path / "settings.json.unreadable"));
+    std::filesystem::remove(file);
+
+#if !defined(_WIN32)
+    // Good settings the program may not read for the moment, as when it can't open another file.
+    files::writeSafely(file, "{\"rate\": 48000}");
+    std::filesystem::permissions(file, std::filesystem::perms::none);
+    {
+        SettingsFile settings(file);
+        CHECK(settings.get("rate").isNull());
+        CHECK(settings.readProblem());
+        settings.set("rate", 44100);
+    }
+    CHECK_FALSE(std::filesystem::exists(scratch.path / "settings.json.unreadable"));
+    std::filesystem::permissions(file, std::filesystem::perms::owner_all);
+    SettingsFile again(file);
+    CHECK_FALSE(again.readProblem());
+    CHECK(again.get("rate").intOr(0) == 48000);
+#endif
+
+    // Neither a missing file nor one moved aside is a problem to the program.
+    SettingsFile missing(scratch.path / "missing.json");
+    CHECK_FALSE(missing.readProblem());
+    files::writeSafely(scratch.path / "bad.json", "[1, 2, 3]");
+    SettingsFile bad(scratch.path / "bad.json");
+    CHECK_FALSE(bad.readProblem());
+}
+
 TEST_CASE("Settings can be changed from several threads at once")
 {
     ScratchFolder scratch;

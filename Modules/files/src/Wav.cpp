@@ -395,6 +395,10 @@ std::unique_ptr<AudioFileReader> openWav(std::unique_ptr<RandomAccessFile> file,
             info.chunks.push_back(std::move(chunk));
         }
 
+        // A chunk saying more than the file holds is its last, and a ds64 chunk can say any size at all.
+        if (size > fileSize - body)
+            break;
+
         // A chunk of odd length is followed by a pad byte, which some writers leave out.
         auto next = body + size + (size % 2);
         if (size % 2 != 0 && next + 4 <= fileSize)

@@ -236,3 +236,57 @@ TEST_CASE("A finished writer writes nothing more")
     CHECK(error);
     CHECK(files::openAudio(folder.path / "done.wav")->info().frames == 1);
 }
+
+TEST_CASE("Settings refused, by the format or by its encoder, leave a file of that name as it was")
+{
+    ScratchFolder folder;
+    const auto file = folder.path / "take";
+    const std::string kept = "what the user had";
+
+    // WAV's bits and rate are refused from what the format holds; FLAC's rate past 65535 unless a multiple of ten, and
+    // less than a hertz for Opus and Ogg Vorbis, by their encoders, which are given the file first.
+    for (const AudioFileSettings& settings :
+         {AudioFileSettings{"WAV", 48000, 2, 12, false, 0, {}}, AudioFileSettings{"WAV", 0.2, 2, 16, false, 0, {}},
+          AudioFileSettings{"FLAC", 88201, 2, 24, false, 0, {}}, AudioFileSettings{"Opus", 0.5, 2, 0, false, 0, {}},
+          AudioFileSettings{"Ogg Vorbis", 0.5, 1, 0, false, 0, {}}})
+    {
+        CAPTURE(settings.format, settings.sampleRate);
+        files::writeSafely(file, kept);
+        std::error_code error;
+        CHECK(files::createAudio(file, settings, error) == nullptr);
+        CHECK(error == AudioFileError::badSettings);
+        CHECK(files::read(file) == kept);
+
+        // And none is left where there was none.
+        std::error_code ignored;
+        CHECK(files::createAudio(folder.path / "new", settings, ignored) == nullptr);
+        CHECK_FALSE(std::filesystem::exists(folder.path / "new"));
+    }
+}
+
+TEST_CASE("A file written over a longer one holds only what was written")
+{
+    ScratchFolder folder;
+    const auto file = folder.path / "take";
+    const std::vector<float> samples(4800, 0.25f);
+    const float* channels[] = {samples.data()};
+
+    for (const AudioFileSettings& settings :
+         {AudioFileSettings{"WAV", 48000, 1, 16, false, 0, {}}, AudioFileSettings{"AIFF", 48000, 1, 16, false, 0, {}},
+          AudioFileSettings{"FLAC", 48000, 1, 16, false, 0, {}},
+          AudioFileSettings{"Ogg Vorbis", 48000, 1, 0, false, 0, {}},
+          AudioFileSettings{"Opus", 48000, 1, 0, false, 0, {}}})
+    {
+        CAPTURE(settings.format);
+        const std::string longer(1000000, 'x');
+        files::writeSafely(file, longer);
+        {
+            auto writer = files::createAudio(file, settings);
+            REQUIRE(writer != nullptr);
+            writer->write(channels, samples.size());
+            writer->finish();
+        }
+        CHECK(std::filesystem::file_size(file) < longer.size());
+        CHECK(files::openAudio(file)->info().frames == samples.size());
+    }
+}
