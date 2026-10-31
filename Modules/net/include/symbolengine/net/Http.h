@@ -32,7 +32,7 @@ struct Answer
     int status = 0;
 
     /** Why no answer came, or why it stopped short, in the system's words; empty for one that came whole or that the
-        caller stopped. */
+        caller stopped. An answer that stopped short may have had pieces held back that never reached the function. */
     std::string problem{};
 };
 

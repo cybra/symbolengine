@@ -81,7 +81,6 @@ Answer get(const Request& request, const std::function<bool(int status, std::str
                 forHTTPHeaderField:[NSString stringWithUTF8String:name.c_str()]];
 
         NSURLSessionConfiguration* configuration = [NSURLSessionConfiguration ephemeralSessionConfiguration];
-        configuration.timeoutIntervalForRequest = seconds;
 
         SymbolEngineHttpFetch* fetch = [[SymbolEngineHttpFetch alloc] init];
         fetch->received = &received;
