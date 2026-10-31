@@ -178,6 +178,12 @@ TEST_CASE("Silence played for two seconds through the output named comes at the 
     REQUIRE(output != nullptr);
 
     Recording recording;
+    std::atomic<std::int64_t> firstTime{-1}, lastTime{-1};
+    recording.onProcess = [&](const AudioBlock& block) {
+        if (firstTime.load() < 0)
+            firstTime = block.outputTime;
+        lastTime = block.outputTime;
+    };
     AudioError error;
     AudioStreamRequest request;
     request.outputChannels = {0, 1};
@@ -190,6 +196,10 @@ TEST_CASE("Silence played for two seconds through the output named comes at the 
     std::this_thread::sleep_for(2s);
     const auto info = stream->info();
     REQUIRE(!stream->stop());
+
+    // Its blocks say when they will be heard, on the steady clock, moving with what plays.
+    CHECK(firstTime > 0);
+    CHECK(std::abs(static_cast<double>(lastTime - firstTime) / 1e9 - 2.0) < 0.3);
 
     INFO(output->name << ": rate " << info.sampleRate << ", block " << info.maxBlock << ", " << recording.frames
                       << " frames, priority " << info.priority);

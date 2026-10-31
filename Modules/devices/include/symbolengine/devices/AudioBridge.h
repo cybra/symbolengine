@@ -23,7 +23,8 @@ public:
     {
         int channels = 2;
 
-        /** How far behind the input the output plays, which the buffer is held to. */
+        /** How far behind the input the output plays, which the buffer is held to, at least what an input block and
+            an output block need held at once. */
         std::chrono::milliseconds delay{30};
 
         /** The most the buffer holds; an output that stops taking for longer has the buffer start again from the
@@ -51,7 +52,7 @@ public:
         /** How far behind the input the output plays now. */
         double delaySeconds = 0.0;
 
-        /** The delay is within a millisecond of where it was set. */
+        /** The delay is within a millisecond of where it is held. */
         bool settled = false;
 
         /** Times the buffer ran dry or over and started again from the delay. */

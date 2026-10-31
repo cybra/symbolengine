@@ -65,6 +65,19 @@ namespace symbolengine
 
 namespace
 {
+// The steady clock every time a stream gives is on, the one Windows stamps captured packets by.
+std::int64_t steadyNanoseconds() noexcept
+{
+    static const auto frequency = [] {
+        LARGE_INTEGER f;
+        QueryPerformanceFrequency(&f);
+        return f.QuadPart;
+    }();
+    LARGE_INTEGER counter;
+    QueryPerformanceCounter(&counter);
+    return static_cast<std::int64_t>(static_cast<double>(counter.QuadPart) * 1e9 / static_cast<double>(frequency));
+}
+
 template <typename T>
 class Com
 {
@@ -647,6 +660,10 @@ private:
         const auto registered = AvSetMmThreadCharacteristicsW(L"Pro Audio", &index);
         scheduled = registered != nullptr ? 1 : 0;
 
+        if (!capture)
+            if (REFERENCE_TIME latency = 0; SUCCEEDED(audioClient->GetStreamLatency(&latency)) && latency > 0)
+                outputLatencyNanoseconds = latency * 100;
+
         const HANDLE waits[] = {quit, wake};
         bool lostDevice = false;
         while (true)
@@ -742,7 +759,12 @@ private:
         cycle.outputs = pointers.data();
         cycle.outputChannels = static_cast<int>(buffers.size());
         cycle.frames = frames;
-        cycle.outputTime = -1;
+
+        // When its first frame will be heard: after what the device still holds of those before it and its own latency,
+        // on the clock the input's times are on, so a program can line the two up.
+        const auto ahead = static_cast<double>(request.exclusive ? bufferFrames : padding);
+        cycle.outputTime = steadyNanoseconds() + outputLatencyNanoseconds +
+                           static_cast<std::int64_t>(ahead * 1e9 / static_cast<double>(format.Format.nSamplesPerSec));
         if (auto* to = client.load())
             to->cycle(cycle);
 
@@ -772,6 +794,7 @@ private:
     int channels = 0;
     bool raw = false;
     UINT32 bufferFrames = 0, periodFrames = 0;
+    std::int64_t outputLatencyNanoseconds = 0;
     HANDLE wake = nullptr, quit = nullptr;
     std::thread thread;
     bool running = false;
@@ -880,17 +903,7 @@ public:
 
     std::string name() const override { return "Windows Audio"; }
 
-    std::int64_t now() const noexcept override
-    {
-        static const auto frequency = [] {
-            LARGE_INTEGER f;
-            QueryPerformanceFrequency(&f);
-            return f.QuadPart;
-        }();
-        LARGE_INTEGER counter;
-        QueryPerformanceCounter(&counter);
-        return static_cast<std::int64_t>(static_cast<double>(counter.QuadPart) * 1e9 / static_cast<double>(frequency));
-    }
+    std::int64_t now() const noexcept override { return steadyNanoseconds(); }
 
     std::vector<std::string> deviceIds() override
     {

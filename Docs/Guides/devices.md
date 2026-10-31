@@ -253,7 +253,7 @@ input->start();
 output->start();
 ```
 
-`bridge.state()` gives the measured `drift`, the `delaySeconds` now, whether it has `settled`, and any `underruns` and `overruns`. Write a recording from the input's own stream, never through the bridge, so its samples stay the interface's own.
+The delay is held to at least what an input block and an output block need at once, whatever you set. `bridge.state()` gives the measured `drift`, the `delaySeconds` now, whether it has `settled`, and any `underruns` and `overruns`. Write a recording from the input's own stream, never through the bridge, so its samples stay the interface's own.
 
 ## Following the default, and resting when idle
 
