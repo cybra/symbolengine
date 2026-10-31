@@ -229,6 +229,8 @@ private:
     void finishFile(std::error_code& error) override
     {
         writeSizes(error);
+        if (!error)
+            file->sync(error);
 
         std::error_code closing;
         file->close(closing);
@@ -257,7 +259,7 @@ struct Format
 // The sample format a fmt chunk names, or the reason it can't be read.
 std::optional<Encoding> encodingFor(const Format& format, std::error_code& error)
 {
-    if (format.channels <= 0 || !(format.rate > 0.0) || format.bits <= 0)
+    if (format.channels <= 0 || format.channels > mostChannels || !(format.rate > 0.0) || format.bits <= 0)
     {
         error = AudioFileError::damaged;
         return std::nullopt;
@@ -309,6 +311,7 @@ std::unique_ptr<AudioFileReader> openWav(std::unique_ptr<RandomAccessFile> file,
     std::optional<std::uint64_t> dataStart, dataSize;
     std::uint64_t ds64Data = 0;
     std::map<std::string, std::uint64_t> ds64Sizes;
+    std::uint64_t kept = 0;
 
     std::uint64_t position = 12;
     while (position + 8 <= fileSize)
@@ -386,8 +389,10 @@ std::unique_ptr<AudioFileReader> openWav(std::unique_ptr<RandomAccessFile> file,
                 break;
             size = *dataSize;
         }
-        else if (!isLayoutChunk(id) && size <= biggestChunkKept && body + size <= fileSize)
+        else if (!isLayoutChunk(id) && size <= biggestChunkKept && body + size <= fileSize &&
+                 kept + size <= mostKeptInAll)
         {
+            kept += size;
             AudioChunk chunk{id, std::string(static_cast<std::size_t>(size), '\0')};
             file->readAt(body, chunk.bytes.data(), chunk.bytes.size(), error);
             if (error)
@@ -427,7 +432,7 @@ std::unique_ptr<AudioFileReader> openWav(std::unique_ptr<RandomAccessFile> file,
 
     info.sampleRate = format->rate;
     info.channels = format->channels;
-    info.bits = format->bits;
+    info.bits = bytesPerSample(*encoding) * 8;
     info.floatingPoint = format->tag == floatTag;
     info.channelMask = format->mask;
     info.frames = *dataSize / static_cast<std::uint64_t>(format->blockAlign);

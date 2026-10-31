@@ -18,7 +18,7 @@ inline std::uint32_t usualMask(int channels) noexcept
         case 4: return 0x33;
         case 5: return 0x37;
         case 6: return 0x3F;
-        case 7: return 0x13F;
+        case 7: return 0x70F;
         case 8: return 0x63F;
         default: return 0;
     }

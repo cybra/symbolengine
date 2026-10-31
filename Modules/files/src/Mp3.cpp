@@ -144,6 +144,7 @@ private:
         {
             if (mp3dec_ex_seek(&decoder, from * count) != 0)
             {
+                next = nowhere;
                 error = stream.error ? stream.error : make_error_code(AudioFileError::damaged);
                 return 0;
             }

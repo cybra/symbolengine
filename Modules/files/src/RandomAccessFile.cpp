@@ -130,6 +130,11 @@ void RandomAccessFile::writeAt(std::uint64_t at, const void* bytes, std::size_t 
             error = lastError();
             return;
         }
+        if (put == 0)
+        {
+            error = std::error_code(ERROR_WRITE_FAULT, std::system_category());
+            return;
+        }
         done += put;
     }
 }
@@ -271,12 +276,24 @@ void RandomAccessFile::writeAt(std::uint64_t at, const void* bytes, std::size_t 
             error = lastError();
             return;
         }
+        if (put == 0)
+        {
+            error = std::make_error_code(std::errc::io_error);
+            return;
+        }
         done += static_cast<std::size_t>(put);
     }
 }
 
 void RandomAccessFile::sync(std::error_code& error)
 {
+    #if defined(__APPLE__)
+    // fsync on a Mac only hands the data to the drive, which may still hold it in its cache when the power goes. Not
+    // every volume can do more, so a refusal falls back on it.
+    if (::fcntl(handle->file, F_FULLFSYNC) == 0)
+        return;
+    #endif
+
     int result = 0;
     do
         result = fsync(handle->file);

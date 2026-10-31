@@ -256,6 +256,8 @@ private:
     void finishFile(std::error_code& error) override
     {
         writeSizes(error);
+        if (!error)
+            file->sync(error);
 
         std::error_code closing;
         file->close(closing);
@@ -293,6 +295,7 @@ std::unique_ptr<AudioFileReader> openAiff(std::unique_ptr<RandomAccessFile> file
     std::uint64_t commonFrames = 0;
     std::optional<std::uint64_t> dataStart, dataSize;
 
+    std::uint64_t kept = 0;
     std::uint64_t position = 12;
     while (position + 8 <= fileSize)
     {
@@ -323,8 +326,8 @@ std::unique_ptr<AudioFileReader> openAiff(std::unique_ptr<RandomAccessFile> file
             const auto type = compressed ? std::string(reinterpret_cast<const char*>(bytes + 18), 4) : std::string("NONE");
             encoding = encodingFor(type, info.bits);
             info.floatingPoint = encoding == Encoding::bigFloat32 || encoding == Encoding::bigFloat64;
-            if (info.floatingPoint)
-                info.bits = encoding == Encoding::bigFloat64 ? 64 : 32;
+            if (encoding.has_value())
+                info.bits = bytesPerSample(*encoding) * 8;
             haveCommon = true;
 
             if (!encoding.has_value())
@@ -353,8 +356,10 @@ std::unique_ptr<AudioFileReader> openAiff(std::unique_ptr<RandomAccessFile> file
             if (*dataStart + *dataSize >= fileSize)
                 break;
         }
-        else if (!isLayoutChunk(id) && size <= biggestChunkKept && body + size <= fileSize)
+        else if (!isLayoutChunk(id) && size <= biggestChunkKept && body + size <= fileSize &&
+                 kept + size <= mostKeptInAll)
         {
+            kept += size;
             AudioChunk chunk{id, std::string(static_cast<std::size_t>(size), '\0')};
             file->readAt(body, chunk.bytes.data(), chunk.bytes.size(), error);
             if (error)
@@ -362,14 +367,24 @@ std::unique_ptr<AudioFileReader> openAiff(std::unique_ptr<RandomAccessFile> file
             info.chunks.push_back(std::move(chunk));
         }
 
-        position = body + size + (size % 2);
+        // A chunk of odd length is followed by a pad byte, which some writers leave out.
+        auto next = body + size + (size % 2);
+        if (size % 2 != 0 && next + 4 <= fileSize)
+        {
+            unsigned char padded[4]{}, unpadded[4]{};
+            file->readAt(next, padded, 4, error);
+            file->readAt(next - 1, unpadded, 4, error);
+            if (!looksLikeId(padded) && looksLikeId(unpadded))
+                --next;
+        }
+        position = next;
     }
 
     if (error)
         return nullptr;
 
-    if (!haveCommon || !dataStart.has_value() || info.channels <= 0 || !(info.sampleRate > 0.0) ||
-        info.sampleRate > 4294967295.0 || info.bits <= 0)
+    if (!haveCommon || !dataStart.has_value() || info.channels <= 0 || info.channels > mostChannels ||
+        !(info.sampleRate > 0.0) || info.sampleRate > 4294967295.0 || info.bits <= 0)
     {
         error = AudioFileError::damaged;
         return nullptr;

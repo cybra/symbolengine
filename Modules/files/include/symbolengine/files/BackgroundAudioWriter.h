@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <system_error>
@@ -24,7 +25,8 @@ public:
     using Written = std::function<void(const float* const* channels, std::size_t frames)>;
 
     /** Takes the writer, with room for bufferFrames samples of each channel waiting to be written, and starts its
-        thread, which flushes the file every flushEvery. */
+        thread, which flushes the file every flushEvery. Given no writer, as createAudio() can return, it is failed from
+        the start. A function given as written that throws fails it as writing the file does. */
     BackgroundAudioWriter(std::unique_ptr<AudioFileWriter> writer, std::size_t bufferFrames,
                           std::chrono::milliseconds flushEvery = std::chrono::seconds(1), Written written = {});
 
@@ -41,6 +43,11 @@ public:
 
     /** Whether writing the file has gone wrong; nothing more is written to it once it has. */
     bool failed() const noexcept;
+
+    /** From any thread: the samples of each channel in the file so far, and those write() took that never reached it,
+        as writing it went wrong with them waiting. Once finished, every frame write() took is one or the other. */
+    std::uint64_t framesWritten() const noexcept;
+    std::uint64_t framesLost() const noexcept;
 
     /** Writes everything still waiting, finishes the file and stops the thread. Throws
         std::filesystem::filesystem_error for the first thing that went wrong in writing the file, or, given a

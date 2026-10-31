@@ -206,3 +206,29 @@ TEST_CASE("An AIFF whose rate is past anything real is damaged, and such a rate 
         CHECK(error == AudioFileError::badSettings);
     }
 }
+
+TEST_CASE("An AIFF's chunks of odd length are read whether their pad byte is there or not")
+{
+    ScratchFolder folder;
+    const auto file = folder.path / "written.aiff";
+    {
+        auto writer = files::createAudio(file, {"AIFF", 48000, 1, 16, false, 0, {}});
+        const std::vector<float> samples(100, 0.5f);
+        const float* channels[] = {samples.data()};
+        writer->write(channels, samples.size());
+    }
+    const auto written = files::read(file);
+    const auto sound = written.find("SSND");
+    REQUIRE(sound != std::string::npos);
+
+    // An odd-length annotation before the samples, with its pad byte left out, as some writers do.
+    auto bytes = written;
+    bytes.insert(sound, std::string("ANNO\0\0\0\x03"
+                                    "abc",
+                                    11));
+    files::writeSafely(file, bytes);
+    const auto reader = files::openAudio(file);
+    CHECK(reader->info().frames == 100);
+    REQUIRE(reader->info().chunks.size() == 1);
+    CHECK(reader->info().chunks[0].bytes == "abc");
+}

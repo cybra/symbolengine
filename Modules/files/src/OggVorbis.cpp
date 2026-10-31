@@ -85,7 +85,17 @@ public:
 
         information.sampleRate = static_cast<double>(info->rate);
         information.channels = info->channels;
-        information.frames = static_cast<std::uint64_t>(total);
+
+        // Links at another rate would play at the wrong speed in one file's samples, so it ends where its rate does.
+        std::uint64_t held = 0;
+        for (int link = 0, links = static_cast<int>(ov_streams(&vorbis)); link < links; ++link)
+        {
+            const auto* const linked = ov_info(&vorbis, link);
+            if (linked == nullptr || linked->rate != info->rate)
+                break;
+            held += static_cast<std::uint64_t>(std::max<ogg_int64_t>(ov_pcm_total(&vorbis, link), 0));
+        }
+        information.frames = held;
 
         if (const auto* comments = ov_comment(&vorbis, -1))
             for (int i = 0; i < comments->comments; ++i)
@@ -99,6 +109,7 @@ private:
         {
             if (ov_pcm_seek(&vorbis, static_cast<ogg_int64_t>(from)) != 0)
             {
+                next = nowhere;
                 error = stream.error ? stream.error : make_error_code(AudioFileError::damaged);
                 return 0;
             }
@@ -257,6 +268,9 @@ private:
             writePage(page);
 
         error = stream.error;
+        if (!error)
+            file->sync(error);
+
         std::error_code closing;
         file->close(closing);
         if (!error)

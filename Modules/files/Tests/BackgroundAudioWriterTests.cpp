@@ -9,6 +9,9 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <memory>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -245,4 +248,81 @@ TEST_CASE("Letting go of the writer writes what is waiting and finishes the file
     writer.finish();
     CHECK_NOTHROW(writer.finish());
     CHECK(little32(files::read(folder.path / "twice.wav"), 76) == 1000);
+}
+
+namespace
+{
+// A writer that takes so many frames, then fails as a full disk does.
+class FullAfter final : public AudioFileWriter
+{
+public:
+    explicit FullAfter(std::uint64_t most) : room(most) { written = {"test", 48000, 1, 32, true, 0, {}}; }
+
+private:
+    void writeFrames(const float* const*, std::size_t frames, std::error_code& error) override
+    {
+        if (frames > room)
+            error = std::make_error_code(std::errc::no_space_on_device);
+        else
+            room -= frames;
+    }
+
+    void finishFile(std::error_code&) override {}
+
+    std::uint64_t room;
+};
+}
+
+TEST_CASE("Every frame added is counted as in the file or as lost, when the file fails with frames waiting")
+{
+    std::vector<float> samples(1000, 0.5f);
+    const float* channels[] = {samples.data()};
+
+    BackgroundAudioWriter writer(std::make_unique<FullAfter>(2500), 100000, 1h);
+    std::uint64_t added = 0;
+    for (int i = 0; i < 20; ++i)
+        if (writer.write(channels, samples.size()))
+            added += samples.size();
+
+    std::error_code error;
+    writer.finish(error);
+    CHECK(error);
+    CHECK(writer.failed());
+    CHECK(added == 20000);
+    CHECK(writer.framesWritten() + writer.framesLost() == added);
+    CHECK(writer.framesWritten() <= 2500);
+    CHECK(writer.framesLost() >= 17500);
+}
+
+TEST_CASE("A function given what is written that throws fails the writer and doesn't end the program")
+{
+    ScratchFolder folder;
+    std::vector<float> samples(1000, 0.5f);
+    const float* channels[] = {samples.data()};
+    BackgroundAudioWriter writer(
+        files::createAudio(folder.path / "take.wav", {"WAV", 48000, 1, 16, false, 0, {}}), 10000, 1h,
+        [](const float* const*, std::size_t) { throw std::runtime_error("the program's own"); });
+    REQUIRE(writer.write(channels, samples.size()));
+    CHECK(soon([&] { return writer.failed(); }));
+    std::error_code error;
+    writer.finish(error);
+    CHECK(error);
+}
+
+TEST_CASE("A writer that was never made leaves a background writer failed from the start, not a crash")
+{
+    ScratchFolder folder;
+    std::error_code refused;
+    auto none = files::createAudio(folder.path / "take.wav", {"WAV", 48000, 1, 12, false, 0, {}}, refused);
+    REQUIRE(none == nullptr);
+
+    BackgroundAudioWriter writer(std::move(none), 1000);
+    CHECK(writer.failed());
+    std::vector<float> samples(10, 0.5f);
+    const float* channels[] = {samples.data()};
+    CHECK_FALSE(writer.write(channels, samples.size()));
+    std::error_code error;
+    writer.finish(error);
+    CHECK(error);
+    CHECK_THROWS_AS(BackgroundAudioWriter(nullptr, 1000).finish(), std::filesystem::filesystem_error);
 }

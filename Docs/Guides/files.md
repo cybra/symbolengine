@@ -171,7 +171,7 @@ if (!recording.write(channels, frames))
 
 A thread of the writer's own writes them to the file. It flushes the file every second, or the interval given, so a WAV or AIFF recording stopped by a crash reads to within that of where it stopped. A FLAC, Ogg Vorbis or Opus file is only whole once finished, so a recording that has to survive a crash belongs in a WAV or AIFF.
 
-Once the audio thread has stopped adding samples, `finish` writes what is still waiting and closes the file, throwing the first thing that went wrong. `failed` says at any time whether something has. Letting go of the object finishes it too, ignoring errors:
+Once the audio thread has stopped adding samples, `finish` writes what is still waiting and closes the file, throwing the first thing that went wrong. `failed` says at any time whether something has, and `framesWritten` and `framesLost` how many frames reached the file and how many it took and couldn't write. Letting go of the object finishes it too, ignoring errors:
 
 ```cpp
 recording.finish();

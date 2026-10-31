@@ -12,6 +12,16 @@
 namespace symbolengine::detail
 {
 
+/** Where a reader's next frame is when a seek failed and left its decoder who knows where: asked for no frame, so the next
+    read seeks again. */
+inline constexpr std::uint64_t nowhere = ~std::uint64_t{0};
+
+/** The most channels a file is taken to have, past anything real, as a header saying 65535 costs gigabytes to read. */
+inline constexpr int mostChannels = 1024;
+
+/** The most bytes of a WAV's or AIFF's other chunks kept in memory, whatever a file holds. */
+inline constexpr std::uint64_t mostKeptInAll = 256u * 1024 * 1024;
+
 std::unique_ptr<AudioFileReader> openWav(std::unique_ptr<RandomAccessFile> file, const std::filesystem::path& path,
                                          std::error_code& error);
 std::unique_ptr<AudioFileReader> openAiff(std::unique_ptr<RandomAccessFile> file, const std::filesystem::path& path,

@@ -7,6 +7,10 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <fstream>
+#include <random>
+#include <vector>
+
 #include <cmath>
 #include <limits>
 #include <string>
@@ -288,5 +292,250 @@ TEST_CASE("A file written over a longer one holds only what was written")
         }
         CHECK(std::filesystem::file_size(file) < longer.size());
         CHECK(files::openAudio(file)->info().frames == samples.size());
+    }
+}
+
+namespace
+{
+// A reader whose length is the decoder's estimate, holding more than it said, and saying so once it reaches its end.
+class Estimating final : public AudioFileReader
+{
+public:
+    Estimating()
+    {
+        information.format = "Test";
+        information.sampleRate = 48000;
+        information.channels = 1;
+        information.frames = 100;
+        lengthEstimated = true;
+    }
+
+private:
+    std::size_t readFrames(std::uint64_t from, float* const* channels, std::size_t frames, std::error_code&) override
+    {
+        constexpr std::uint64_t real = 150;
+        const auto got =
+            from >= real ? std::size_t{0} : static_cast<std::size_t>(std::min<std::uint64_t>(frames, real - from));
+        std::fill_n(channels[0], got, 0.5f);
+        if (got < frames)
+        {
+            information.frames = real;
+            lengthEstimated = false;
+        }
+        return got;
+    }
+};
+}
+
+TEST_CASE("A length that is only an estimate hides nothing past it")
+{
+    Estimating reader;
+    std::vector<float> samples(40);
+    float* channels[] = {samples.data()};
+    std::uint64_t at = 0;
+    for (std::size_t got = 1; got != 0; at += got)
+        got = reader.read(at, channels, samples.size());
+    CHECK(at == 150);
+    CHECK(reader.info().frames == 150);
+    CHECK(reader.read(150, channels, samples.size()) == 0);
+}
+
+TEST_CASE("Channels past any real file's are damage to read and refused to write")
+{
+    ScratchFolder folder;
+    std::error_code error;
+    CHECK(files::createAudio(folder.path / "wide.wav", {"WAV", 48000, 1025, 16, false, 0, {}}, error) == nullptr);
+    CHECK(error == AudioFileError::badSettings);
+
+    const std::vector<float> samples(16, 0.25f);
+    {
+        std::vector<const float*> channels(1024, samples.data());
+        auto writer = files::createAudio(folder.path / "wide.wav", {"WAV", 48000, 1024, 16, false, 0, {}});
+        writer->write(channels.data(), samples.size());
+        writer->finish();
+    }
+    auto reader = files::openAudio(folder.path / "wide.wav");
+    CHECK(reader->info().channels == 1024);
+    CHECK(reader->info().frames == samples.size());
+
+    // A WAV saying it has 65535 channels, and an AIFF the same.
+    // Its other sizes holding together, at 8 bits, where a frame's bytes still fit the field saying them.
+    {
+        std::vector<const float*> channels(2, samples.data());
+        auto writer = files::createAudio(folder.path / "eight.wav", {"WAV", 48000, 2, 8, false, 0, {}});
+        writer->write(channels.data(), samples.size());
+    }
+    auto wide = files::read(folder.path / "eight.wav");
+    const auto format = wide.find("fmt ");
+    REQUIRE(format != std::string::npos);
+    wide[format + 10] = static_cast<char>(0xFF);
+    wide[format + 11] = static_cast<char>(0xFF);
+    wide[format + 20] = static_cast<char>(0xFF);
+    wide[format + 21] = static_cast<char>(0xFF);
+    files::writeSafely(folder.path / "said.wav", wide);
+    CHECK(files::openAudio(folder.path / "said.wav", error) == nullptr);
+    CHECK(error == AudioFileError::damaged);
+
+    {
+        const float* channels[] = {samples.data()};
+        auto writer = files::createAudio(folder.path / "one.aiff", {"AIFF", 48000, 1, 16, false, 0, {}});
+        writer->write(channels, samples.size());
+    }
+    auto aiff = files::read(folder.path / "one.aiff");
+    const auto common = aiff.find("COMM");
+    REQUIRE(common != std::string::npos);
+    aiff[common + 8] = static_cast<char>(0xFF);
+    aiff[common + 9] = static_cast<char>(0xFF);
+    files::writeSafely(folder.path / "said.aiff", aiff);
+    CHECK(files::openAudio(folder.path / "said.aiff", error) == nullptr);
+    CHECK(error == AudioFileError::damaged);
+}
+
+TEST_CASE("A file's kept chunks stop at a limit however many it holds, its samples reading all the same")
+{
+    ScratchFolder folder;
+    const auto file = folder.path / "many.wav";
+    const std::vector<float> samples(16, 0.25f);
+    const float* channels[] = {samples.data()};
+    {
+        auto writer = files::createAudio(file, {"WAV", 48000, 1, 16, false, 0, {}});
+        writer->write(channels, samples.size());
+    }
+
+    // Eight chunks of 60 MB after the samples, sparse on disk, with sizes that hold together.
+    auto bytes = files::read(file);
+    const auto size = bytes.size();
+    std::filesystem::resize_file(file, size + 8 * (8 + 60u * 1024 * 1024));
+    {
+        std::fstream out(file, std::ios::binary | std::ios::in | std::ios::out);
+        for (int i = 0; i < 8; ++i)
+        {
+            out.seekp(static_cast<std::streamoff>(size + static_cast<std::size_t>(i) * (8 + 60u * 1024 * 1024)));
+            const std::uint32_t length = 60u * 1024 * 1024;
+            out.write("many", 4);
+            for (int shift = 0; shift < 32; shift += 8)
+                out.put(static_cast<char>((length >> shift) & 0xFF));
+        }
+    }
+
+    const auto reader = files::openAudio(file);
+    CHECK(reader->info().frames == samples.size());
+    std::uint64_t kept = 0;
+    for (const auto& chunk : reader->info().chunks)
+        kept += chunk.bytes.size();
+    CHECK(kept > 0);
+    CHECK(kept <= 256u * 1024 * 1024);
+}
+
+TEST_CASE(
+    "A WAV of 20 bits and an AIFF of 12 say the bits they are stored in, which a copy of them can be written with")
+{
+    ScratchFolder folder;
+    const std::vector<float> samples(16, 0.25f);
+    const float* channels[] = {samples.data()};
+    {
+        auto writer = files::createAudio(folder.path / "take.wav", {"WAV", 48000, 1, 24, false, 0, {}});
+        writer->write(channels, samples.size());
+        auto other = files::createAudio(folder.path / "take.aiff", {"AIFF", 48000, 1, 16, false, 0, {}});
+        other->write(channels, samples.size());
+    }
+
+    auto wav = files::read(folder.path / "take.wav");
+    const auto format = wav.find("fmt ");
+    REQUIRE(format != std::string::npos);
+    wav[format + 22] = 20;
+    files::writeSafely(folder.path / "twenty.wav", wav);
+
+    auto aiff = files::read(folder.path / "take.aiff");
+    const auto common = aiff.find("COMM");
+    REQUIRE(common != std::string::npos);
+    aiff[common + 15] = 12;
+    files::writeSafely(folder.path / "twelve.aiff", aiff);
+
+    struct Kind
+    {
+        const char* name;
+        const char* format;
+        int bits;
+    };
+    for (const Kind& kind : {Kind{"twenty.wav", "WAV", 24}, Kind{"twelve.aiff", "AIFF", 16}})
+    {
+        CAPTURE(kind.name);
+        const auto reader = files::openAudio(folder.path / kind.name);
+        CHECK(reader->info().bits == kind.bits);
+        AudioFileSettings copy{
+            kind.format, reader->info().sampleRate, reader->info().channels, reader->info().bits, false, 0, {}};
+        std::error_code error;
+        CHECK(files::createAudio(folder.path / "copy", copy, error) != nullptr);
+        CHECK_FALSE(error);
+    }
+}
+
+TEST_CASE("Seven channels' usual speakers are the ones Ogg's order holds them in")
+{
+    ScratchFolder folder;
+    const std::vector<float> samples(16, 0.25f);
+    std::vector<const float*> channels(7, samples.data());
+    {
+        auto writer = files::createAudio(folder.path / "six-one.wav", {"WAV", 48000, 7, 16, false, 0, {}});
+        writer->write(channels.data(), samples.size());
+    }
+    // Front left and right, center, low frequency, back center, side left and right.
+    CHECK(files::openAudio(folder.path / "six-one.wav")->info().channelMask == 0x70F);
+}
+
+TEST_CASE("A read after a seek that failed reads from where it asks, never from where the failure left the decoder")
+{
+    ScratchFolder folder;
+    const auto whole = folder.path / "whole.flac";
+    const auto length = 30000;
+
+    // Noise, so the file is long enough to cut well past its headers.
+    std::minstd_rand random(7);
+    std::vector<float> samples(static_cast<std::size_t>(length));
+    for (auto& sample : samples)
+        sample = static_cast<float>(static_cast<int>(random() % 60000) - 30000) / 32768.0f;
+    const float* channels[] = {samples.data()};
+    {
+        auto writer = files::createAudio(whole, {"FLAC", 48000, 1, 16, false, 0, {}});
+        writer->write(channels, samples.size());
+    }
+
+    // Cut short, so its length still says more than it holds, and a seek near the end fails.
+    const auto cut = folder.path / "cut.flac";
+    const auto bytes = files::read(whole);
+    files::writeSafely(cut, bytes.substr(0, bytes.size() * 2 / 3));
+    const auto reader = files::openAudio(cut);
+    REQUIRE(reader->info().frames == static_cast<std::uint64_t>(length));
+
+    // How much of it there is, read through by one reader.
+    std::vector<float> got(512);
+    float* into[] = {got.data()};
+    const auto through = files::openAudio(cut);
+    std::uint64_t there = 0;
+    for (std::size_t read = 1; read != 0; there += read)
+        read = through->read(there, into, got.size());
+    REQUIRE(there > 8192);
+    REQUIRE(there < static_cast<std::uint64_t>(length));
+
+    REQUIRE(reader->read(0, into, got.size()) == got.size());
+
+    std::error_code error;
+    const auto past = reader->read(29000, into, 16, error);
+    INFO("read past the cut gave " << past << ", " << error.message());
+    CHECK((error || past == 0));
+
+    // Whatever that did, each stretch asked for after it is that stretch, wherever the decoder was left, from the first
+    // frames to the last, some of them more than a search through a length that misleads it can find.
+    for (std::uint64_t from = 100; from + got.size() <= there; from += 777)
+    {
+        CAPTURE(from);
+        error.clear();
+        const auto back = reader->read(from, into, got.size(), error);
+        CHECK_FALSE(error);
+        REQUIRE(back == got.size());
+        for (std::size_t i = 0; i < back; ++i)
+            REQUIRE(got[i] == samples[static_cast<std::size_t>(from) + i]);
+        static_cast<void>(reader->read(29000, into, 16, error));
     }
 }

@@ -185,6 +185,8 @@ public:
             }
         }
 
+        lengthEstimated = adts || asf;
+
         if (!adts && !asf)
         {
             const auto told = readMp4Audio(*file, rate, error);
@@ -260,8 +262,11 @@ private:
                 // The length an ADTS or ASF file gives is an estimate; at the end it is what was decoded.
                 if (!waiting)
                 {
-                    if (placed)
-                        information.frames = std::min(information.frames, heldStart + heldFrames());
+                    if (placed && lengthEstimated)
+                    {
+                        information.frames = heldStart + heldFrames();
+                        lengthEstimated = false;
+                    }
                     return false;
                 }
                 place(pending, pendingFirst);
@@ -278,6 +283,22 @@ private:
             {
                 error = AudioFileError::damaged;
                 return false;
+            }
+
+            // A stream that changes its channels or rate partway, as a broadcast's can, can't go on as one file.
+            if ((flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED) != 0)
+            {
+                Com<IMFMediaType> now;
+                UINT32 channels = 0, rate = 0;
+                if (FAILED(reader->GetCurrentMediaType(audioStream, now.put())) ||
+                    FAILED(now->GetUINT32(MF_MT_AUDIO_NUM_CHANNELS, &channels)) ||
+                    FAILED(now->GetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, &rate)) ||
+                    static_cast<int>(channels) != information.channels ||
+                    static_cast<double>(rate) != information.sampleRate)
+                {
+                    error = AudioFileError::unsupported;
+                    return false;
+                }
             }
 
             ended = (flags & MF_SOURCE_READERF_ENDOFSTREAM) != 0;

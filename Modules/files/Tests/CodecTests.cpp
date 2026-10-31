@@ -405,3 +405,27 @@ TEST_CASE("A FLAC whose rate is nothing is damaged")
     CHECK(files::openAudio(file, error) == nullptr);
     CHECK(error == AudioFileError::damaged);
 }
+
+TEST_CASE("Ogg Vorbis files joined at another rate read as far as the first rate holds, never at the wrong speed")
+{
+    ScratchFolder folder;
+    const auto made = [&](const char* name, double rate) {
+        const auto file = folder.path / name;
+        auto writer = files::createAudio(file, {"Ogg Vorbis", rate, 1, 0, false, 0, {}});
+        writeAll(*writer, tones(1, rate, 24000));
+        writer->finish();
+        return files::read(file);
+    };
+    const auto first = made("first.ogg", 48000);
+    const auto second = made("second.ogg", 44100);
+    files::writeSafely(folder.path / "joined.ogg", first + second);
+    files::writeSafely(folder.path / "same.ogg", first + made("third.ogg", 48000));
+
+    const auto joined = files::openAudio(folder.path / "joined.ogg");
+    CHECK(joined->info().sampleRate == 48000);
+    CHECK(joined->info().frames == 24000);
+    CHECK(pattern::readAll(*joined, 999).front().size() == 24000);
+
+    const auto same = files::openAudio(folder.path / "same.ogg");
+    CHECK(same->info().frames == 48000);
+}

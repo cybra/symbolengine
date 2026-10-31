@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <new>
 #include <string_view>
 
 namespace symbolengine
@@ -13,6 +14,11 @@ namespace symbolengine
 std::size_t AudioFileReader::read(std::uint64_t from, float* const* channels, std::size_t frames, std::error_code& error)
 {
     error.clear();
+
+    // A length that is only an estimate doesn't stop a read: the reader says where the end is once it reaches it.
+    if (lengthEstimated)
+        return frames == 0 ? 0 : readFrames(from, channels, frames, error);
+
     if (from >= information.frames || frames == 0)
         return 0;
     return readFrames(from, channels, static_cast<std::size_t>(std::min<std::uint64_t>(frames, information.frames - from)),
@@ -130,9 +136,10 @@ const std::error_category& audioFileCategory() noexcept
     return category;
 }
 
-std::unique_ptr<AudioFileReader> openAudio(const std::filesystem::path& file, std::error_code& error)
+namespace
 {
-    error.clear();
+std::unique_ptr<AudioFileReader> openKnown(const std::filesystem::path& file, std::error_code& error)
+{
     auto opened = detail::RandomAccessFile::open(file, error);
     if (opened == nullptr)
         return nullptr;
@@ -224,6 +231,23 @@ std::unique_ptr<AudioFileReader> openAudio(const std::filesystem::path& file, st
     error = AudioFileError::notAudio;
     return nullptr;
 }
+}
+
+std::unique_ptr<AudioFileReader> openAudio(const std::filesystem::path& file, std::error_code& error)
+{
+    error.clear();
+
+    // What a file's header asks for can be more than there is.
+    try
+    {
+        return openKnown(file, error);
+    }
+    catch (const std::bad_alloc&)
+    {
+        error = std::make_error_code(std::errc::not_enough_memory);
+        return nullptr;
+    }
+}
 
 std::unique_ptr<AudioFileReader> openAudio(const std::filesystem::path& file)
 {
@@ -265,7 +289,7 @@ std::unique_ptr<AudioFileWriter> createAudio(const std::filesystem::path& file, 
                       : format == "Opus"       ? settings.channels <= 8 && rate <= 384000.0
                                                : false;
 
-    if (!fits || settings.channels < 1 || settings.channels > 65535 || !(rate > 0.0))
+    if (!fits || settings.channels < 1 || settings.channels > detail::mostChannels || !(rate > 0.0))
     {
         error = AudioFileError::badSettings;
         return nullptr;

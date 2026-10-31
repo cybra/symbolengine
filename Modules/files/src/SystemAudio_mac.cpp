@@ -154,6 +154,7 @@ private:
         {
             if (ExtAudioFileSeek(audio, static_cast<SInt64>(from)) != noErr)
             {
+                next = nowhere;
                 error = stream.error ? stream.error : make_error_code(AudioFileError::damaged);
                 return 0;
             }

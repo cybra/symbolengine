@@ -37,8 +37,8 @@ struct AudioInfo
     int channels = 0;
     std::uint64_t frames = 0;      // the length, in samples of each channel; for AAC in ADTS and WMA on Windows,
                                    // the decoder's estimate until the file has been read to its end
-    int bits = 0;                  // as stored: 8, 16, 24, 32 or 64, or 0 for the formats that keep none, such as
-                                   // Ogg Vorbis, Opus, MP3 and AAC
+    int bits = 0;                  // as stored: 8, 16, 24, 32 or 64, a FLAC's as it says, such as 20, or 0 for the
+                                   // formats that keep none, such as Ogg Vorbis, Opus, MP3 and AAC
     bool floatingPoint = false;    // samples stored as floats rather than whole numbers
 
     /** The speakers a WAV's channels are for, as WAVE_FORMAT_EXTENSIBLE gives them (1 front left, 2 front right,
@@ -47,7 +47,7 @@ struct AudioInfo
 
     /** The file's other chunks, in the order they come: everything but those describing the samples themselves
         (a WAV's fmt, fact, data and ds64, an AIFF's COMM, SSND and FVER) and the padding a file is laid out with
-        (JUNK, PAD and FLLR), and any over 64 MB. Written back as they are, they keep a recording's broadcast
+        (JUNK, PAD and FLLR), any over 64 MB, and any past 256 MB in all. Written back as they are, they keep a recording's broadcast
         extension, iXML, cue points and the rest. */
     std::vector<AudioChunk> chunks{};
 
@@ -83,6 +83,10 @@ protected:
 
     AudioInfo information{};
     std::filesystem::path path{};
+
+    /** Whether information.frames is only a decoder's estimate, so reads aren't held to it. Whoever sets it clears it,
+        with the true length, on reaching the end. */
+    bool lengthEstimated = false;
 };
 
 /** What a new audio file holds, as createAudio() writes it. */
@@ -90,7 +94,7 @@ struct AudioFileSettings
 {
     std::string format = "WAV";    // "WAV", "AIFF", "FLAC", "Ogg Vorbis" or "Opus"
     double sampleRate = 48000.0;   // Opus takes any rate, and plays at 48 kHz
-    int channels = 2;              // 1 or more; FLAC and Opus up to 8, Ogg Vorbis up to 255
+    int channels = 2;              // from 1 to 1024; FLAC and Opus up to 8, Ogg Vorbis up to 255
     int bits = 24;                 // whole numbers in 8, 16, 24 or 32 bits, FLAC in 16 or 24; floats in 32 or 64
     bool floatingPoint = false;    // floats are written as AIFF-C in an AIFF file; Ogg Vorbis and Opus ignore both
 

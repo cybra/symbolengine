@@ -28,7 +28,7 @@ struct BackgroundAudioWriter::State
     int wholeBits = 0;
 
     std::vector<std::vector<float>> ring;
-    std::atomic<std::uint64_t> added{0}, taken{0};
+    std::atomic<std::uint64_t> added{0}, taken{0}, inFile{0}, lost{0};
     std::atomic<bool> failure{false};
     std::error_code firstError{};
 
@@ -39,6 +39,8 @@ struct BackgroundAudioWriter::State
 
     void fail(const std::error_code& error)
     {
+        if (failure)
+            return;
         firstError = error;
         failure = true;
     }
@@ -54,9 +56,12 @@ struct BackgroundAudioWriter::State
         file->write(pointers.data(), frames, error);
         if (error)
         {
+            lost += frames;
             fail(error);
             return;
         }
+
+        inFile += frames;
 
         if (!written)
             return;
@@ -102,8 +107,20 @@ struct BackgroundAudioWriter::State
             {
                 const auto at = static_cast<std::size_t>(start % capacity);
                 const auto frames = static_cast<std::size_t>(std::min<std::uint64_t>(end - start, capacity - at));
-                if (!failure)
-                    writeStretch(at, frames, pointers, readBack);
+
+                // Nothing here may end the program from this thread, the program's own function included.
+                if (failure)
+                    lost += frames;
+                else
+                    try
+                    {
+                        writeStretch(at, frames, pointers, readBack);
+                    }
+                    catch (...)
+                    {
+                        fail(std::make_error_code(std::errc::operation_canceled));
+                    }
+
                 start += frames;
                 taken.store(start, std::memory_order_release);
             }
@@ -116,7 +133,14 @@ struct BackgroundAudioWriter::State
                 if (file->frames() != flushedFrames)
                 {
                     std::error_code error;
-                    file->flush(error);
+                    try
+                    {
+                        file->flush(error);
+                    }
+                    catch (...)
+                    {
+                        error = std::make_error_code(std::errc::operation_canceled);
+                    }
                     if (error)
                         fail(error);
                     flushedFrames = file->frames();
@@ -132,6 +156,14 @@ BackgroundAudioWriter::BackgroundAudioWriter(std::unique_ptr<AudioFileWriter> wr
     : state(std::make_unique<State>())
 {
     auto& s = *state;
+
+    // A writer createAudio() refused, given as it came: nothing can be written, as failed() and finish() say.
+    if (writer == nullptr)
+    {
+        s.fail(make_error_code(AudioFileError::badSettings));
+        return;
+    }
+
     const auto& settings = writer->settings();
     const auto whole = settings.format == "WAV" || settings.format == "AIFF" || settings.format == "FLAC";
     s.wholeBits = whole && !settings.floatingPoint ? settings.bits : 0;
@@ -177,10 +209,22 @@ bool BackgroundAudioWriter::failed() const noexcept
     return state->failure.load();
 }
 
+std::uint64_t BackgroundAudioWriter::framesWritten() const noexcept
+{
+    return state->inFile.load();
+}
+
+std::uint64_t BackgroundAudioWriter::framesLost() const noexcept
+{
+    return state->lost.load();
+}
+
 void BackgroundAudioWriter::finish(std::error_code& error)
 {
     error.clear();
     auto& s = *state;
+    if (s.file == nullptr)
+        error = s.firstError;
     if (!s.thread.joinable())
         return;
 

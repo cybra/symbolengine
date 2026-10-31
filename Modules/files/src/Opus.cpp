@@ -99,6 +99,7 @@ private:
             const auto start = from > settle ? from - settle : 0;
             if (op_pcm_seek(opus, static_cast<ogg_int64_t>(start)) != 0)
             {
+                next = nowhere;
                 error = stream.error ? stream.error : make_error_code(AudioFileError::damaged);
                 return 0;
             }
@@ -262,6 +263,8 @@ private:
             error = std::make_error_code(std::errc::io_error);
         if (stream.error)
             error = stream.error;
+        if (!error)
+            file->sync(error);
 
         std::error_code closing;
         file->close(closing);
