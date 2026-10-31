@@ -1289,6 +1289,11 @@ void PluginHost::Shared::sweepNotices()
             plugin->scheduleNotices();
 }
 
+namespace
+{
+bool watchingWorks();
+}
+
 PluginHost::PluginHost(Options options) : shared(std::make_shared<Shared>())
 {
     shared->options = std::move(options);
@@ -1297,7 +1302,7 @@ PluginHost::PluginHost(Options options) : shared(std::make_shared<Shared>())
     if (shared->options.onMainThread != nullptr && shared->options.onMainThread())
         mainThread::prepare();
 
-    if (shared->options.watchUnsafeCalls && canWatchUnsafeCalls())
+    if (shared->options.watchUnsafeCalls && watchingWorks())
         shared->unsafeLink = unsafeCalls::link();
 
     // Notices a plugin sends from inside its process call are only recorded there; this thread passes them to the main
@@ -1341,7 +1346,9 @@ PluginHost::~PluginHost()
         shared->watcher.join();
 }
 
-bool PluginHost::canWatchUnsafeCalls()
+namespace
+{
+bool watchingWorks()
 {
     // Tried for real once, as being there isn't enough: a library loaded too late, or something else taking the same
     // calls first, sees nothing. The first look at a stack may load what it needs, which is done here too, not on an
@@ -1366,6 +1373,18 @@ bool PluginHost::canWatchUnsafeCalls()
     }();
 
     return can;
+}
+}
+
+bool PluginHost::canWatchUnsafeCalls()
+{
+#if defined(_WIN32)
+    // Trying it on Windows changes the import table of every module loaded, with the program's threads running through
+    // them, which asking whether it could be done mustn't do.
+    return unsafeCalls::link() != nullptr;
+#else
+    return watchingWorks();
+#endif
 }
 
 void PluginHost::setCrashNote(PluginCrashNote* note)

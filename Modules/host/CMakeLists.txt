@@ -138,6 +138,7 @@ if(SYMBOLENGINE_TESTS)
     symbolengine_add_tests(host SOURCES ${test_sources} ALONE "[timing],[windows],[free]")
     # The devices module's fake system and its tests' helpers, for a device's late blocks named by their plugin.
     target_link_libraries(symbolengine_host_tests PRIVATE SymbolEngine::devices)
+    target_include_directories(symbolengine_host_tests PRIVATE src)
     target_include_directories(symbolengine_host_tests PRIVATE ${PROJECT_SOURCE_DIR}/Modules/core/Tests
                                                                ${PROJECT_SOURCE_DIR}/Modules/devices/Tests)
     if(TARGET symbolengine_ui)

@@ -9,6 +9,8 @@
 #include <atomic>
 #include <cstring>
 #include <mutex>
+#include <new>
+#include <string>
 
 namespace symbolengine
 {
@@ -39,15 +41,15 @@ std::string read(const char (&field)[size])
     return std::string(field, strnlen(field, size));
 }
 
-// The thread's record in the note it last called a plugin with.
-struct ThreadPlace
+std::uint64_t ownerOf(const crashNote::Thread& thread) noexcept
 {
-    const crashNote::Layout* layout = nullptr;
-    int index = -1;
-};
+    return std::atomic_ref(const_cast<std::uint64_t&>(thread.owner)).load(std::memory_order_acquire);
+}
 
-thread_local ThreadPlace place;
-
+bool takeOver(crashNote::Thread& thread, std::uint64_t from, std::uint64_t to) noexcept
+{
+    return std::atomic_ref(thread.owner).compare_exchange_strong(from, to, std::memory_order_acq_rel);
+}
 }
 
 struct PluginCrashNote::Impl
@@ -56,25 +58,35 @@ struct PluginCrashNote::Impl
     crashNote::Layout* layout = nullptr;
     void* handle = nullptr;
     bool catching = false;
-    std::atomic<int> threadsClaimed{0};
+    bool inMemoryOnly = false;
     std::mutex slots;
 
-    // The calling thread's record, claimed with its first call into a plugin; none once every record is taken.
+    // The calling thread's record, found by the thread's own number. Nothing here is kept per thread by the system, whose
+    // storage for that can be made on first use, which an audio thread's first call or a crash's handler mustn't cause.
+    // A record whose thread is in no call can be taken over, so threads that have ended leave room for those that come.
     crashNote::Thread* threadRecord() noexcept
     {
-        if (place.layout != layout)
-        {
-            const auto index = threadsClaimed.fetch_add(1);
-            place = {layout, index < crashNote::threadCount ? index : -1};
-        }
-
-        return place.index >= 0 ? &layout->threads[place.index] : nullptr;
+        const auto self = crashNote::native::thisThread();
+        for (auto& thread : layout->threads)
+            if (ownerOf(thread) == self)
+                return &thread;
+        for (auto& thread : layout->threads)
+            if (ownerOf(thread) == 0 && takeOver(thread, 0, self))
+                return &thread;
+        for (auto& thread : layout->threads)
+            if (const auto owner = ownerOf(thread); thread.slot < 0 && takeOver(thread, owner, self))
+                return &thread;
+        return nullptr;
     }
 };
 
 int crashNote::threadRecordIn(const Layout* layout) noexcept
 {
-    return place.layout == layout ? place.index : -1;
+    const auto self = native::thisThread();
+    for (int index = 0; index < threadCount; ++index)
+        if (ownerOf(layout->threads[index]) == self)
+            return index;
+    return -1;
 }
 
 const PluginRunEnding::Inside* PluginRunEnding::culprit() const
@@ -85,6 +97,10 @@ const PluginRunEnding::Inside* PluginRunEnding::culprit() const
     for (const auto& call : inside)
         if (call.crashed)
             return &call;
+
+    // A crash was caught, and not in a call into a plugin, whatever the others were doing at the time.
+    if (!crash.empty())
+        return nullptr;
 
     for (const auto& call : inside)
         if (!call.audioThread)
@@ -143,9 +159,22 @@ std::unique_ptr<PluginCrashNote> PluginCrashNote::open(const std::filesystem::pa
 {
     error = {};
     auto made = std::make_unique<Impl>();
-    std::error_code missing;
-    made->last = readEnding(files::read(file, missing));
-    made->layout = crashNote::native::map(file, made->handle);
+    std::string before;
+    bool anotherCopy = false;
+    made->layout = crashNote::native::map(file, made->handle, before, anotherCopy);
+
+    // Another copy of the program has the file. Its note isn't this one's to read, as running it looks like one ended by
+    // a crash, or to change, so this copy goes without one to leave.
+    if (anotherCopy)
+    {
+        made->layout = new (std::nothrow) crashNote::Layout;
+        made->inMemoryOnly = true;
+        catchCrashes = false;
+    }
+    else
+    {
+        made->last = readEnding(before);
+    }
 
     if (made->layout == nullptr)
     {
@@ -178,7 +207,10 @@ PluginCrashNote::~PluginCrashNote()
         crashNote::native::stopCatching();
 
     set(impl->layout->state, crashNote::ended);
-    crashNote::native::unmap(impl->layout, impl->handle);
+    if (impl->inMemoryOnly)
+        delete impl->layout;
+    else
+        crashNote::native::unmap(impl->layout, impl->handle);
 }
 
 const PluginRunEnding& PluginCrashNote::lastRun() const

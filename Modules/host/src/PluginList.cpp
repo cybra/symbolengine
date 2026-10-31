@@ -113,6 +113,8 @@ Object writeFile(const Record& record)
     object.set("setAside", std::move(setAside));
     object.set("complete", file.complete);
     object.set("connected", file.connected);
+    if (!file.through.empty())
+        object.set("through", paths::toUtf8(file.through));
     object.set("again", file.again);
     object.set("computerStarted", record.computerStarted);
     return object;
@@ -143,6 +145,8 @@ Record readFile(const Object& object)
                                      readFailure(required(plugin.asObject(), "failure"))});
     file.complete = flagOr(object, "complete", true);
     file.connected = flagOr(object, "connected", true);
+    if (const auto* through = object.find("through"))
+        file.through = paths::fromUtf8(through->asString());
     file.again = flagOr(object, "again", false);
     record.computerStarted = numberOr(object, "computerStarted");
     record.read = object;
@@ -251,6 +255,16 @@ struct PluginList::Inner
         {
             const auto& object = document->asObject();
             contents.whole = true;
+
+            // A later version's: its entries may mean what this version can't tell. So it reads as nothing, and being whole
+            // it is kept as the backup when this version saves.
+            if ((*document)["format"].intOr(currentFormat) > currentFormat)
+            {
+                log("The plugin list " + paths::toUtf8(from) +
+                    " is from a later version of the program, so it is scanned again.");
+                return contents;
+            }
+
             for (const auto& entry : object.find("files")->asArray())
                 contents.whole = readEntry(entry, contents) && contents.whole;
             for (const auto& entry : object.find("seen")->asArray())
@@ -496,6 +510,12 @@ void PluginList::record(PluginFile file)
             plugins.push_back(std::move(plugin));
     }
     file.plugins = std::move(plugins);
+
+    // One that crashed as it was taken down had been found, and what it did last is what counts.
+    for (const auto& aside : file.setAside)
+        std::erase_if(file.plugins,
+                      [&](const PluginDescription& plugin) { return plugin.identity.id == aside.plugin.identity.id; });
+
     for (auto& plugin : file.setAside)
     {
         plugin.plugin.identity.format = file.format;
@@ -519,7 +539,18 @@ void PluginList::record(PluginFile file)
     list.changed = true;
 }
 
-void PluginList::folderRead(const std::filesystem::path& folder, const std::vector<std::filesystem::path>& found,
+void PluginList::reachedThrough(const std::filesystem::path& file, const std::filesystem::path& through)
+{
+    const auto record = inner->records.find(keyOf(file));
+    if (record != inner->records.end() && record->second.file.through != through)
+    {
+        record->second.file.through = through;
+        inner->changed = true;
+    }
+}
+
+void PluginList::folderRead(const std::string& format, const std::filesystem::path& folder,
+                            const std::vector<std::filesystem::path>& found,
                             const std::vector<std::filesystem::path>& unreadable)
 {
     std::set<std::string> there;
@@ -530,8 +561,10 @@ void PluginList::folderRead(const std::filesystem::path& folder, const std::vect
     for (auto record = records.begin(); record != records.end();)
     {
         const auto& path = record->second.file.path;
+        const auto& through = record->second.file.through;
 
-        if (!inside(path, folder))
+        if (record->second.file.format != format ||
+            (!inside(path, folder) && !(!through.empty() && inside(through, folder))))
             ++record;
         else if (std::any_of(unreadable.begin(), unreadable.end(),
                              [&path](const std::filesystem::path& part) { return inside(path, part); }))

@@ -9,8 +9,10 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 namespace symbolengine::crashNote::native
 {
@@ -77,18 +79,48 @@ LONG WINAPI onCrash(EXCEPTION_POINTERS* exception)
 
 }
 
-Layout* map(const std::filesystem::path& file, void*& handle)
+std::uint64_t thisThread() noexcept
+{
+    return static_cast<std::uint64_t>(GetCurrentThreadId()) + 1;
+}
+
+Layout* map(const std::filesystem::path& file, void*& handle, std::string& before, bool& anotherCopy)
 {
     auto* handles = new Handles;
     handles->file =
         CreateFileW(file.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                    nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+                    nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
 
     if (handles->file == INVALID_HANDLE_VALUE)
     {
         delete handles;
         return nullptr;
     }
+
+    // Held by a byte past anything in the file, as the file itself stays readable. Not cut short until it is known to be
+    // this process's: another's still has its memory on this file.
+    OVERLAPPED past{};
+    past.OffsetHigh = 0x7fffffff;
+    if (!LockFileEx(handles->file, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &past))
+    {
+        anotherCopy = GetLastError() == ERROR_LOCK_VIOLATION;
+        CloseHandle(handles->file);
+        delete handles;
+        return nullptr;
+    }
+
+    LARGE_INTEGER had{};
+    if (GetFileSizeEx(handles->file, &had) && had.QuadPart > 0 && had.QuadPart < 64 * 1024 * 1024)
+    {
+        before.resize(static_cast<std::size_t>(had.QuadPart));
+        DWORD got = 0;
+        if (!ReadFile(handles->file, before.data(), static_cast<DWORD>(before.size()), &got, nullptr))
+            got = 0;
+        before.resize(got);
+    }
+    LARGE_INTEGER start{};
+    SetFilePointerEx(handles->file, start, nullptr, FILE_BEGIN);
+    SetEndOfFile(handles->file);
 
     LARGE_INTEGER size{};
     size.QuadPart = static_cast<LONGLONG>(sizeof(Layout));

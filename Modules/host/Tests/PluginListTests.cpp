@@ -223,7 +223,7 @@ TEST_CASE("A plugin moved to another folder keeps its identity and when it was f
 
     // A day later it is gone from the system's folder and found in the user's, the file itself unchanged.
     rig.time += 24h;
-    list->folderRead(rig.place("VST3"), {});
+    list->folderRead("VST3", rig.place("VST3"), {});
     CHECK_FALSE(list->find({"VST3", gainId}));
     auto moved = found(rig.place("Mine/Gain.vst3"), stamp(100), {effect(gainId, "Gain")});
     moved.userFolder = true;
@@ -498,7 +498,7 @@ TEST_CASE("A folder read through drops what's gone from it and keeps what's on a
     list->record(found(away, stamp(1), {effect("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "Away")}));
     list->record(found(alsoAway, stamp(1), {effect("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "Also Away")}));
 
-    list->folderRead(rig.place("VST3"), {kept});
+    list->folderRead("VST3", rig.place("VST3"), {kept});
     list->folderUnreadable(rig.place("Drive/VST3/"));
 
     CHECK(list->file(kept));
@@ -512,14 +512,14 @@ TEST_CASE("A folder read through drops what's gone from it and keeps what's on a
     CHECK(list->file(kept)->connected);
 
     // The drive back with one of the two on it.
-    list->folderRead(rig.place("Drive/VST3"), {away});
+    list->folderRead("VST3", rig.place("Drive/VST3"), {away});
     CHECK(list->file(away)->connected);
     CHECK_FALSE(list->file(alsoAway));
 
     // A folder with a name that only begins like another's isn't inside it.
     const auto beside = rig.place("VST3 Extra/Beside.vst3");
     list->record(found(beside, stamp(1), {effect(delayId, "Beside")}));
-    list->folderRead(rig.place("VST3"), {kept});
+    list->folderRead("VST3", rig.place("VST3"), {kept});
     CHECK(list->file(beside));
 }
 
@@ -729,6 +729,12 @@ TEST_CASE("Bytes flipped anywhere in the list never stop it loading, and every e
 
         // The line the flip fell in, and the file entries on the other lines, each read as it was.
         const auto line = std::size_t(std::count(whole.begin(), whole.begin() + std::ptrdiff_t(at), '\n'));
+
+        // The list's own version number made larger reads as a later version's: nothing in it is taken as read, and it stays
+        // the backup.
+        if (wholeLines[line].find("\"format\": 1,") != std::string::npos && loaded.empty())
+            continue;
+
         for (const auto& file : files)
         {
             const auto name = paths::toUtf8(file.path.filename());
@@ -900,7 +906,7 @@ TEST_CASE("Nothing is written while nothing has changed")
     list->record(file);
     list->save();
     list->record(file);
-    list->folderRead(rig.place("VST3"), {rig.place("VST3/Gain.vst3")});
+    list->folderRead("VST3", rig.place("VST3"), {rig.place("VST3/Gain.vst3")});
     list->tryAgain(rig.place("VST3/None.vst3"));
     CHECK_FALSE(list->hasChanges());
 }
@@ -919,4 +925,82 @@ TEST_CASE("Versions are compared piece by piece, numbers as numbers")
     CHECK(compareVersions("", "") == 0);
     CHECK(compareVersions("v2", "v10") < 0);
     CHECK(compareVersions("123456789012345678901234567890", "99999999999999999999") > 0);
+}
+
+TEST_CASE("A list from a later version of its format is read as nothing, and is kept as the backup when this one saves")
+{
+    Rig rig;
+    const std::string later =
+        R"({"format": 99, "files": [{"path": "/a/Later.vst3", "format": "VST3", "stamp": {}, "outcome": "found"}], "seen": []})";
+    files::writeSafely(rig.file, later);
+
+    auto list = rig.open();
+    CHECK(list->plugins().empty());
+
+    list->record(found(rig.place("VST3/Now.vst3"), stamp(1), {effect("now", "Now")}));
+    list->save();
+    CHECK(files::read(rig.file).find("Now.vst3") != std::string::npos);
+    bool kept = false;
+    for (const auto& entry : std::filesystem::directory_iterator(rig.file.parent_path()))
+        if (entry.path() != rig.file && files::read(entry.path()).find("Later.vst3") != std::string::npos)
+            kept = true;
+    CHECK(kept);
+}
+
+TEST_CASE("A plugin that crashed as it was taken down, having been found, is listed once, as set aside")
+{
+    Rig rig;
+    auto list = rig.open();
+    auto file = found(rig.place("VST3/Both.vst3"), stamp(1), {effect("both", "Both"), effect("other", "Other")});
+    PluginSetAside aside{file.plugins[0], PluginFailure{PluginFailure::Kind::crashed, "unloading", 0, "It crashed"}};
+    file.setAside.push_back(aside);
+    list->record(file);
+
+    const auto kept = list->file(file.path);
+    REQUIRE(kept.has_value());
+    REQUIRE(kept->plugins.size() == 1);
+    CHECK(kept->plugins[0].name == "Other");
+    REQUIRE(kept->setAside.size() == 1);
+    CHECK(kept->setAside[0].plugin.name == "Both");
+}
+
+TEST_CASE("Reading a folder for one format says nothing of another's files in it")
+{
+    Rig rig;
+    auto list = rig.open();
+    const auto folder = rig.place("Plugins");
+    auto vst3 = found(folder / "One.vst3", stamp(1), {effect("one", "One")});
+    auto other = found(folder / "Two.other", stamp(1), {effect("two", "Two")});
+    other.format = "Other";
+    list->record(vst3);
+    list->record(other);
+
+    list->folderRead("VST3", folder, {folder / "One.vst3"});
+    CHECK(list->file(other.path).has_value());
+
+    list->folderRead("VST3", folder, {});
+    CHECK_FALSE(list->file(vst3.path).has_value());
+    CHECK(list->file(other.path).has_value());
+}
+
+TEST_CASE("A file reached through a link stays with the folder holding the link, and goes when the link does")
+{
+    Rig rig;
+    auto list = rig.open();
+    const auto folder = rig.place("Plugins");
+    const auto elsewhere = rig.place("Elsewhere/One.vst3");
+    auto file = found(elsewhere, stamp(1), {effect("one", "One")});
+    file.through = folder / "One.vst3";
+    list->record(file);
+    list->save();
+
+    auto again = rig.open();
+    REQUIRE(again->file(elsewhere).has_value());
+    CHECK(again->file(elsewhere)->through == folder / "One.vst3");
+
+    again->folderRead("VST3", folder, {elsewhere});
+    CHECK(again->file(elsewhere).has_value());
+
+    again->folderRead("VST3", folder, {});
+    CHECK_FALSE(again->file(elsewhere).has_value());
 }

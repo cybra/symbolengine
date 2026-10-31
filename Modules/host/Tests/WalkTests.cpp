@@ -742,7 +742,7 @@ TEST_CASE("Nothing said of a folder with no name touches the list")
     Listing listing;
     const auto kept = listing.plugin("A.fake");
 
-    listing.list.folderRead({}, {});
+    listing.list.folderRead("VST3", {}, {});
     REQUIRE(listing.list.file(kept));
     CHECK(listing.list.file(kept)->connected);
     listing.list.folderUnreadable({});
@@ -799,5 +799,54 @@ TEST_CASE("A subfolder a walk can't read keeps its plugins, not connected, until
     std::filesystem::remove(locked);
     PluginScanner::walk(folders, listing.list);
     CHECK_FALSE(listing.list.file(locked));
+}
+#endif
+
+TEST_CASE("A file reached through a link goes from the list once the link has gone, though the file stays")
+{
+    Rig rig;
+    const auto elsewhere = rig.scratch.path / "Elsewhere";
+    const auto one = install(elsewhere, "One");
+    const auto link = rig.plugins / "One.vst3";
+    std::filesystem::create_directories(rig.plugins);
+    if (!linked(one, link))
+        return;
+
+    const auto walked = rig.walk();
+    REQUIRE(walked.files.size() == 1);
+    CHECK(walked.files[0].through == real(rig.plugins) / "One.vst3");
+    REQUIRE(rig.scan());
+    REQUIRE(rig.list.file(real(one)).has_value());
+
+    std::filesystem::remove(link);
+    CHECK(rig.walk().files.empty());
+    CHECK_FALSE(rig.list.file(real(one)).has_value());
+}
+
+#if !defined(_WIN32)
+TEST_CASE("A walk doesn't follow a link into a home folder, or start from one that is a link to it")
+{
+    // A home folder of the test's own, as walking the real one proves nothing where it holds no plugins.
+    Rig rig;
+    const auto home = rig.scratch.path / "Home";
+    install(home, "In the home folder");
+    const auto homePath = real(home);
+    const std::string before = system::environmentVariable("HOME").value_or("");
+    REQUIRE(setenv("HOME", homePath.c_str(), 1) == 0);
+    struct Restore
+    {
+        const std::string& was;
+        ~Restore() { setenv("HOME", was.c_str(), 1); }
+    } restore{before};
+
+    std::filesystem::create_directories(rig.plugins);
+    if (!linked(homePath, rig.plugins / "Home"))
+        return;
+
+    CHECK(rig.walk().files.empty());
+
+    const auto started = PluginScanner::walk({{&rig.vst3, {rig.plugins / "Home", true}}}, rig.list);
+    CHECK(started.files.empty());
+    CHECK(started.refused.size() == 1);
 }
 #endif

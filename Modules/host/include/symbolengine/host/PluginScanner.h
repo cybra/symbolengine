@@ -23,6 +23,9 @@ struct PluginScanFile
     PluginStamp stamp{};
     bool userFolder = false;
     std::vector<std::string> architectures{};
+
+    /** Where in the folder it was reached through a link, when its path is elsewhere. */
+    std::filesystem::path through{};
 };
 
 /** A folder for a walk: one of a format's own or one the user added, with the format whose files it holds. */
@@ -97,6 +100,10 @@ public:
     /** Told of the file the scan is on and the step its worker is on, and once, when the scan ends, how it ended. */
     std::function<void(const std::filesystem::path& file, const std::string& step)> onProgress;
     std::function<void(const PluginScanEnd& end)> onFinished;
+
+    /** The list couldn't be saved, as its folder is read-only or the disk full. What was found so far is kept in memory and
+        saving is tried again later; this is for saying so. */
+    std::function<void(const std::error_code& why)> onSaveFailed;
 
     /** Told when a plugin being scanned shows a window, as a license question does, and when it is gone: the program
         says the plugin is asking something, with Skip, while the limit waits. */

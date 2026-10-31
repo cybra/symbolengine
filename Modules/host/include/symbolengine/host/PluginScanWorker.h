@@ -98,6 +98,9 @@ public:
 
         /** How long to look there for a worker's report, which the system writes a moment after the worker has gone. */
         std::chrono::milliseconds crashReportWait{10'000};
+
+        /** The clock the limit is measured by, the system's steady clock unless a test gives another. */
+        std::function<std::chrono::steady_clock::time_point()> clock{};
     };
 
     /** Starts a worker, or gives nothing with the error set, which blames no plugin. */

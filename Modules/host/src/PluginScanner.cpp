@@ -4,6 +4,7 @@
 #include <symbolengine/core/System.h>
 
 #include <algorithm>
+#include <map>
 #include <optional>
 #include <set>
 #include <tuple>
@@ -84,6 +85,7 @@ bool hidden(const std::filesystem::path& folder)
 // be read.
 bool walkFolder(const std::filesystem::path& folder, const PluginFormat& format,
                 std::set<std::filesystem::path>& entered, std::vector<std::filesystem::path>& found,
+                std::map<std::filesystem::path, std::filesystem::path>& through,
                 std::vector<std::filesystem::path>& unreadable, bool top)
 {
     std::error_code error;
@@ -117,9 +119,14 @@ bool walkFolder(const std::filesystem::path& folder, const PluginFormat& format,
             continue;
         }
         if (format.isPluginFile(path))
+        {
             found.push_back(real);
-        else if (std::filesystem::is_directory(real, failed) && !hidden(path) && entered.insert(real).second)
-            walkFolder(real, format, entered, found, unreadable, false);
+            if (real != path)
+                through.emplace(real, path);
+        }
+        else if (std::filesystem::is_directory(real, failed) && !hidden(path) && !forbidden(real) &&
+                 entered.insert(real).second)
+            walkFolder(real, format, entered, found, through, unreadable, false);
     }
     return true;
 }
@@ -163,9 +170,11 @@ struct PluginScanner::Inner : std::enable_shared_from_this<PluginScanner::Inner>
 
     void save()
     {
-        std::error_code ignored;
-        list.save(ignored);
+        std::error_code failed;
+        list.save(failed);
         saved = std::chrono::steady_clock::now();
+        if (failed && owner != nullptr && owner->onSaveFailed)
+            owner->onSaveFailed(failed);
     }
 
     // Records a file, saving the list once the time set has passed since it was last saved.
@@ -210,6 +219,7 @@ struct PluginScanner::Inner : std::enable_shared_from_this<PluginScanner::Inner>
         const auto& file = files[index];
         record = PluginFile{};
         record.path = file.path;
+        record.through = file.through;
         record.format = file.format;
         record.userFolder = file.userFolder;
         record.stamp = file.stamp;
@@ -473,19 +483,26 @@ PluginWalk PluginScanner::walk(const std::vector<PluginScanFolder>& folders, Plu
             else if (onAbsentDrive(folder.path))
                 list.folderUnreadable(where);
             else
-                list.folderRead(where, {});
+                list.folderRead(format->name(), where, {});
             continue;
         }
 
         const auto real = std::filesystem::canonical(folder.path, error);
+        if (!error && forbidden(real))
+        {
+            walked.refused.push_back(paths::toUtf8(folder.path) +
+                                     " is a volume or a home folder, which a scan never walks.");
+            continue;
+        }
         std::set<std::filesystem::path> entered{real};
         std::vector<std::filesystem::path> here, unreadable;
-        if (error || !walkFolder(real, *format, entered, here, unreadable, true))
+        std::map<std::filesystem::path, std::filesystem::path> through;
+        if (error || !walkFolder(real, *format, entered, here, through, unreadable, true))
         {
             list.folderUnreadable(error ? folder.path : real);
             continue;
         }
-        list.folderRead(real, here, unreadable);
+        list.folderRead(format->name(), real, here, unreadable);
 
         // Each file once, whichever links and folders led to it.
         for (const auto& path : here)
@@ -493,6 +510,11 @@ PluginWalk PluginScanner::walk(const std::vector<PluginScanFolder>& folders, Plu
             if (!files.insert(path).second)
                 continue;
             PluginScanFile file{format->name(), path, {}, folder.user, {}};
+            if (const auto link = through.find(path); link != through.end())
+            {
+                file.through = link->second;
+                list.reachedThrough(path, link->second);
+            }
             PluginError problem;
             const auto facts = format->examine(path, problem);
             if (facts)

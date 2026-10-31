@@ -82,6 +82,22 @@ int main(int argc, char** argv)
         return 5;
     }
 
+    // The crash is on this thread, outside every call into a plugin, with the audio thread inside one all the while.
+    if (how == "outside-while-playing")
+    {
+        const PluginParameterChange change{testIds::hangInProcess, 0, 1.0};
+        std::thread([&] {
+            float left[64] = {}, right[64] = {};
+            float* channels[] = {left, right};
+            plugin->process(channels, 2, 64, &change, 1);
+        }).detach();
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        ready(notePath);
+        volatile int* volatile nowhere = nullptr;
+        *nowhere = 1;
+        return 5;
+    }
+
     if (how == "outside")
     {
         ready(notePath);

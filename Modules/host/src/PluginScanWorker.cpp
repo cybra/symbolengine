@@ -46,6 +46,9 @@ namespace
 using namespace pluginJson;
 using Steady = std::chrono::steady_clock;
 
+// How large a worker's output file grows before the next worker starts a new one.
+constexpr std::uintmax_t mostOutput = 8 * 1024 * 1024;
+
 // The argument a worker is started with, and the environment variable naming its crash note, which carries any path
 // whole on every system.
 constexpr std::string_view workerArgument = "--symbolengine-scan-worker";
@@ -518,7 +521,7 @@ struct PluginScanWorker::Shared : std::enable_shared_from_this<PluginScanWorker:
                 if (count == now.count)
                     return;
                 now.count = count;
-                now.progressed = Steady::now();
+                now.progressed = timeNow();
                 now.inHand.reset();
                 if (const auto* plugin = object.find("inHand"))
                     now.inHand = readPlugin(*plugin, now.format, now.file);
@@ -534,7 +537,7 @@ struct PluginScanWorker::Shared : std::enable_shared_from_this<PluginScanWorker:
             else if (const auto* plugin = object.find("plugin"))
             {
                 auto description = readPlugin(*plugin, now.format, now.file);
-                now.progressed = Steady::now();
+                now.progressed = timeNow();
                 if (!now.answered.insert(description.identity).second)
                     return;
                 tell([description](PluginScanWorker& worker) {
@@ -547,7 +550,7 @@ struct PluginScanWorker::Shared : std::enable_shared_from_this<PluginScanWorker:
                 const auto& entry = setAside->asObject();
                 PluginSetAside set{readPlugin(required(entry, "plugin"), now.format, now.file),
                                    readFailure(required(entry, "failure"))};
-                now.progressed = Steady::now();
+                now.progressed = timeNow();
                 if (!now.answered.insert(set.plugin.identity).second)
                     return;
                 tell([set](PluginScanWorker& worker) {
@@ -558,7 +561,7 @@ struct PluginScanWorker::Shared : std::enable_shared_from_this<PluginScanWorker:
             else if (const auto* asking = object.find("asking"))
             {
                 now.asking = asking->asBool();
-                now.progressed = Steady::now();
+                now.progressed = timeNow();
                 tell([asking = now.asking, id = this->id](PluginScanWorker& worker) {
                     if (asking)
                         scanWorkerLoop::letForward(id);
@@ -619,17 +622,28 @@ struct PluginScanWorker::Shared : std::enable_shared_from_this<PluginScanWorker:
 #endif
 
     // Follows the worker from a thread of its own: kills it once it has gone too long without progress, and says it
+    Steady::time_point timeNow() const { return options.clock ? options.clock() : Steady::now(); }
+
     // failed once it has ended before answering, after what it sent before it ended has all arrived.
     void watch()
     {
         std::unique_lock held(lock);
+        auto looked = timeNow();
         while (!stopping)
         {
             wake.wait_for(held, std::chrono::milliseconds(20));
+
+            // This looks every 20 ms, so a gap this long is time nothing ran through, as the computer sleeping, which isn't
+            // time a plugin took. A system's steady clock may well count it.
+            const auto now = timeNow();
+            if (const auto gap = now - looked; gap > std::chrono::seconds(2) && underway)
+                underway->progressed += gap;
+            looked = now;
+
             if (stopping || ended)
                 continue;
 
-            if (underway && !underway->asking && Steady::now() - underway->progressed > options.limit)
+            if (underway && !underway->asking && now - underway->progressed > options.limit)
             {
                 PluginFailure failure{PluginFailure::Kind::timedOut, underway->step, options.limit.count(),
                                       "It made no progress for " + std::to_string(options.limit.count()) + " ms."};
@@ -760,6 +774,16 @@ std::unique_ptr<PluginScanWorker> PluginScanWorker::start(Options options, std::
     process.outputFile = options.outputFile;
     process.link = true;
 
+    // Each worker adds to the file, for as long as the program is used, so a large one is started again.
+    if (std::error_code large;
+        !options.outputFile.empty() && std::filesystem::file_size(options.outputFile, large) > mostOutput && !large)
+    {
+        auto kept = options.outputFile;
+        kept += ".old";
+        std::error_code ignored;
+        std::filesystem::rename(options.outputFile, kept, ignored);
+    }
+
     auto shared = std::make_shared<Shared>();
     shared->child = ChildProcess::start(options.program, process, error);
     if (shared->child == nullptr)
@@ -807,7 +831,7 @@ bool PluginScanWorker::scan(const PluginScanRequest& request)
             return false;
         number = ++shared->requests;
         shared->underway = Underway{number, request.format, request.file};
-        shared->underway->progressed = Steady::now();
+        shared->underway->progressed = shared->timeNow();
     }
 
     Array skip;

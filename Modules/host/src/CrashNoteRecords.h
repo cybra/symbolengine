@@ -5,13 +5,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <string>
 
 // What the crash note holds, laid out in the file the system writes from memory, and what each system does with it.
 namespace symbolengine::crashNote
 {
 
 constexpr char magic[4] = {'S', 'E', 'C', 'N'};
-constexpr std::uint32_t version = 1, running = 1, ended = 2;
+constexpr std::uint32_t version = 2, running = 1, ended = 2;
 constexpr int slotCount = 128, threadCount = 16;
 constexpr std::size_t crashRoom = 32 * 1024;
 
@@ -29,6 +30,7 @@ struct Slot
 /** A thread that calls plugins: the plugin it is inside a call into, -1 for none, and which call. */
 struct Thread
 {
+    std::uint64_t owner;   // the thread holding this record, 0 for none; another may take it while it is in no call
     std::int32_t slot;
     std::uint32_t audio;
     std::uint32_t crashed;
@@ -69,7 +71,12 @@ namespace native
 {
 
 /** The file made at the size and kept in memory, the system writing to it; null where it can't be. */
-Layout* map(const std::filesystem::path& file, void*& handle);
+/** The note's file held by this process, what was in it read and its memory set up for this run; nothing when it can't be
+    made, and with anotherCopy true when it is another process's to hold. */
+Layout* map(const std::filesystem::path& file, void*& handle, std::string& before, bool& anotherCopy);
+
+/** A number for the calling thread, never 0, that needs nothing set up to be read, in a crash's handler too. */
+std::uint64_t thisThread() noexcept;
 void unmap(Layout* layout, void* handle);
 
 /** A handler for the process's crashes, which adds the crash, a backtrace and the crashing thread to the layout, then

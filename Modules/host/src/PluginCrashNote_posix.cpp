@@ -1,12 +1,18 @@
 #include "CrashNoteRecords.h"
 
+#include <symbolengine/core/Files.h>
+
 #include <algorithm>
+#include <cerrno>
 #include <csignal>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <execinfo.h>
 #include <fcntl.h>
+#include <pthread.h>
+#include <sys/file.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -93,14 +99,31 @@ void onCrash(int signal, siginfo_t*, void*)
 
 }
 
-Layout* map(const std::filesystem::path& file, void*& handle)
+std::uint64_t thisThread() noexcept
 {
-    const int opened = open(file.c_str(), O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(pthread_self()));
+}
+
+Layout* map(const std::filesystem::path& file, void*& handle, std::string& had, bool& anotherCopy)
+{
+    const int opened = open(file.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
 
     if (opened < 0)
         return nullptr;
 
-    if (ftruncate(opened, static_cast<off_t>(sizeof(Layout))) != 0)
+    // Not cut short until it is known to be this process's: another's still has its memory on this file, and cutting the
+    // file under that would end it.
+    if (flock(opened, LOCK_EX | LOCK_NB) != 0)
+    {
+        anotherCopy = errno == EWOULDBLOCK;
+        close(opened);
+        return nullptr;
+    }
+
+    std::error_code ignored;
+    had = files::read(file, ignored);
+
+    if (ftruncate(opened, 0) != 0 || ftruncate(opened, static_cast<off_t>(sizeof(Layout))) != 0)
     {
         close(opened);
         return nullptr;

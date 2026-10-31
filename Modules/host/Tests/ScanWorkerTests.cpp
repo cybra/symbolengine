@@ -78,11 +78,14 @@ struct Scan
     int files = 0;
 
     explicit Scan(std::chrono::milliseconds limit = 20s,
-                  std::vector<std::pair<std::string, std::string>> environment = {})
+                  std::vector<std::pair<std::string, std::string>> environment = {},
+                  std::function<std::chrono::steady_clock::time_point()> clock = {})
     {
         std::error_code error;
-        worker = PluginScanWorker::start(
-            {SYMBOLENGINE_SCAN_WORKER, std::move(environment), scratch.path / "worker.txt", limit, main.post()}, error);
+        PluginScanWorker::Options options{SYMBOLENGINE_SCAN_WORKER, std::move(environment), scratch.path / "worker.txt",
+                                          limit, main.post()};
+        options.clock = std::move(clock);
+        worker = PluginScanWorker::start(std::move(options), error);
         REQUIRE(worker);
         worker->onProgress = [this](const std::string& step) { steps.push_back(step); };
         worker->onPlugin = [this](const PluginDescription& plugin) { plugins.push_back(plugin); };
@@ -476,3 +479,41 @@ TEST_CASE("A worker never shows in the Dock")
     CHECK_FALSE(showsInDock(scan.worker->processId()));
 }
 #endif
+
+TEST_CASE("The computer sleeping through a limit doesn't set a healthy plugin aside")
+{
+    // The clock jumps as it does across a sleep, far past the limit, with the worker doing nothing wrong.
+    std::atomic<std::int64_t> slept{0};
+    Scan scan(1s, {}, [&] { return std::chrono::steady_clock::now() + std::chrono::milliseconds(slept.load()); });
+    REQUIRE(scan.scan(scan.fake(R"({"plugins": [{"id": "alpha", "name": "Alpha", "does": "hang"}]})")));
+
+    scan.main.turnUntil([] { return false; }, 300ms);
+    slept = 3'600'000;
+    scan.main.turnUntil([] { return false; }, 300ms);
+    CHECK(scan.failed.empty());
+
+    // A worker really stuck is still found, the limit running again from after the sleep.
+    CHECK(scan.finished(5s));
+    REQUIRE(scan.failed.size() == 1);
+    CHECK(scan.failed[0].kind == PluginFailure::Kind::timedOut);
+}
+
+TEST_CASE("A worker's output file is started again once it has grown large, the last one kept beside it")
+{
+    ScratchFolder scratch;
+    const auto output = scratch.path / "worker.txt";
+    files::writeSafely(output, std::string(9 * 1024 * 1024, 'x'));
+
+    PluginScanWorker::Options options;
+    options.program = SYMBOLENGINE_SCAN_WORKER;
+    options.outputFile = output;
+    std::error_code error;
+    auto worker = PluginScanWorker::start(options, error);
+    REQUIRE(worker != nullptr);
+    worker->close();
+
+    CHECK(std::filesystem::file_size(output) < 1024 * 1024);
+    auto kept = output;
+    kept += ".old";
+    CHECK(std::filesystem::file_size(kept) == 9 * 1024 * 1024);
+}

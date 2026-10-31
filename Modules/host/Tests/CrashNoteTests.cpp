@@ -4,18 +4,24 @@
 #include <symbolengine/host/Plugin.h>
 #include <symbolengine/host/PluginCrashNote.h>
 
+#include "CrashNoteRecords.h"
 #include "Scratch.h"
 #include "TestMainThread.h"
 #include "Vst3/TestIds.h"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "CrashNoteRecords.h"
 #include <algorithm>
+#include <atomic>
+
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 using namespace symbolengine;
 using namespace std::chrono_literals;
@@ -217,4 +223,109 @@ TEST_CASE(
     // hundred on Linux's runner, as a slower machine or the sanitizers slow both alike.
     INFO("a block takes " << plain.count() << " ns, " << noted.count() << " ns with the note");
     CHECK(noted - plain < plain / 5);
+}
+
+TEST_CASE("A crash outside every call into a plugin blames none, whatever the audio thread was playing")
+{
+    ScratchFolder folder;
+    const auto ended = run(folder.path, "outside-while-playing");
+    CHECK_FALSE(ended.last.clean);
+    CHECK(ended.last.crash.find("SIGSEGV") != std::string::npos);
+    REQUIRE(ended.last.inside.size() == 1);
+    CHECK(ended.last.inside[0].audioThread);
+    CHECK(ended.last.culprit() == nullptr);
+}
+
+TEST_CASE("A note has a place for a new thread however many have come and gone")
+{
+    ScratchFolder folder;
+    PluginError error;
+    const auto file = folder.path / "Note";
+    auto note = PluginCrashNote::open(file, false, error);
+    REQUIRE(note != nullptr);
+    PluginDescription plugin;
+    plugin.identity = {"VST3", "A"};
+    plugin.name = "A plugin";
+    const auto slot = crashNote::claim(note.get(), plugin);
+    REQUIRE(slot >= 0);
+
+    // More than the note has room for, all still there so each is a thread of its own, and none of them in a call now.
+    std::vector<std::thread> gone;
+    std::atomic<int> called{0};
+    std::atomic<bool> go{false};
+    for (int thread = 0; thread < 3 * crashNote::threadCount; ++thread)
+        gone.emplace_back([&] {
+            {
+                crashNote::InCall call(note.get(), slot, "process", true);
+            }
+            ++called;
+            while (!go)
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        });
+    while (called < 3 * crashNote::threadCount)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+    // The latest is inside its call as the file is read, as it would be after a crash.
+    std::atomic<bool> inside{false}, letGo{false};
+    std::thread latest([&] {
+        crashNote::InCall call(note.get(), slot, "setState", false);
+        inside = true;
+        while (!letGo)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    });
+    while (!inside)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    const auto copy = folder.path / "Copy";
+    std::filesystem::copy_file(file, copy);
+    letGo = true;
+    latest.join();
+    go = true;
+    for (auto& thread : gone)
+        thread.join();
+
+    auto reading = PluginCrashNote::open(copy, false, error);
+    REQUIRE(reading != nullptr);
+    REQUIRE(reading->lastRun().inside.size() == 1);
+    CHECK(reading->lastRun().inside[0].call == "setState");
+}
+
+TEST_CASE("A second copy of the program neither reads the first's note as its crash nor harms it")
+{
+    ScratchFolder folder;
+    PluginError error;
+    const auto file = folder.path / "Note";
+
+    auto first = PluginCrashNote::open(file, false, error);
+    REQUIRE(first != nullptr);
+    first->setContext("The first copy");
+    PluginDescription plugin;
+    plugin.identity = {"VST3", "A"};
+    const auto slot = crashNote::claim(first.get(), plugin);
+    REQUIRE(slot >= 0);
+
+    // Running, the first's note looks like the note of a crash to anything that reads it.
+    {
+        auto second = PluginCrashNote::open(file, false, error);
+        REQUIRE(second != nullptr);
+        CHECK(second->lastRun().clean);
+        second->setContext("The second copy");
+        const auto theirs = crashNote::claim(second.get(), plugin);
+        CHECK(theirs >= 0);
+        crashNote::InCall call(second.get(), theirs, "process", true);
+    }
+
+    // The first's still holds, and it ended well.
+    {
+        crashNote::InCall call(first.get(), slot, "setState", false);
+        const auto copy = folder.path / "Copy";
+        std::filesystem::copy_file(file, copy);
+        auto reading = PluginCrashNote::open(copy, false, error);
+        REQUIRE(reading != nullptr);
+        CHECK(reading->lastRun().context == "The first copy");
+        REQUIRE(reading->lastRun().inside.size() == 1);
+    }
+    first.reset();
+    auto after = PluginCrashNote::open(file, false, error);
+    REQUIRE(after != nullptr);
+    CHECK(after->lastRun().clean);
 }

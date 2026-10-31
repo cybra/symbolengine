@@ -131,7 +131,7 @@ if (const auto* culprit = note->lastRun().culprit())
     offerToLeaveOut(culprit->plugin, culprit->call);
 ```
 
-Open it as your program starts, before any plugin is made, and keep it for longer than the host. The note costs a few tens of billionths of a second a call, so it can stay on all the time.
+Open it as your program starts, before any plugin is made, and keep it for longer than the host. A second copy of your program opening the same file leaves the first's alone and reports nothing of its own, as the first's would otherwise look like a crash. `culprit()` is the plugin a crash was in, and nothing for a crash outside every call into a plugin, even with one playing at the time. The note costs a few tens of billionths of a second a call, so it can stay on all the time.
 
 ## Timing
 
