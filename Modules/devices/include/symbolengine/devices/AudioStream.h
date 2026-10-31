@@ -26,8 +26,9 @@ struct AudioBlock
     /** From 1 to the stream's maxBlock. */
     int frames = 0;
 
-    /** Where the block's first input and output frames fall since the stream started, counting every frame lost as
-        well as every frame delivered, so a recording placed by them keeps real time. */
+    /** Where the block's first input and output frames fall in this run of the system's stream, counting every frame
+        lost as well as every frame delivered, so a recording placed by them keeps real time. They start again as the
+        stream is opened again, which AudioEvent says. */
     std::int64_t inputPosition = 0;
     std::int64_t outputPosition = 0;
 

@@ -22,7 +22,7 @@ public:
     /** Its length in frames. */
     virtual std::int64_t length() const = 0;
 
-    /** Fills one buffer for each of its channels with frames from a frame on. */
+    /** Fills one buffer for each of its channels with frames from a frame on, or throws where it can't. */
     virtual void read(float* const* into, std::int64_t at, std::size_t frames) = 0;
 };
 
@@ -44,7 +44,11 @@ public:
             underrun,
 
             /** The last frame was heard. */
-            finished
+            finished,
+
+            /** The source couldn't be read from a position, as a file on a drive just unplugged. What it was to give
+                plays as silence, and it is tried again as playing goes on, as it may come back. Told once each play. */
+            readFailed
         };
 
         Kind kind = Kind::finished;

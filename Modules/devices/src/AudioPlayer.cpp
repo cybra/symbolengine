@@ -110,6 +110,7 @@ struct AudioPlayer::Impl
     // The reader's own.
     struct Fill
     {
+        bool readFailed = false;
         std::uint64_t generation = 0;
         std::shared_ptr<AudioPlayerSource> source;
         int sourceChannels = 0;
@@ -456,7 +457,7 @@ struct AudioPlayer::Impl
             std::vector<float*> into(sourcePointers.begin(), sourcePointers.end());
             for (auto& pointer : into)
                 pointer += filled;
-            fill.source->read(into.data(), fill.cursor, frames);
+            readSource(into.data(), fill.cursor, frames);
             filled += frames;
             fill.cursor += static_cast<std::int64_t>(frames);
         }
@@ -487,7 +488,7 @@ struct AudioPlayer::Impl
                 else
                 {
                     fill.pending = static_cast<std::size_t>(std::min<std::int64_t>(1024, fill.end - fill.cursor));
-                    fill.source->read(sourcePointers.data(), fill.cursor, fill.pending);
+                    readSource(sourcePointers.data(), fill.cursor, fill.pending);
                     fill.cursor += static_cast<std::int64_t>(fill.pending);
                 }
                 fill.pendingAt = 0;
@@ -540,15 +541,38 @@ struct AudioPlayer::Impl
     {
         Note note;
         while (notes.pop(note))
+            tell({note.kind, note.position, note.frames});
+    }
+
+    void tell(const Event& event)
+    {
+        if (!options.onEvent)
+            return;
+        auto deliver = [handler = options.onEvent, event] { handler(event); };
+        if (options.post)
+            options.post(std::move(deliver));
+        else
+            queue->post(std::move(deliver));
+    }
+
+    // A source that can't be read leaves silence where it was to play, the program told, rather than an exception
+    // ending the program from this thread.
+    void readSource(float* const* into, std::int64_t at, std::size_t frames)
+    {
+        try
         {
-            if (!options.onEvent)
-                continue;
-            const Event event{note.kind, note.position, note.frames};
-            auto deliver = [handler = options.onEvent, event] { handler(event); };
-            if (options.post)
-                options.post(std::move(deliver));
-            else
-                queue->post(std::move(deliver));
+            fill.source->read(into, at, frames);
+            return;
+        }
+        catch (...)
+        {
+        }
+        for (int c = 0; c < fill.sourceChannels; ++c)
+            std::fill_n(into[c], frames, 0.0f);
+        if (!fill.readFailed)
+        {
+            fill.readFailed = true;
+            tell({AudioPlayer::Event::Kind::readFailed, at, static_cast<std::int64_t>(frames)});
         }
     }
 };

@@ -7,10 +7,13 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <numbers>
 #include <optional>
 #include <random>
+#include <stdexcept>
 
 using namespace symbolengine;
 using Kind = AudioPlayer::Event::Kind;
@@ -54,6 +57,31 @@ private:
     std::int64_t frames_;
     double rate_;
     int channels_;
+};
+
+// Counts as Counting does until a frame, past which it can't be read, as a file on a drive just unplugged.
+class FailsAt final : public AudioPlayerSource
+{
+public:
+    FailsAt(std::int64_t frames, std::int64_t failing, double rate) : frames_(frames), failing_(failing), rate_(rate) {}
+
+    int channels() const override { return 2; }
+    double sampleRate() const override { return rate_; }
+    std::int64_t length() const override { return frames_; }
+
+    void read(float* const* into, std::int64_t at, std::size_t frames) override
+    {
+        if (at + static_cast<std::int64_t>(frames) > failing_)
+            throw std::runtime_error("the drive has gone");
+
+        for (int c = 0; c < 2; ++c)
+            for (std::size_t i = 0; i < frames; ++i)
+                into[c][i] = Counting::at(at + static_cast<std::int64_t>(i), c);
+    }
+
+private:
+    std::int64_t frames_, failing_;
+    double rate_;
 };
 
 class Tone final : public AudioPlayerSource
@@ -223,6 +251,59 @@ TEST_CASE("The end comes exactly at the last frame, then silence, and is said")
         CHECK_FALSE(deck.player.playing());
         CHECK(soon([&] { return finished == 1; }));
     }
+}
+
+TEST_CASE("A source that can't be read plays silence from there, says so once, and the program goes on")
+{
+    constexpr std::int64_t length = 48000, failing = 12000;
+    std::atomic<int> failed{0}, finished{0};
+    std::atomic<std::int64_t> failedAt{-1};
+    AudioPlayer::Options options = Deck::quiet();
+    options.onEvent = [&](const AudioPlayer::Event& event) {
+        if (event.kind == Kind::readFailed)
+        {
+            ++failed;
+            failedAt = event.position;
+        }
+        if (event.kind == Kind::finished)
+            ++finished;
+    };
+    Deck deck(options);
+
+    SECTION("at the device's rate, sample for sample up to the piece that failed")
+    {
+        deck.player.play(std::make_shared<FailsAt>(length, failing, 48000.0), 0);
+        REQUIRE(soon([&] { return failed > 0; }));
+        const auto out = deck.play(length + 700);
+        std::size_t heard = 0;
+
+        while (heard < out[0].size() && out[0][heard] == Counting::at(static_cast<std::int64_t>(heard), 0))
+            ++heard;
+
+        CHECK(heard > 0);
+        CHECK(static_cast<std::int64_t>(heard) <= failing);
+        CHECK(failedAt.load() == static_cast<std::int64_t>(heard));
+        CHECK(std::all_of(out[0].begin() + static_cast<std::ptrdiff_t>(heard), out[0].end(),
+                          [](float sample) { return sample == 0.0f; }));
+        CHECK(std::all_of(out[1].begin() + static_cast<std::ptrdiff_t>(heard), out[1].end(),
+                          [](float sample) { return sample == 0.0f; }));
+    }
+
+    SECTION("at another rate, through the resampler")
+    {
+        deck.player.play(std::make_shared<FailsAt>(length, failing, 44100.0), 0);
+        REQUIRE(soon([&] { return failed > 0; }));
+        const auto out = deck.play(length + 8000);
+        CHECK(std::abs(out[0].back()) == 0.0f);
+    }
+
+    // Told once, however many reads failed, played to its end, and the next source plays as ever.
+    CHECK(soon([&] { return finished == 1; }));
+    CHECK(failed == 1);
+    deck.player.play(std::make_shared<Counting>(1000), 0);
+    REQUIRE(soon([&] { return deck.player.ready() >= 512; }));
+    const auto next = deck.play(512);
+    CHECK(next[0][100] == Counting::at(100, 0));
 }
 
 TEST_CASE("A loop's join is exact to the sample, whatever its length against the block size")
