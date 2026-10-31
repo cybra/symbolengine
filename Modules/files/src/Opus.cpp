@@ -148,8 +148,8 @@ private:
     // opusfile reads, as it gives as many frames as fit however many channels the link it reaches has.
     bool decodeMore()
     {
-        constexpr std::size_t longest = 5760, mostChannels = 8;
-        decoded.resize(longest * mostChannels);
+        constexpr std::size_t longest = 5760, mostItReads = 8;
+        decoded.resize(longest * mostItReads);
         decodedFrames = decodedAt = 0;
 
         for (;;)
