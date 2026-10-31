@@ -161,12 +161,15 @@ Answer get(const Request& request, const std::function<bool(int status, std::str
 
     for (;;)
     {
-        DWORD read = 0;
+        DWORD read = 0, waiting = 0;
 
         if (stopping.stopped())
             return answer;
 
-        if (!WinHttpReadData(handle, piece.data(), static_cast<DWORD>(piece.size()), &read))
+        // Asked for more than has come, a read waits until that much has, so a server that sends a little and goes quiet
+        // would give nothing until time ran out. This waits only for something to be there, or for the end.
+        if (!WinHttpQueryDataAvailable(handle, &waiting) ||
+            (waiting > 0 && !WinHttpReadData(handle, piece.data(), std::min(waiting, static_cast<DWORD>(piece.size())), &read)))
         {
             if (!stopping.stopped())
                 answer.problem = problemWith("Reading the answer");
