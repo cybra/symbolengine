@@ -38,6 +38,20 @@ using Kind = PluginUnsafeCall::Kind;
 namespace
 {
 
+// What was found of what the code itself does. A Debug build's runtime on Windows takes a lock of its own for every
+// checked iterator made, the host's as well as a plugin's, and around its heap, even to give back nothing, which a
+// release build's doesn't.
+std::vector<PluginUnsafeCall> foundIn(const Plugin& plugin)
+{
+    auto calls = plugin.unsafeCalls();
+#if defined(_MSC_VER) && defined(_DEBUG)
+    calls.erase(std::remove_if(calls.begin(), calls.end(),
+                               [](const auto& call) { return call.function == "EnterCriticalSection"; }),
+                calls.end());
+#endif
+    return calls;
+}
+
 struct Rig
 {
     TestMainThread main;
@@ -84,10 +98,10 @@ struct Rig
     {
         const auto plugin = made();
         play(plugin, 5);
-        const auto before = plugin->unsafeCalls().size();
+        const auto before = foundIn(*plugin).size();
         REQUIRE(plugin->setParameter(testIds::unsafeDoes, testIds::unsafeValue(does)));
         play(plugin, blocks);
-        auto calls = plugin->unsafeCalls();
+        auto calls = foundIn(*plugin);
         calls.erase(calls.begin(), calls.begin() + static_cast<std::ptrdiff_t>(before));
         return calls;
     }
@@ -155,7 +169,7 @@ TEST_CASE("A plugin that makes no unsafe call is found to make none, nor is the 
     Rig rig;
     const auto plugin = rig.made();
     rig.play(plugin, 200);
-    const auto calls = plugin->unsafeCalls();
+    const auto calls = foundIn(*plugin);
     INFO(said(calls));
     CHECK(plugin->timing().blocks == 200);
     // The first blocks may bind what they call for the first time, which isn't the plugin's doing: past them, nothing.
@@ -454,7 +468,7 @@ TEST_CASE("A plugin that sets itself up in its first block can be told from one 
         const auto plugin = rig.made();
         REQUIRE(plugin->setParameter(testIds::unsafeAtStart, testIds::unsafeValue(testIds::doesMalloc)));
         rig.play(plugin, 3);
-        const auto calls = plugin->unsafeCalls();
+        const auto calls = foundIn(*plugin);
         INFO(said(calls));
         const auto atStart =
             std::find_if(calls.begin(), calls.end(), [](const auto& call) { return call.step == "startProcessing"; });
