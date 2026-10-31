@@ -517,3 +517,116 @@ TEST_CASE("The program's automation reaches a plugin at its frames, in a block s
     CHECK(told.empty());
     rig.checkNoMisuse();
 }
+
+TEST_CASE("Any number of values set before a block reach the plugin as their last")
+{
+    Rig rig;
+    auto plugin = rig.made();
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+
+    for (int i = 1; i <= 5000; ++i)
+        REQUIRE(plugin->setParameter(1, i / 5000.0));
+
+    CHECK(plugin->parameter(1) == 1.0);
+    const auto state = plugin->saveState(PluginStateUse::document);
+    REQUIRE(state.has_value());
+    CHECK(state->find("1=1.000000") != std::string::npos);
+    CHECK(through(*plugin) == 1.0f);
+    rig.checkNoMisuse();
+}
+
+TEST_CASE("A value set just before a reset is heard by the block after it, and a later one isn't undone")
+{
+    Rig rig;
+    auto plugin = rig.made();
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+    CHECK(through(*plugin) == 1.0f);
+
+    REQUIRE(plugin->setParameter(1, 0.25));
+    REQUIRE(plugin->reset());
+    CHECK(through(*plugin) == 0.25f);
+
+    // Set again, played, and saved: the first has nothing left to say.
+    REQUIRE(plugin->setParameter(1, 0.75));
+    CHECK(through(*plugin) == 0.75f);
+    const auto state = plugin->saveState(PluginStateUse::document);
+    REQUIRE(state.has_value());
+    CHECK(state->find("1=0.750000") != std::string::npos);
+    CHECK(through(*plugin) == 0.75f);
+    rig.checkNoMisuse();
+}
+
+TEST_CASE("A value set on a plugin never prepared is in the state taken of it")
+{
+    Rig rig;
+    auto plugin = rig.made();
+    REQUIRE(plugin->setParameter(1, 0.25));
+    const auto state = plugin->saveState(PluginStateUse::document);
+    REQUIRE(state.has_value());
+    CHECK(state->find("1=0.250000") != std::string::npos);
+    CHECK(plugin->state() == Plugin::State::inactive);
+
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+    CHECK(through(*plugin) == 0.25f);
+    rig.checkNoMisuse();
+}
+
+TEST_CASE("Automation given while nothing plays a plugin is heard once something does")
+{
+    Rig rig;
+    auto plugin = rig.made();
+    const PluginParameterChange change{1, 10, 0.5};
+    std::vector<float> left(64, 1.0f), right(64, 1.0f);
+    float* channels[] = {left.data(), right.data()};
+    plugin->process(channels, 2, 64, &change, 1);
+
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+    CHECK(through(*plugin) == 0.5f);
+    CHECK(rig.main.turnUntil([&] { return plugin->parameter(1) == 0.5; }));
+    rig.checkNoMisuse();
+}
+
+TEST_CASE("More parameters set at once than a block carries are all heard, over the blocks they need")
+{
+    TestMainThread main;
+    FakePluginFormat fake{main.isCurrent(), main.post()};
+    std::vector<std::string> wrong;
+    PluginHost host{
+        {main.post(), main.isCurrent(), 2000ms, [&wrong](const std::string& what) { wrong.push_back(what); }}};
+    FakePluginFormat::Script script;
+    constexpr std::uint32_t many = 3000;
+    for (std::uint32_t id = 1; id <= many; ++id)
+        script.parameters.push_back({id, "One", "", 0.0, 0, true, false, false, false, false});
+    fake.script("plugin", script);
+
+    auto plugin = host.make(fake, FakePluginFormat::describe("plugin"));
+    REQUIRE(main.turnUntil([&] { return plugin->state() != Plugin::State::making; }));
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+
+    for (std::uint32_t id = 1; id <= many; ++id)
+        REQUIRE(plugin->setParameter(id, 0.5));
+
+    for (int block = 0; block < 4; ++block)
+        through(*plugin);
+
+    const auto state = plugin->saveState(PluginStateUse::document);
+    REQUIRE(state.has_value());
+    std::size_t heard = 0;
+    for (auto at = state->find("=0.500000"); at != std::string::npos; at = state->find("=0.500000", at + 1))
+        ++heard;
+    CHECK(heard == many);
+    CHECK(wrong.empty());
+    CHECK(fake.misuses().empty());
+}
+
+TEST_CASE("A value set just before a plugin's parameters change is still heard")
+{
+    Rig rig;
+    auto plugin = rig.made();
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+    REQUIRE(plugin->setParameter(1, 0.25));
+    rig.fake.notify("plugin", PluginNotice::parameters);
+    rig.main.settle();
+    CHECK(through(*plugin) == 0.25f);
+    rig.checkNoMisuse();
+}

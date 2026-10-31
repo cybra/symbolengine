@@ -47,6 +47,10 @@ std::string keyOf(const std::filesystem::path& path)
 // Whether a path lies inside a folder, at any depth: by whole names, so "VST3 Extra" isn't inside "VST3".
 bool inside(const std::filesystem::path& path, std::filesystem::path folder)
 {
+    // A folder with no name, as a failed look at one gives, holds nothing, where every path starts with no names.
+    if (folder.empty())
+        return false;
+
     folder = folder.lexically_normal();
     if (!folder.has_filename())
         folder = folder.parent_path();
@@ -515,7 +519,8 @@ void PluginList::record(PluginFile file)
     list.changed = true;
 }
 
-void PluginList::folderRead(const std::filesystem::path& folder, const std::vector<std::filesystem::path>& found)
+void PluginList::folderRead(const std::filesystem::path& folder, const std::vector<std::filesystem::path>& found,
+                            const std::vector<std::filesystem::path>& unreadable)
 {
     std::set<std::string> there;
     for (const auto& path : found)
@@ -524,8 +529,16 @@ void PluginList::folderRead(const std::filesystem::path& folder, const std::vect
     auto& records = inner->records;
     for (auto record = records.begin(); record != records.end();)
     {
-        if (!inside(record->second.file.path, folder))
+        const auto& path = record->second.file.path;
+
+        if (!inside(path, folder))
             ++record;
+        else if (std::any_of(unreadable.begin(), unreadable.end(),
+                             [&path](const std::filesystem::path& part) { return inside(path, part); }))
+        {
+            inner->change(record->second, [](PluginFile& file) { return std::exchange(file.connected, false); });
+            ++record;
+        }
         else if (!there.contains(record->first))
         {
             record = records.erase(record);

@@ -79,33 +79,47 @@ bool hidden(const std::filesystem::path& folder)
 }
 
 // The walk of one folder: every plugin file under it once by its real path, bundles taken whole and never entered,
-// each folder entered once, links followed. False if the folder itself can't be read.
+// each folder entered once, links followed; and each folder under it that couldn't be read through, or holds something
+// that couldn't be looked at, what the list has there being unknown rather than gone. False if the folder itself can't
+// be read.
 bool walkFolder(const std::filesystem::path& folder, const PluginFormat& format,
-                std::set<std::filesystem::path>& entered, std::vector<std::filesystem::path>& found, bool top)
+                std::set<std::filesystem::path>& entered, std::vector<std::filesystem::path>& found,
+                std::vector<std::filesystem::path>& unreadable, bool top)
 {
     std::error_code error;
     std::filesystem::directory_iterator entries(folder, error);
-    if (error)
-        return !top;
     std::vector<std::filesystem::path> inside;
-    for (; entries != std::filesystem::directory_iterator(); entries.increment(error))
+
+    // An error along the way ends the walk through it, leaving it at its end.
+    if (!error)
+        for (; entries != std::filesystem::directory_iterator(); entries.increment(error))
+            inside.push_back(entries->path());
+
+    if (error)
     {
-        if (error)
-            break;
-        inside.push_back(entries->path());
+        if (top)
+            return false;
+        unreadable.push_back(folder);
     }
+
     std::sort(inside.begin(), inside.end());
 
     for (const auto& path : inside)
     {
-        std::error_code ignored;
-        const auto real = std::filesystem::canonical(path, ignored);
-        if (ignored)
+        std::error_code failed;
+        const auto real = std::filesystem::canonical(path, failed);
+        if (failed)
+        {
+            // A link to nothing, or round to itself, is nothing to scan; anything else may be a plugin not looked at.
+            if (failed != std::errc::no_such_file_or_directory && failed != std::errc::too_many_symbolic_link_levels &&
+                failed != std::errc::not_a_directory)
+                unreadable.push_back(folder);
             continue;
+        }
         if (format.isPluginFile(path))
             found.push_back(real);
-        else if (std::filesystem::is_directory(real, ignored) && !hidden(path) && entered.insert(real).second)
-            walkFolder(real, format, entered, found, false);
+        else if (std::filesystem::is_directory(real, failed) && !hidden(path) && entered.insert(real).second)
+            walkFolder(real, format, entered, found, unreadable, false);
     }
     return true;
 }
@@ -443,11 +457,20 @@ PluginWalk PluginScanner::walk(const std::vector<PluginScanFolder>& folders, Plu
             continue;
         }
 
+        // Gone only where the system says so. Where it won't say, as under a folder it won't enter, nothing is known.
         std::error_code error;
-        if (!std::filesystem::exists(folder.path, error))
+        const auto there = std::filesystem::exists(folder.path, error);
+        if (error)
+        {
+            list.folderUnreadable(folder.path);
+            continue;
+        }
+        if (!there)
         {
             const auto where = std::filesystem::weakly_canonical(folder.path, error);
-            if (onAbsentDrive(folder.path))
+            if (error)
+                list.folderUnreadable(folder.path);
+            else if (onAbsentDrive(folder.path))
                 list.folderUnreadable(where);
             else
                 list.folderRead(where, {});
@@ -456,13 +479,13 @@ PluginWalk PluginScanner::walk(const std::vector<PluginScanFolder>& folders, Plu
 
         const auto real = std::filesystem::canonical(folder.path, error);
         std::set<std::filesystem::path> entered{real};
-        std::vector<std::filesystem::path> here;
-        if (error || !walkFolder(real, *format, entered, here, true))
+        std::vector<std::filesystem::path> here, unreadable;
+        if (error || !walkFolder(real, *format, entered, here, unreadable, true))
         {
             list.folderUnreadable(error ? folder.path : real);
             continue;
         }
-        list.folderRead(real, here);
+        list.folderRead(real, here, unreadable);
 
         // Each file once, whichever links and folders led to it.
         for (const auto& path : here)

@@ -130,7 +130,7 @@ public:
         if ((flags & kLatencyChanged) != 0)
             what |= static_cast<std::uint32_t>(PluginNotice::latency);
 
-        if ((flags & (kIoChanged | kIoTitlesChanged)) != 0)
+        if ((flags & kIoChanged) != 0)
             what |= static_cast<std::uint32_t>(PluginNotice::buses);
 
         if ((flags & (kParamTitlesChanged | kParamIDMappingChanged)) != 0)

@@ -446,6 +446,8 @@ public:
             set(id, value);
     }
 
+    bool takesValuesUnprepared() const override { return true; }
+
     double parameterValue(std::uint32_t id) override
     {
         const auto* const range = rangeOf(id);

@@ -9,7 +9,9 @@
 #include <atomic>
 #include <cfenv>
 #include <clocale>
+#include <cmath>
 #include <filesystem>
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -379,6 +381,8 @@ TEST_CASE("A plugin's notices, from any thread and from inside its own calls, ar
     std::atomic<bool> running{true};
     std::thread own([&] {
         // And from a thread of its own.
+        rig.fake.notify("noisy", PluginNotice::latency);
+
         while (running)
         {
             rig.fake.notify("noisy", PluginNotice::values);
@@ -840,7 +844,12 @@ TEST_CASE("A hold that leaves a plugin off the audio, as when its state is taken
     level.name = "Level";
     once.parameters = {level};
     rig.fake.script("once", once);
-    auto plugin = rig.made("once");
+
+    // Prepared to hear the value before its state is taken, then for a device, then refusing.
+    auto twice = once;
+    twice.activations = 2;
+    rig.fake.script("twice", twice);
+    auto plugin = rig.made("twice");
 
     // Its state taken while it isn't prepared, with a value waiting for it.
     REQUIRE(plugin->setParameter(7, 0.25));
@@ -902,4 +911,318 @@ TEST_CASE("A reset a plugin asks for from inside its processing comes from the m
     std::sort(waits.begin(), waits.end());
     CHECK(waits[10] < 6ms);
     rig.checkNoMisuse();
+}
+
+namespace
+{
+// Plays one block of ones through a plugin, each channel as it comes back.
+std::vector<std::vector<float>> playedOnes(Plugin& plugin, int frames = 64, float value = 1.0f)
+{
+    std::vector<std::vector<float>> audio(2, std::vector<float>(static_cast<std::size_t>(frames), value));
+    float* channels[] = {audio[0].data(), audio[1].data()};
+    plugin.process(channels, 2, frames);
+    return audio;
+}
+
+bool allAre(const std::vector<std::vector<float>>& audio, float value)
+{
+    return std::all_of(audio.begin(), audio.end(), [value](const std::vector<float>& channel) {
+        return std::all_of(channel.begin(), channel.end(), [value](float sample) { return sample == value; });
+    });
+}
+}
+
+TEST_CASE("A plugin saying its latency changed as it is activated isn't activated again for that", "[timing]")
+{
+    Rig rig;
+    std::atomic<int> activations{0};
+    FakePluginFormat::Script noisy;
+    noisy.inside = [&](std::string_view call) {
+        if (call == "activate")
+        {
+            ++activations;
+            rig.fake.notify("noisy", PluginNotice::latency);
+        }
+    };
+    rig.fake.script("noisy", noisy);
+    auto plugin = rig.made("noisy");
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+
+    const auto until = std::chrono::steady_clock::now() + 300ms;
+    while (std::chrono::steady_clock::now() < until)
+    {
+        rig.main.turn();
+        std::this_thread::sleep_for(1ms);
+    }
+
+    CHECK(activations == 1);
+    CHECK(plugin->state() == Plugin::State::active);
+    rig.checkNoMisuse();
+}
+
+TEST_CASE("A plugin saying over and over that what hasn't changed has is activated again only after longer and longer",
+          "[timing]")
+{
+    for (const auto notice : {PluginNotice::latency, PluginNotice::buses})
+    {
+        CAPTURE(static_cast<int>(notice));
+        Rig rig;
+        std::atomic<int> activations{0};
+        FakePluginFormat::Script noisy;
+        noisy.inside = [&, notice](std::string_view call) {
+            if (call == "activate")
+                ++activations;
+            else if (call == "process")
+                rig.fake.notify("noisy", notice);
+        };
+        rig.fake.script("noisy", noisy);
+        auto plugin = rig.made("noisy");
+        REQUIRE(plugin->prepare({48000.0, 64, false}));
+
+        {
+            AudioThread audio(plugin);
+            const auto until = std::chrono::steady_clock::now() + 1500ms;
+            while (std::chrono::steady_clock::now() < until)
+            {
+                rig.main.turn();
+                std::this_thread::sleep_for(1ms);
+            }
+            CHECK(audio.blocks > 0);
+        }
+
+        // As it was prepared, for the first notice, and once the second second's wait has passed at most.
+        CHECK(activations >= 2);
+        CHECK(activations <= 4);
+        CHECK(plugin->state() == Plugin::State::active);
+        rig.checkNoMisuse();
+    }
+}
+
+TEST_CASE("A notice that comes while one that changed nothing is waited out is still acted on once the wait is over",
+          "[timing]")
+{
+    Rig rig;
+    std::atomic<int> activations{0};
+    FakePluginFormat::Script once;
+    once.inside = [&](std::string_view call) {
+        if (call == "activate")
+            ++activations;
+    };
+    rig.fake.script("once", once);
+    auto plugin = rig.made("once");
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+
+    rig.fake.notify("once", PluginNotice::latency);
+    REQUIRE(rig.main.turnUntil([&] { return activations == 2; }, 2s));
+
+    // Nothing more comes from the plugin after this, so only the wait ending can bring it about.
+    rig.fake.notify("once", PluginNotice::buses);
+    rig.main.settle();
+    CHECK(activations == 2);
+    CHECK(rig.main.turnUntil([&] { return activations == 3; }, 5s));
+    CHECK(plugin->state() == Plugin::State::active);
+    rig.checkNoMisuse();
+}
+
+TEST_CASE("What a stuck plugin can still reach after the program lets it go stays alive")
+{
+    Rig rig;
+    std::timed_mutex held;
+    std::atomic<bool> stick{false}, inside{false};
+    FakePluginFormat::Script stuck;
+    stuck.inside = [&](std::string_view call) {
+        if (call == "process" && stick)
+        {
+            inside = true;
+            std::unique_lock wait(held);
+        }
+    };
+    rig.fake.script("stuck", stuck);
+
+    PluginHost quick{
+        {rig.main.post(), rig.main.isCurrent(), 100ms, [&rig](const std::string& what) { rig.wrong.push_back(what); }}};
+    auto plugin = quick.make(rig.fake, FakePluginFormat::describe("stuck"));
+    REQUIRE(rig.main.turnUntil([&] { return plugin->state() != Plugin::State::making; }));
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+
+    held.lock();
+    stick = true;
+
+    // The audio thread calling through a plain pointer, as a device's callback does.
+    std::thread audio([raw = plugin.get()] { static_cast<void>(playedOnes(*raw)); });
+    while (!inside)
+        std::this_thread::sleep_for(1ms);
+
+    CHECK_FALSE(plugin->prepare({44100.0, 64, false}));
+    CHECK(plugin->state() == Plugin::State::failed);
+
+    // The program lets it go. The plugin's own thread still says things, and its call at last returns.
+    plugin.reset();
+    rig.fake.notify("stuck", PluginNotice::latency);
+    rig.fake.notify("stuck", PluginNotice::values);
+    stick = false;
+    held.unlock();
+    audio.join();
+    rig.main.settle();
+    rig.fake.notify("stuck", PluginNotice::latency);
+    rig.main.settle();
+}
+
+TEST_CASE("A block holding a value that isn't a number plays as it came, and the plugin is reset and faded back in")
+{
+    for (const float bad : {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(),
+                            -std::numeric_limits<float>::infinity()})
+    {
+        CAPTURE(bad);
+        Rig rig;
+        std::atomic<bool> blown{false};
+        std::atomic<int> resets{0}, blocks{0};
+        FakePluginFormat::Script script;
+        script.gain = 0.5f;
+        script.afterBlock = [&](const PluginBlock& block) {
+            ++blocks;
+            if (blown)
+                block.outputs[1][3] = bad;
+        };
+        script.inside = [&](std::string_view call) {
+            if (call == "reset")
+            {
+                ++resets;
+                blown = false;
+            }
+        };
+        rig.fake.script("plugin", script);
+        Rig::Heard heard;
+        auto plugin = rig.made("plugin", &heard);
+        REQUIRE(plugin->prepare({48000.0, 64, false}));
+        CHECK(allAre(playedOnes(*plugin), 0.5f));
+        CHECK(plugin->notFiniteBlocks() == 0);
+
+        // The block it spoiled, and the next before the main thread has seen, as they came, the plugin left alone.
+        blown = true;
+        CHECK(allAre(playedOnes(*plugin), 1.0f));
+        const auto called = blocks.load();
+        CHECK(allAre(playedOnes(*plugin), 1.0f));
+        CHECK(blocks == called);
+
+        REQUIRE(rig.main.turnUntil([&] { return resets == 1 && heard.has(PluginChange::notFinite); }, 2s));
+        CHECK(plugin->notFiniteBlocks() == 1);
+        CHECK(plugin->state() == Plugin::State::active);
+
+        // Back from the audio as it came to the plugin's own, over its first block.
+        const auto fading = playedOnes(*plugin);
+        for (const auto& channel : fading)
+        {
+            CHECK(channel.front() > 0.9f);
+            CHECK(channel.back() < 0.51f);
+            CHECK(std::is_sorted(channel.rbegin(), channel.rend()));
+        }
+        CHECK(allAre(playedOnes(*plugin), 0.5f));
+        rig.checkNoMisuse();
+    }
+}
+
+TEST_CASE("Audio goes on through a plugin's reset for a value that isn't a number, never silent")
+{
+    Rig rig;
+    std::atomic<bool> blown{false};
+    std::atomic<int> resets{0};
+    FakePluginFormat::Script script;
+    script.afterBlock = [&](const PluginBlock& block) {
+        if (blown)
+            block.outputs[0][0] = std::numeric_limits<float>::quiet_NaN();
+    };
+    script.inside = [&](std::string_view call) {
+        if (call == "reset")
+        {
+            ++resets;
+            blown = false;
+            std::this_thread::sleep_for(5ms);
+        }
+    };
+    rig.fake.script("plugin", script);
+    auto plugin = rig.made("plugin");
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+
+    std::atomic<bool> running{true}, silent{false}, notANumber{false};
+    std::thread audio([&, raw = plugin.get()] {
+        while (running)
+        {
+            const auto played = playedOnes(*raw);
+            for (const auto& channel : played)
+                for (const auto sample : channel)
+                {
+                    silent = silent || sample == 0.0f;
+                    notANumber = notANumber || !std::isfinite(sample);
+                }
+            std::this_thread::sleep_for(100us);
+        }
+    });
+
+    for (int i = 0; i < 2; ++i)
+    {
+        blown = true;
+        const auto wanted = i + 1;
+        REQUIRE(rig.main.turnUntil([&] { return resets == wanted; }, 2s));
+        rig.main.settle();
+        std::this_thread::sleep_for(1100ms);
+    }
+    running = false;
+    audio.join();
+
+    CHECK_FALSE(silent);
+    CHECK_FALSE(notANumber);
+    CHECK(plugin->state() == Plugin::State::active);
+    rig.checkNoMisuse();
+}
+
+TEST_CASE("A plugin that goes on giving values that aren't numbers after being reset is switched off")
+{
+    Rig rig;
+    FakePluginFormat::Script script;
+    script.gain = 0.5f;
+    script.afterBlock = [](const PluginBlock& block) { block.outputs[0][0] = std::numeric_limits<float>::quiet_NaN(); };
+    rig.fake.script("plugin", script);
+    Rig::Heard heard;
+    auto plugin = rig.made("plugin", &heard);
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+
+    const auto until = std::chrono::steady_clock::now() + 2s;
+    while (plugin->state() != Plugin::State::failed && std::chrono::steady_clock::now() < until)
+    {
+        CHECK(allAre(playedOnes(*plugin), 1.0f));
+        rig.main.turn();
+        std::this_thread::sleep_for(1ms);
+    }
+
+    CHECK(plugin->state() == Plugin::State::failed);
+    rig.main.settle();
+    CHECK(heard.has(PluginChange::failed));
+    CHECK(allAre(playedOnes(*plugin), 1.0f));
+    rig.checkNoMisuse();
+}
+
+TEST_CASE("A value that isn't a number coming in isn't held against the plugin passing it on")
+{
+    Rig rig;
+    std::atomic<int> resets{0};
+    FakePluginFormat::Script script;
+    script.gain = 0.5f;
+    script.inside = [&](std::string_view call) {
+        if (call == "reset")
+            ++resets;
+    };
+    rig.fake.script("plugin", script);
+    Rig::Heard heard;
+    auto plugin = rig.made("plugin", &heard);
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+
+    const auto played = playedOnes(*plugin, 64, std::numeric_limits<float>::quiet_NaN());
+    CHECK(std::isnan(played[0][0]));
+    std::this_thread::sleep_for(50ms);
+    rig.main.settle();
+    CHECK(resets == 0);
+    CHECK_FALSE(heard.has(PluginChange::notFinite));
+    CHECK(plugin->notFiniteBlocks() == 0);
+    CHECK(allAre(playedOnes(*plugin), 0.5f));
 }

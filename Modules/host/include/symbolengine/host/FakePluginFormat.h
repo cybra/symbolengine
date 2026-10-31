@@ -51,6 +51,9 @@ public:
         /** Shown every block it is given, on the audio thread. */
         std::function<void(const PluginBlock&)> onBlock;
 
+        /** Shown every block once it has written its output, as a filter that has blown up spoils it. */
+        std::function<void(const PluginBlock&)> afterBlock;
+
         /** Fails to be made, or to be activated, saying so. */
         bool failToMake = false;
         bool failToActivate = false;

@@ -777,3 +777,22 @@ TEST_CASE("A VST3 module's plugins are listed as each declares itself, without m
     CHECK(none.empty());
     CHECK(error);
 }
+
+TEST_CASE("A value set on a VST3 plugin nothing has prepared is in the state taken of it, heard in another made from it")
+{
+    Rig rig;
+    auto plugin = rig.made(testIds::gain);
+    REQUIRE(plugin->setParameter(testIds::gainParameter, 0.25));
+    const auto saved = plugin->saveState(PluginStateUse::document);
+    REQUIRE(saved.has_value());
+    CHECK(plugin->state() == Plugin::State::inactive);
+
+    auto other = rig.made(testIds::gain);
+    REQUIRE(other->loadState(*saved, PluginStateUse::document));
+    REQUIRE(other->prepare({48000.0, 64, false}));
+    CHECK(through(*other, 64) == std::vector<float>{0.25f, 0.5f});
+
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+    CHECK(through(*plugin, 64) == std::vector<float>{0.25f, 0.5f});
+    CHECK(misuses().empty());
+}

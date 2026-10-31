@@ -6,7 +6,6 @@
 #include "ProcessState.h"
 #include "UnsafeCalls.h"
 
-#include "symbolengine/core/LockFreeFifo.h"
 
 #include <algorithm>
 #include <array>
@@ -38,8 +37,8 @@ thread_local bool insideProcess = false;
 
 // Bits of a plugin's pending notices the host keeps for itself: its own edits waiting, and values from the audio thread
 // waiting to be shown.
-constexpr std::uint32_t unsafeCallSeen = 1u << 28, audioFailed = 1u << 29, editsWaiting = 1u << 30,
-                        valuesWaiting = 1u << 31;
+constexpr std::uint32_t notFiniteSeen = 1u << 27, unsafeCallSeen = 1u << 28, audioFailed = 1u << 29,
+                        editsWaiting = 1u << 30, valuesWaiting = 1u << 31;
 
 // Runs a call held by address, for guarded().
 template <typename Call>
@@ -114,6 +113,17 @@ struct PluginHost::Shared : std::enable_shared_from_this<PluginHost::Shared>
     void enqueue(std::weak_ptr<Plugin::Inner> plugin, PluginFormat& format);
     void makeNext();
     void sweepNotices();
+
+    // The earliest a notice put off is due, on the steady clock, which the watcher looks out for; 0 for none.
+    std::atomic<std::int64_t> noticesDue{0};
+
+    void noticesDueAt(std::int64_t at) noexcept
+    {
+        for (auto earliest = noticesDue.load();
+             (earliest == 0 || at < earliest) && !noticesDue.compare_exchange_weak(earliest, at);)
+        {
+        }
+    }
 
     // Each plugin's description by its number, from when it is made until 64 more have gone after it.
     std::mutex namesLock;
@@ -200,11 +210,9 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     bool activated = false;   // whether the plugin itself is active, which a failed one may still be
     std::vector<std::function<void()>> waiting;
 
-    // Its parameters and their values as the host knows them, and changes its processing hasn't yet heard, kept while
-    // nothing plays it.
+    // Its parameters and their values as the host knows them.
     std::vector<PluginParameter> parameterList;
     std::map<std::uint32_t, double> values;
-    std::vector<PluginParameterChange> unheard;
 
     // Whether it took a state while it wasn't prepared, which it may apply only once it is.
     bool readValuesOncePrepared = false;
@@ -224,13 +232,14 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
         return room;
     }();
 
-    // The parameters as the audio thread knows them, each with the last value the program's automation gave it and
-    // the last its processing reported, kept for the main thread to show. A new table is swapped in when they change,
-    // the old ones kept until the audio thread is next out of the plugin.
+    // The parameters as the audio thread knows them, each with the latest value for its processing to hear, and the
+    // last value the program's automation gave it and the last its processing reported, kept for the main thread to
+    // show. A new table is swapped in when they change, the old ones kept until the audio thread is next out of the
+    // plugin.
     struct Slot
     {
-        std::atomic<double> automated{0.0}, reported{0.0};
-        std::atomic<bool> automatedWaiting{false}, reportedWaiting{false};
+        std::atomic<double> wanted{0.0}, automated{0.0}, reported{0.0};
+        std::atomic<bool> wantedWaiting{false}, automatedWaiting{false}, reportedWaiting{false};
     };
 
     struct Table
@@ -260,10 +269,11 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     std::vector<const float*> inputPointers;
     std::vector<float*> outputPointers;
 
-    // Changes the main thread sets for the audio thread to give the plugin with its next block, never locked or waited
-    // on, and the count of blocks played, by which the main thread knows a block has carried them.
+    // Whether any parameter has a value waiting for its processing to hear, so a block looks through them only then;
+    // how many of those one block carries, the rest following with the next; and the count of blocks played, by which
+    // the main thread knows a block has carried them.
+    std::atomic<bool> valuesWanted{false};
     static constexpr std::size_t changesPerBlock = 1024;
-    LockFreeFifo<PluginParameterChange> toAudio{changesPerBlock};
     std::vector<PluginParameterChange> blockChanges =
         std::vector<PluginParameterChange>(static_cast<std::size_t>(maximumBlockChanges));
     std::vector<PluginParameterChange> reportedRoom = std::vector<PluginParameterChange>(256);
@@ -343,9 +353,20 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     bool editorOpen = false;
     PluginEditorFrame* editorFrame = nullptr;
 
-    // Notices, recorded from any thread and acted on from the main thread.
+    // Notices, recorded from any thread and acted on from the main thread. When a latency or bus notice may next
+    // deactivate and activate it, after that changed nothing, and how many in a row did so.
     std::atomic<std::uint32_t> pending{0};
     std::atomic<bool> noticeScheduled{false};
+    std::int64_t cycleAgainAt = 0;
+    int fruitlessCycles = 0;
+
+    // Blocks it spoiled with values that aren't numbers, which pass it by while it is reset, even while it is held; and
+    // how often that has been done lately, since one still doing it isn't put right by another.
+    std::atomic<std::int64_t> notFiniteCount{0};
+    std::atomic<bool> notFinite{false}, fadingIn{false};
+    std::int64_t lastSpoiledReset = 0;
+    int spoiledResets = 0;
+    static constexpr int mostSpoiledResets = 3;
 
     void notice(PluginNotice what) noexcept override
     {
@@ -590,10 +611,6 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
             std::this_thread::sleep_for(std::chrono::microseconds(200));
         }
 
-        // What the audio thread didn't take waits for the next block or a flush; with it out, this thread reads it.
-        for (PluginParameterChange change; toAudio.pop(change);)
-            keepUnheard(change);
-
         // Tables the audio thread can no longer be reading.
         std::erase_if(tables, [this](const std::unique_ptr<Table>& old) { return old.get() != table.load(); });
 
@@ -607,26 +624,77 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     // passes as it came again.
     void endHold() { holding = false; }
 
-    void keepUnheard(const PluginParameterChange& change)
+    // Takes values waiting for its processing to hear, at most those there is room for, the rest left for next time.
+    std::size_t takeWanted(const Table& from, PluginParameterChange* into, std::size_t room) noexcept
     {
-        const auto same = std::find_if(unheard.begin(), unheard.end(),
-                                       [&change](const PluginParameterChange& kept) { return kept.id == change.id; });
+        std::size_t taken = 0;
 
-        if (same != unheard.end())
-            same->value = change.value;
-        else
-            unheard.push_back({change.id, 0, change.value});
+        for (std::size_t i = 0; i < from.ids.size(); ++i)
+        {
+            auto& slot = from.slots[i];
+
+            if (!slot.wantedWaiting.load())
+                continue;
+
+            if (taken == room)
+            {
+                valuesWanted = true;
+                break;
+            }
+
+            slot.wantedWaiting = false;
+            into[taken++] = {from.ids[i], 0, slot.wanted.load()};
+        }
+
+        return taken;
     }
 
     // Hands the plugin's processing what it hasn't heard, while it is active and nothing plays it.
     bool flushUnheard()
     {
-        if (unheard.empty() || state != State::active)
+        const auto* const now = table.load();
+
+        if (now == nullptr || state != State::active)
             return true;
 
-        auto changes = std::move(unheard);
-        unheard.clear();
-        return call("flush", [&] { instance->flush(changes.data(), static_cast<int>(changes.size())); });
+        std::vector<PluginParameterChange> changes;
+
+        while (valuesWanted.exchange(false))
+        {
+            changes.resize(static_cast<std::size_t>(maximumBlockChanges));
+            changes.resize(takeWanted(*now, changes.data(), changes.size()));
+
+            if (!changes.empty() &&
+                !call("flush", [&] { instance->flush(changes.data(), static_cast<int>(changes.size())); }))
+                return false;
+        }
+
+        return true;
+    }
+
+    // Hands over what it hasn't heard while nothing has prepared it, for a format whose plugin hears values only in
+    // processing, by preparing it for as long as that takes.
+    bool flushUnprepared()
+    {
+        const bool fine = activate() && flushUnheard();
+
+        if (activated)
+            deactivate();
+
+        if (state != State::failed)
+            state = State::inactive;
+
+        return fine;
+    }
+
+    // Lets go of every value waiting to be heard, with nothing playing it.
+    void forgetWanted()
+    {
+        valuesWanted = false;
+
+        if (const auto* const now = table.load())
+            for (std::size_t i = 0; i < now->ids.size(); ++i)
+                now->slots[i].wantedWaiting = false;
     }
 
     // The values it holds now.
@@ -655,6 +723,18 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
         std::sort(made->ids.begin(), made->ids.end());
         made->ids.erase(std::unique(made->ids.begin(), made->ids.end()), made->ids.end());
         made->slots = std::make_unique<Slot[]>(made->ids.size());
+
+        // Values not yet heard go with them.
+        if (const auto* const old = table.load())
+            for (std::size_t i = 0; i < old->ids.size(); ++i)
+                if (auto* const slot = made->find(old->ids[i]);
+                    old->slots[i].wantedWaiting.exchange(false) && slot != nullptr)
+                {
+                    slot->wanted = old->slots[i].wanted.load();
+                    slot->wantedWaiting = true;
+                    valuesWanted = true;
+                }
+
         table = made.get();
         tables.push_back(std::move(made));
     }
@@ -675,11 +755,82 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
         return fine;
     }
 
-    // To the audio thread while it may be playing the plugin; kept for a flush while nothing does.
-    void giveToAudio(const PluginParameterChange& change)
+    // A value for its processing to hear, by its next block or, while nothing plays it, by a flush. Only the latest of
+    // each parameter is kept, so however many are set none is left out, and none comes back after a later one.
+    void giveToAudio(std::uint32_t id, double value)
     {
-        if (!accepting || !toAudio.push(change))
-            keepUnheard(change);
+        const auto* const now = table.load();
+
+        if (auto* const slot = now != nullptr ? now->find(id) : nullptr)
+        {
+            slot->wanted = value;
+            slot->wantedWaiting = true;
+            valuesWanted = true;
+        }
+    }
+
+    // Automation given while nothing plays it, from the audio thread: heard once something does, and shown.
+    void keepAutomation(const PluginParameterChange* changes, int count) noexcept
+    {
+        const auto* const known = table.load();
+        bool kept = false;
+
+        for (int i = 0; known != nullptr && i < count; ++i)
+            if (auto* const slot = known->find(changes[i].id))
+            {
+                slot->wanted = changes[i].value;
+                slot->wantedWaiting = true;
+                slot->automated = changes[i].value;
+                slot->automatedWaiting = true;
+                kept = true;
+            }
+
+        if (kept)
+        {
+            valuesWanted = true;
+            pending.fetch_or(valuesWaiting);
+            host->audioNotices = true;
+        }
+    }
+
+    // A block it played holds a value that isn't a number, from the audio thread: that block and those after it pass
+    // it by until the main thread has reset it.
+    void spoiled() noexcept
+    {
+        notFinite = true;
+        accepting = false;
+        notFiniteCount.fetch_add(1, std::memory_order_relaxed);
+        pending.fetch_or(notFiniteSeen);
+        host->audioNotices = true;
+        host->wakeWatcher();
+    }
+
+    // Resets one that spoiled a block, the audio going on as it came throughout, unless it does so again and again.
+    void answerSpoiled()
+    {
+        const auto now = nanosecondsNow();
+        constexpr std::int64_t soon = 1'000'000'000;
+        spoiledResets = now - lastSpoiledReset < soon ? spoiledResets + 1 : 1;
+        lastSpoiledReset = now;
+
+        if (spoiledResets > mostSpoiledResets)
+        {
+            notFinite = false;
+            fail("process", "It went on giving values that aren't numbers after being reset.");
+            return;
+        }
+
+        tell(PluginChange::notFinite);
+        notFinite = true;
+
+        if (!hold() || !call("reset", [this] { instance->reset(); }))
+            return;
+
+        fadingIn = true;
+        open();
+
+        // After open, so the audio thread sees no hold with this cleared, which would be silent.
+        notFinite = false;
     }
 
     void tellEdit(const PluginEdit& edit, bool byUser)
@@ -742,7 +893,7 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
             if (edit.kind == PluginEdit::Kind::value)
             {
                 values[edit.id] = edit.value;
-                giveToAudio({edit.id, 0, edit.value});
+                giveToAudio(edit.id, edit.value);
                 double shown = edit.value;
 
                 if (!call("parameterValue", [&] { shown = instance->parameterValue(edit.id); }))
@@ -778,6 +929,9 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
         if (!call("prepare", [&] { done = instance->activate(setup, error); }))
             return false;
 
+        // A plugin may say its latency changed from inside these calls, which the reading below answers. Answering it
+        // with another activation would bring the same notice again, for ever.
+        pending.fetch_and(~static_cast<std::uint32_t>(PluginNotice::latency));
         activated = done;
 
         if (!done)
@@ -894,7 +1048,18 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
             return;
         }
 
-        const auto raw = pending.exchange(0);
+        auto raw = pending.exchange(0);
+        constexpr auto cycling =
+            static_cast<std::uint32_t>(PluginNotice::latency) | static_cast<std::uint32_t>(PluginNotice::buses);
+
+        // Waited out after one that changed nothing, as a plugin can say so from what the activation itself brings on.
+        if ((raw & cycling) != 0 && nanosecondsNow() < cycleAgainAt)
+        {
+            pending.fetch_or(raw & cycling);
+            host->noticesDueAt(cycleAgainAt);
+            raw &= ~cycling;
+        }
+
         const auto what = static_cast<PluginNotice>(raw);
 
         if (const auto* const step = audioFailure.exchange(nullptr); step != nullptr && state != State::failed)
@@ -909,6 +1074,9 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
 
         if ((raw & unsafeCallSeen) != 0)
             tell(PluginChange::unsafeCall);
+
+        if ((raw & notFiniteSeen) != 0 && state == State::active)
+            answerSpoiled();
 
         if ((raw & valuesWaiting) != 0)
             showAudioValues();
@@ -976,6 +1144,19 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
 
             if (has(what, PluginNotice::latency) || std::make_pair(latency, tail) != before)
                 tell(PluginChange::latency);
+
+            if (layout == layoutBefore && std::make_pair(latency, tail) == before)
+            {
+                constexpr std::int64_t second = 1'000'000'000;
+                constexpr int mostDoublings = 6;
+                cycleAgainAt = nanosecondsNow() + (second << std::min(fruitlessCycles, mostDoublings));
+                ++fruitlessCycles;
+            }
+            else
+            {
+                cycleAgainAt = 0;
+                fruitlessCycles = 0;
+            }
         }
 
         if (has(what, PluginNotice::parameters) || has(what, PluginNotice::values))
@@ -997,6 +1178,14 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
             tell(PluginChange::editor);
     }
 
+    // Still inside a process call it never returned from, or crashed: its threads and timers may still run, and return
+    // into what they were given or call back through it. So none of it is ever freed, and nothing calls it again.
+    void keepForever()
+    {
+        static auto* const kept = new std::vector<std::shared_ptr<Inner>>();
+        kept->push_back(shared_from_this());
+    }
+
     // Taken down in order on the main thread: processing stopped, reset, deactivated, taken apart.
     void takeDown()
     {
@@ -1005,17 +1194,9 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
         if (instance == nullptr)
             return;
 
-        if ((state == State::failed && inProcess) || crashed)
+        if (((state == State::failed && inProcess) || crashed) || !hold())
         {
-            // Still inside a process call it never returned from, or crashed: its memory is kept, never freed under
-            // that call, and nothing calls it again.
-            static_cast<void>(instance.release());
-            return;
-        }
-
-        if (!hold())
-        {
-            static_cast<void>(instance.release());
+            keepForever();
             return;
         }
 
@@ -1138,6 +1319,12 @@ PluginHost::PluginHost(Options options) : shared(std::make_shared<Shared>())
 
             if (host == nullptr || host->stopping)
                 return;
+
+            if (const auto due = host->noticesDue.load(); due != 0 && nanosecondsNow() >= due)
+            {
+                host->noticesDue = 0;
+                host->audioNotices = true;
+            }
 
             if (host->audioNotices.exchange(false))
                 host->post([host] { host->sweepNotices(); });
@@ -1388,6 +1575,11 @@ bool Plugin::reset()
     return inner->state == State::active;
 }
 
+std::int64_t Plugin::notFiniteBlocks() const
+{
+    return inner->notFiniteCount.load(std::memory_order_relaxed);
+}
+
 int Plugin::latency() const
 {
     return inner->latency;
@@ -1407,17 +1599,22 @@ std::optional<std::string> Plugin::saveState(PluginStateUse use)
     // state is taken after that block; otherwise, or if no block comes, they are handed over with nothing playing.
     auto& held = *inner;
 
-    if (held.accepting && held.toAudio.readable() > 0)
+    if (held.accepting && held.valuesWanted)
     {
         const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
         const auto before = held.blocksPlayed.load();
 
         while (held.accepting && std::chrono::steady_clock::now() < until &&
-               (held.toAudio.readable() > 0 || held.blocksPlayed.load() <= before))
+               (held.valuesWanted || held.blocksPlayed.load() <= before))
             std::this_thread::sleep_for(std::chrono::microseconds(200));
     }
 
-    if (held.toAudio.readable() > 0 || !held.unheard.empty())
+    if (held.valuesWanted && held.state == State::inactive)
+    {
+        if (!held.instance->takesValuesUnprepared() && !held.flushUnprepared() && held.state == State::failed)
+            return std::nullopt;
+    }
+    else if (held.valuesWanted)
     {
         const bool wasAccepting = held.accepting;
 
@@ -1474,7 +1671,7 @@ bool Plugin::loadState(std::string_view state, PluginStateUse use)
     else
     {
         // It says what the plugin holds now, so values set before it give way to it.
-        inner->unheard.clear();
+        inner->forgetWanted();
         inner->readValues();
         inner->readValuesOncePrepared = !active;
     }
@@ -1526,7 +1723,7 @@ bool Plugin::setParameter(std::uint32_t id, double value)
     if (!inner->show(id, value))
         return false;
 
-    inner->giveToAudio({id, 0, value});
+    inner->giveToAudio(id, value);
     return true;
 }
 
@@ -1559,6 +1756,24 @@ void Plugin::whenFree(std::function<void()> then)
         then();
 }
 
+namespace
+{
+// Whether every sample of a block is a number and finite: checked for every block, so by its bits, which a compiler can
+// do many at a time.
+bool allFinite(const std::vector<std::vector<float>>& buffers, int frames) noexcept
+{
+    constexpr std::uint32_t exponent = 0x7F800000;
+    std::uint32_t found = 0;
+
+    for (const auto& buffer : buffers)
+        for (int i = 0; i < frames; ++i)
+            found |= static_cast<std::uint32_t>(
+                (std::bit_cast<std::uint32_t>(buffer[static_cast<std::size_t>(i)]) & exponent) == exponent);
+
+    return found == 0;
+}
+}
+
 void Plugin::process(float* const* channels, int channelCount, int frames) noexcept
 {
     process(channels, channelCount, frames, nullptr, 0);
@@ -1578,7 +1793,9 @@ void Plugin::process(float* const* channels, int channelCount, int frames, const
 
     if (!held.accepting)
     {
-        if (held.holding)
+        held.keepAutomation(changes, changeCount);
+
+        if (held.holding && !held.notFinite)
             for (int c = 0; c < channelCount; ++c)
                 std::fill_n(channels[c], frames, 0.0f);
 
@@ -1620,10 +1837,13 @@ void Plugin::process(float* const* channels, int channelCount, int frames, const
         for (auto& output : held.outputs)
             std::fill_n(output.begin(), count, 0.0f);
 
-        // The changes the main thread set since the last block, at the start of this one, then the program's that fall
+        // The values the main thread set since the last block, at the start of this one, then the program's that fall
         // in it, at their frames within it, each kept to be shown to the plugin; any for a parameter it doesn't have
         // passed over.
-        auto given = offset == 0 ? held.toAudio.read(held.blockChanges.data(), Inner::changesPerBlock) : 0;
+        std::size_t given = 0;
+
+        if (offset == 0 && known != nullptr && held.valuesWanted.exchange(false))
+            given = held.takeWanted(*known, held.blockChanges.data(), Inner::changesPerBlock);
 
         for (; next < changeCount && std::clamp(changes[next].offset, 0, frames - 1) < offset + count; ++next)
         {
@@ -1698,9 +1918,39 @@ void Plugin::process(float* const* channels, int channelCount, int frames, const
         if (!fine || outs == 0)
             continue;
 
+        // So is one holding a value that isn't a number, which would stay in whatever it reached from then on. One that
+        // came in with the audio isn't held against it.
+        if (!allFinite(held.outputs, count))
+        {
+            if (allFinite(held.inputs, count))
+            {
+                held.spoiled();
+                going = false;
+            }
+
+            continue;
+        }
+
+        // Back from a reset, from the audio as it came to its own, over this block.
+        const bool fading = held.fadingIn.exchange(false, std::memory_order_relaxed);
+
         for (int c = 0; c < channelCount; ++c)
-            std::copy_n(held.outputs[static_cast<std::size_t>(std::min(c, outs - 1))].begin(), count,
-                        channels[c] + offset);
+        {
+            const auto& from = held.outputs[static_cast<std::size_t>(std::min(c, outs - 1))];
+
+            if (!fading)
+            {
+                std::copy_n(from.begin(), count, channels[c] + offset);
+                continue;
+            }
+
+            for (int i = 0; i < count; ++i)
+            {
+                const auto share = static_cast<float>(i + 1) / static_cast<float>(count);
+                auto& sample = channels[c][offset + i];
+                sample += (from[static_cast<std::size_t>(i)] - sample) * share;
+            }
+        }
     }
 
     if (valuesKept)

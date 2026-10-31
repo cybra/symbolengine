@@ -60,6 +60,11 @@ enum class PluginChange
         folder, which was put back. */
     processState,
 
+    /** Its output held a value that isn't a number, or is infinite, from audio that didn't. That block played as it
+        came, as do those until it has been reset, and it is faded back in; one that goes on doing so soon after being
+        reset is switched off, as PluginChange::failed says. */
+    notFinite,
+
     /** It made a call on the audio thread from somewhere it hadn't before that a real-time thread never should, where
         the host watches for them (PluginHost::Options::watchUnsafeCalls): unsafeCalls() lists them. */
     unsafeCall,
@@ -279,6 +284,9 @@ public:
 
     /** Clears what it holds of audio already played, keeping its settings. */
     bool reset();
+
+    /** How many blocks it has spoiled with values that aren't numbers, as PluginChange::notFinite says. */
+    std::int64_t notFiniteBlocks() const;
 
     /** Its latency and tail in frames, as read when it was last prepared. */
     int latency() const;

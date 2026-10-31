@@ -215,8 +215,10 @@ public:
 
     /** Says a folder of plugins was read through, its subfolders included, and what files were found there: files the
         list holds in it that weren't found leave it, and those found are connected again. A folder no longer scanned
-        is read with nothing found. */
-    void folderRead(const std::filesystem::path& folder, const std::vector<std::filesystem::path>& found);
+        is read with nothing found. Files in any part of it that couldn't be read are kept as they were, marked as not
+        connected. */
+    void folderRead(const std::filesystem::path& folder, const std::vector<std::filesystem::path>& found,
+                    const std::vector<std::filesystem::path>& unreadable = {});
 
     /** Says a folder of plugins can't be read, as on a drive that isn't connected: its files are kept as they were,
         marked as not connected. */

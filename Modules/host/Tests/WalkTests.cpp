@@ -7,6 +7,7 @@
 #include <symbolengine/core/Paths.h>
 #include <symbolengine/core/System.h>
 #include <symbolengine/core/Text.h>
+#include <symbolengine/host/FakePluginFormat.h>
 #include <symbolengine/host/PluginScanner.h>
 #include <symbolengine/host/Vst3Format.h>
 
@@ -706,3 +707,97 @@ TEST_CASE("Damaged manifests cost a module nothing but the time of loading its c
     look("\xEF\xBB");
     look(",");
 }
+
+namespace
+{
+// A list for a walk alone, with nothing scanned: what the fake format finds, as found.
+struct Listing
+{
+    ScratchFolder scratch;
+    TestMainThread main;
+    FakePluginFormat fake{main.isCurrent(), main.post()};
+    PluginList list{[this] {
+        PluginList::Options options;
+        options.file = scratch.path / "list.json";
+        return options;
+    }()};
+
+    std::filesystem::path plugin(const std::filesystem::path& relative)
+    {
+        const auto file = scratch.path / "plugins" / relative;
+        std::filesystem::create_directories(file.parent_path());
+        files::writeSafely(file, "plugin");
+        const auto real = std::filesystem::canonical(file);
+        PluginFile record;
+        record.path = real;
+        record.format = "Fake";
+        list.record(record);
+        return real;
+    }
+};
+}
+
+TEST_CASE("Nothing said of a folder with no name touches the list")
+{
+    Listing listing;
+    const auto kept = listing.plugin("A.fake");
+
+    listing.list.folderRead({}, {});
+    REQUIRE(listing.list.file(kept));
+    CHECK(listing.list.file(kept)->connected);
+    listing.list.folderUnreadable({});
+    REQUIRE(listing.list.file(kept));
+    CHECK(listing.list.file(kept)->connected);
+}
+
+#if !defined(_WIN32)
+TEST_CASE("A folder a walk can't reach, under a folder it may not enter, costs the list nothing elsewhere")
+{
+    Listing listing;
+    const auto kept = listing.plugin("A.fake");
+    const auto elsewhere = listing.plugin("Vendor/B.fake");
+
+    const auto denied = listing.scratch.path / "denied";
+    std::filesystem::create_directories(denied / "VST3");
+    std::filesystem::permissions(denied, std::filesystem::perms::none);
+    PluginScanner::walk({{&listing.fake, {denied / "VST3", true}}}, listing.list);
+    std::filesystem::permissions(denied, std::filesystem::perms::owner_all);
+
+    REQUIRE(listing.list.file(kept));
+    CHECK(listing.list.file(kept)->connected);
+    REQUIRE(listing.list.file(elsewhere));
+    CHECK(listing.list.file(elsewhere)->connected);
+    CHECK(listing.list.files().size() == 2);
+}
+
+TEST_CASE("A subfolder a walk can't read keeps its plugins, not connected, until it can")
+{
+    Listing listing;
+    const auto open = listing.plugin("Open/A.fake");
+    const auto locked = listing.plugin("Locked/B.fake");
+    const auto gone = listing.plugin("Open/C.fake");
+    const auto top = std::filesystem::canonical(listing.scratch.path / "plugins");
+    const std::vector<PluginScanFolder> folders{{&listing.fake, {top, true}}};
+
+    std::filesystem::remove(gone);
+    std::filesystem::permissions(top / "Locked", std::filesystem::perms::none);
+    const auto walked = PluginScanner::walk(folders, listing.list);
+    std::filesystem::permissions(top / "Locked", std::filesystem::perms::owner_all);
+
+    CHECK_FALSE(listing.list.file(gone));
+    REQUIRE(listing.list.file(open));
+    CHECK(listing.list.file(open)->connected);
+    REQUIRE(listing.list.file(locked));
+    CHECK_FALSE(listing.list.file(locked)->connected);
+    CHECK(walked.files.size() == 1);
+
+    PluginScanner::walk(folders, listing.list);
+    REQUIRE(listing.list.file(locked));
+    CHECK(listing.list.file(locked)->connected);
+
+    // Really gone, once it can be seen to be.
+    std::filesystem::remove(locked);
+    PluginScanner::walk(folders, listing.list);
+    CHECK_FALSE(listing.list.file(locked));
+}
+#endif

@@ -263,6 +263,9 @@ public:
             if (block.reportedCount < block.reportedRoom)
                 block.reported[block.reportedCount++] = report;
 
+        if (script.afterBlock != nullptr)
+            script.afterBlock(block);
+
         return true;
     }
 

@@ -116,7 +116,7 @@ Make one `PluginWindows` and give it to each window through `PluginWindow::Optio
 
 ## When a plugin fails
 
-An exception from a plugin never reaches your program: the plugin is switched off, `problem()` says why, and `onChange` tells you with `PluginChange::failed`. A plugin that doesn't leave a process call within `audioLimit` is left out of the audio and never called again, `PluginChange::stuck`.
+An exception from a plugin never reaches your program: the plugin is switched off, `problem()` says why, and `onChange` tells you with `PluginChange::failed`. A plugin that doesn't leave a process call within `audioLimit` is left out of the audio and never called again, `PluginChange::stuck`. A plugin whose output holds a value that isn't a number, from audio that held none, has that block played as it came, as those after it are while it is reset, and it then fades back in; `PluginChange::notFinite` says so and `notFiniteBlocks()` counts them, and one that goes on doing it is switched off.
 
 A crash differs by system. On Windows every call into a plugin is guarded, so a crash switches the plugin off and `PluginChange::crashed` says which call. Your process can no longer be trusted by then, so save the document to a new file and ask the user to restart. On a Mac and Linux a crash ends the program.
 

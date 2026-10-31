@@ -1080,8 +1080,9 @@ private:
     std::atomic<int> numerator{0}, denominator{0}, stops{0};
 };
 
-// One object with both parts, whose latency is 0 until it is active, 256 once it is, and 512 after its twentieth
-// block, which it says from its process call, on the audio thread, as some plugins do.
+// One object with both parts, whose latency is 0 until it is active, 256 once it is, and 512 after its two hundredth
+// block, which it says from its process call, on the audio thread, as some plugins do. Before that it says the titles
+// of its buses changed, for which it shouldn't be activated again.
 class Latency : public SingleComponentEffect
 {
 public:
@@ -1100,15 +1101,22 @@ public:
 
     tresult PLUGIN_API setActive(TBool state) override
     {
+        if (state && activations++ > 0 && blocks < latencyChangesAt)
+            misuse("Latency", "activated again, when only the titles of its buses had changed");
+
         active = state;
         return SingleComponentEffect::setActive(state);
     }
 
-    uint32 PLUGIN_API getLatencySamples() override { return !active ? 0u : blocks >= 20 ? 512u : 256u; }
+    uint32 PLUGIN_API getLatencySamples() override { return !active ? 0u : blocks >= latencyChangesAt ? 512u : 256u; }
 
     tresult PLUGIN_API process(ProcessData& data) override
     {
-        if (++blocks == 20 && componentHandler != nullptr)
+        const int block = ++blocks;
+
+        if (componentHandler != nullptr && block == 5)
+            componentHandler->restartComponent(kIoTitlesChanged);
+        else if (componentHandler != nullptr && block == latencyChangesAt)
             componentHandler->restartComponent(kLatencyChanged);
 
         const int32 channels = data.numOutputs > 0 && data.numInputs > 0 ? data.outputs[0].numChannels : 0;
@@ -1121,7 +1129,8 @@ public:
     }
 
 private:
-    std::atomic<int> initializations{0}, blocks{0};
+    static constexpr int latencyChangesAt = 200;
+    std::atomic<int> initializations{0}, blocks{0}, activations{0};
     std::atomic<bool> active{false};
 };
 

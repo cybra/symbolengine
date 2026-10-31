@@ -452,6 +452,10 @@ public:
     virtual void showParameterValue(std::uint32_t id, double value) = 0;
     virtual std::string parameterText(std::uint32_t id, double value) = 0;
 
+    /** Whether a value it is shown while it isn't active is one its processing holds from then on, and its state with
+        it, so nothing need be prepared for it to be heard. */
+    virtual bool takesValuesUnprepared() const { return false; }
+
     /** Its state for the use, or nothing with the error set; and giving it back, while it is inactive or active. */
     virtual std::optional<std::string> state(PluginStateUse use, PluginError& error) = 0;
     virtual bool setState(std::string_view state, PluginStateUse use, PluginError& error) = 0;
