@@ -796,3 +796,19 @@ TEST_CASE("A value set on a VST3 plugin nothing has prepared is in the state tak
     CHECK(through(*plugin, 64) == std::vector<float>{0.25f, 0.5f});
     CHECK(misuses().empty());
 }
+
+TEST_CASE(
+    "Values handed over with no audio playing go to a VST3 plugin in its processing state, as every process call does")
+{
+    Rig rig;
+    auto plugin = rig.made(testIds::gain);
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+    const auto parameters = plugin->parameters();
+    REQUIRE_FALSE(parameters.empty());
+
+    // Saved with a value not yet heard, which a block of nothing hands over.
+    REQUIRE(plugin->setParameter(parameters.front().id, 0.25));
+    CHECK(plugin->saveState(PluginStateUse::document).has_value());
+    CHECK(misuses().empty());
+    CHECK(rig.wrong.empty());
+}

@@ -55,10 +55,20 @@ struct PluginWindow::Impl final : PluginEditorFrame
     {
         // The editor goes while the window and its view are whole, then the window, then the view.
         *alive = false;
+        const bool crashed = editor != nullptr && editor->plugin()->hasCrashed();
         editor.reset();
         look.reset();
 
         const pluginWindowNative::Awareness awareness;
+
+        // A plugin that crashed keeps its windows, hidden, for as long as the process lasts: closing them calls its own code
+        // for each, as the system closes its children.
+        if (crashed)
+        {
+            window->setVisible(false);
+            static_cast<void>(window.release());
+            return;
+        }
 
         if (page != nullptr)
         {

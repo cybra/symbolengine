@@ -1226,3 +1226,130 @@ TEST_CASE("A value that isn't a number coming in isn't held against the plugin p
     CHECK(plugin->notFiniteBlocks() == 0);
     CHECK(allAre(playedOnes(*plugin), 0.5f));
 }
+
+TEST_CASE("A plugin that hangs in its process call is named and left out, with nothing else having to ask")
+{
+    Rig rig;
+    std::timed_mutex held;
+    std::atomic<bool> stick{false};
+    FakePluginFormat::Script stuck;
+    stuck.inside = [&](std::string_view call) {
+        if (call == "process" && stick)
+            std::unique_lock wait(held);
+    };
+    rig.fake.script("stuck", stuck);
+
+    PluginHost quick{
+        {rig.main.post(), rig.main.isCurrent(), 200ms, [&rig](const std::string& what) { rig.wrong.push_back(what); }}};
+    auto plugin = quick.make(rig.fake, FakePluginFormat::describe("stuck"));
+    Rig::Heard heard;
+    plugin->onChange = [&heard](PluginChange change) { heard.changes.push_back(change); };
+    REQUIRE(rig.main.turnUntil([&] { return plugin->state() != Plugin::State::making; }));
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+
+    held.lock();
+    stick = true;
+    {
+        AudioThread audio(plugin);
+        CHECK(rig.main.turnUntil([&] { return heard.has(PluginChange::stuck); }, 3s));
+        CHECK(plugin->state() == Plugin::State::failed);
+        CHECK_FALSE(plugin->problem().message.empty());
+        stick = false;
+        held.unlock();
+    }
+}
+
+TEST_CASE("A slow block rendered offline isn't taken for a plugin stuck in its process call")
+{
+    Rig rig;
+    std::atomic<bool> slow{false};
+    FakePluginFormat::Script script;
+    script.inside = [&](std::string_view call) {
+        if (call == "process" && slow)
+            std::this_thread::sleep_for(600ms);
+    };
+    rig.fake.script("slow", script);
+
+    PluginHost quick{
+        {rig.main.post(), rig.main.isCurrent(), 100ms, [&rig](const std::string& what) { rig.wrong.push_back(what); }}};
+    auto plugin = quick.make(rig.fake, FakePluginFormat::describe("slow"));
+    Rig::Heard heard;
+    plugin->onChange = [&heard](PluginChange change) { heard.changes.push_back(change); };
+    REQUIRE(rig.main.turnUntil([&] { return plugin->state() != Plugin::State::making; }));
+    REQUIRE(plugin->prepare({48000.0, 64, true}));
+
+    slow = true;
+    {
+        AudioThread audio(plugin);
+        std::this_thread::sleep_for(100ms);
+        rig.main.turnUntil([] { return false; }, 700ms);
+
+        // Taken out of processing in the middle of one, which it waits for.
+        CHECK(plugin->prepare({48000.0, 128, true}));
+    }
+    CHECK(plugin->state() != Plugin::State::failed);
+    CHECK_FALSE(heard.has(PluginChange::stuck));
+}
+
+TEST_CASE("A plugin whose processing waits on the main thread can still be taken out of processing")
+{
+    Rig rig;
+    std::atomic<bool> wait{false}, heard{false};
+    FakePluginFormat::Script script;
+    script.inside = [&](std::string_view call) {
+        if (call == "process" && wait.exchange(false))
+        {
+            rig.main.post()([&] { heard = true; });
+            while (!heard)
+                std::this_thread::sleep_for(1ms);
+        }
+    };
+    rig.fake.script("waits", script);
+
+    PluginHost::Options options{rig.main.post(), rig.main.isCurrent(), 1000ms,
+                                [&rig](const std::string& what) { rig.wrong.push_back(what); }};
+    options.turn = [&rig] { rig.main.turn(); };
+    PluginHost patient{options};
+    auto plugin = patient.make(rig.fake, FakePluginFormat::describe("waits"));
+    REQUIRE(rig.main.turnUntil([&] { return plugin->state() != Plugin::State::making; }));
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+
+    {
+        AudioThread audio(plugin);
+        std::this_thread::sleep_for(50ms);
+        wait = true;
+        std::this_thread::sleep_for(50ms);
+
+        // Only the run loop this waits with can let the plugin go on.
+        CHECK(plugin->prepare({44100.0, 64, false}));
+    }
+    CHECK(heard);
+    CHECK(plugin->state() != Plugin::State::failed);
+}
+
+TEST_CASE("Values changing many times reads the values, and never the list of parameters again")
+{
+    Rig rig;
+    FakePluginFormat::Script script;
+    PluginParameter one;
+    one.id = 1;
+    one.name = "One";
+    script.parameters = {one};
+    rig.fake.script("noisy", script);
+    auto plugin = rig.make("noisy");
+    REQUIRE(rig.main.turnUntil([&] { return plugin->state() != Plugin::State::making; }));
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+
+    const auto listed = [&] {
+        const auto calls = rig.fake.calls("noisy");
+        return std::count(calls.begin(), calls.end(), std::string("parameters"));
+    };
+    const auto before = listed();
+    for (int i = 0; i < 100; ++i)
+    {
+        rig.fake.notify("noisy", PluginNotice::values);
+        rig.main.turnUntil([] { return false; }, 2ms);
+    }
+    rig.main.settle();
+    CHECK(listed() == before);
+}

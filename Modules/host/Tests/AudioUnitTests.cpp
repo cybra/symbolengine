@@ -6,7 +6,9 @@
 #include "AudioUnits/Registry.h"
 #include "TestMainThread.h"
 
+#include "AudioUnitDetail.h"
 #include <catch2/catch_approx.hpp>
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <AudioToolbox/AudioToolbox.h>
@@ -906,7 +908,7 @@ TEST_CASE("A unit's output is taken from wherever it gave it back, whatever it s
     PluginError error;
     const auto declared = rig.format.pluginsIn(raw, error);
     REQUIRE_FALSE(error);
-    REQUIRE(declared.size() == 5);
+    REQUIRE(declared.size() == 8);
 
     const auto played = [&](const char* name) {
         const auto found = std::find_if(declared.begin(), declared.end(),
@@ -956,6 +958,19 @@ TEST_CASE("A unit's output is taken from wherever it gave it back, whatever it s
         CHECK(out[0] == left);
         CHECK(out[1] == silentFrom(right, 0));
     }
+    SECTION("Nothing written on a block it says went well, which is silence and not the block before")
+    {
+        const auto out = played("WritesFirstOnly");
+        CHECK(out[0][63] == left[63]);
+        for (std::size_t i = 64; i < 128; ++i)
+            CHECK(out[0][i] == 0.0f);
+    }
+    SECTION("Its input pulled with no buffers of its own, given the sound and not silence")
+    {
+        const auto out = played("PullsWithNoBuffers");
+        CHECK(out[0] == left);
+        CHECK(out[1] == right);
+    }
     SECTION("A null pointer for a channel, which is silence")
     {
         const auto out = played("NullRight");
@@ -963,4 +978,55 @@ TEST_CASE("A unit's output is taken from wherever it gave it back, whatever it s
         CHECK(out[1] == silentFrom(right, 0));
     }
     CHECK(rig.wrong.empty());
+}
+
+TEST_CASE("A unit that can't render just now isn't taken for one that never will")
+{
+    const std::filesystem::path raw = SYMBOLENGINE_TEST_RAW_AUDIO_UNITS;
+    REQUIRE(testAudioUnits::registerAll(raw));
+    Rig rig;
+    PluginError error;
+    const auto declared = rig.format.pluginsIn(raw, error);
+    const auto found = std::find_if(declared.begin(), declared.end(), [](const PluginDescription& plugin) {
+        return plugin.name.find("NotNow") != std::string::npos;
+    });
+    REQUIRE(found != declared.end());
+    auto plugin = rig.host.make(rig.format, *found);
+    REQUIRE(rig.main.turnUntil([&] { return plugin->state() != Plugin::State::making; }));
+    REQUIRE(plugin->prepare({48000.0, 256, false}));
+
+    const auto out = play(*plugin, 256, 20);
+    CHECK(out[0] == numbered(256 * 20));
+    rig.main.turnUntil([&] { return plugin->state() == Plugin::State::failed; }, 300ms);
+    CHECK(plugin->state() == Plugin::State::active);
+    plugin->release();
+    CHECK(rig.wrong.empty());
+}
+
+TEST_CASE("A layout a unit offers is chosen before it can refuse one at initializing")
+{
+    using audioUnit::detail::nearestLayout;
+    using audioUnit::detail::Offer;
+
+    const auto chosen = [](std::vector<Offer> offers, int in, int out) {
+        const auto layout = nearestLayout(offers, in, out);
+        return std::pair{layout.first, layout.second};
+    };
+
+    // Nothing said, or anything the same on both sides, as asked.
+    CHECK(chosen({}, 1, 1) == std::pair{1, 1});
+    CHECK(chosen({{-1, -1}}, 6, 6) == std::pair{6, 6});
+
+    // Any number on one side or the other.
+    CHECK(chosen({{-1, -2}}, 1, 2) == std::pair{1, 2});
+    CHECK(chosen({{2, -1}}, 1, 6) == std::pair{2, 6});
+    CHECK(chosen({{-1, 2}}, 6, 1) == std::pair{6, 2});
+
+    // Only what it lists, the nearest when what was asked isn't among them.
+    CHECK(chosen({{2, 2}}, 1, 1) == std::pair{2, 2});
+    CHECK(chosen({{1, 1}, {2, 2}}, 2, 2) == std::pair{2, 2});
+    CHECK(chosen({{1, 2}, {6, 6}}, 2, 2) == std::pair{1, 2});
+
+    // Equal on both sides, but not this many.
+    CHECK(chosen({{-1, -1}}, 1, 2) == std::pair{2, 2});
 }

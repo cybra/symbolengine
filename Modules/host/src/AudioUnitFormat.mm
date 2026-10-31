@@ -1,5 +1,6 @@
 #include "symbolengine/host/AudioUnitFormat.h"
 
+#include "AudioUnitDetail.h"
 #include "PluginFiles.h"
 
 #include <symbolengine/core/Files.h>
@@ -233,6 +234,9 @@ public:
 
     PluginLayout arrange(PluginLayout wanted) override
     {
+        const auto [inputs, outputs_] = audioUnit::detail::nearestLayout(offers(), wanted.inputs, wanted.outputs);
+        wanted.inputs = inputs;
+        wanted.outputs = outputs_;
         if (busCount(kAudioUnitScope_Input) > 0)
             setFormat(kAudioUnitScope_Input, 0, static_cast<UInt32>(wanted.inputs));
         setFormat(kAudioUnitScope_Output, 0, static_cast<UInt32>(wanted.outputs));
@@ -323,6 +327,7 @@ public:
 
         outputs.assign(static_cast<std::size_t>(layout.outputs), std::vector<float>(maximumFrames));
         silence.assign(maximumFrames, 0.0f);
+        pulledInto.assign(static_cast<std::size_t>(std::max(layout.inputs, 1)), std::vector<float>(maximumFrames, 0.0f));
         list.assign(offsetof(AudioBufferList, mBuffers) +
                         sizeof(AudioBuffer) * std::max<std::size_t>(1, outputs.size()),
                     std::byte{});
@@ -443,7 +448,14 @@ public:
     void showParameterValue(std::uint32_t id, double value) override
     {
         if (!initialized)
+        {
             set(id, value);
+            return;
+        }
+
+        // Its own window listens for these, and hears nothing of a value that reaches the unit through its render.
+        AudioUnitParameter changed{unit, id, kAudioUnitScope_Global, 0};
+        AUParameterListenerNotify(listener, nullptr, &changed);
     }
 
     bool takesValuesUnprepared() const override { return true; }
@@ -665,6 +677,7 @@ private:
     Float64 sampleTime = 0;
     std::vector<std::vector<float>> outputs;
     std::vector<float> silence;
+    std::vector<std::vector<float>> pulledInto;
     std::vector<std::byte> list;
 
     // For a unit fed full blocks: the input gathered for its next one, the output of its last, and how far along both
@@ -733,8 +746,12 @@ private:
 
         auto* buffers = reinterpret_cast<AudioBufferList*>(list.data());
         buffers->mNumberBuffers = static_cast<UInt32>(outputs.size());
+        // Cleared first, as a unit that writes nothing while saying all went well leaves what is there to be heard.
         for (std::size_t c = 0; c < outputs.size(); ++c)
+        {
+            std::fill_n(outputs[c].data(), frames, 0.0f);
             buffers->mBuffers[c] = {1, frames * static_cast<UInt32>(sizeof(float)), outputs[c].data()};
+        }
 
         if (changeCount > 0)
             AudioUnitScheduleParameters(unit, changes, changeCount);
@@ -783,9 +800,10 @@ private:
             std::copy_n(static_cast<const float*>(written.mData), count, to);
             std::fill(to + count, to + frames, 0.0f);
         }
+        // One that can't render just now, as it says in the wrong context, may next time, its blocks passing as they came.
         if (status == noErr)
             failures = 0;
-        else if (++failures >= 3)
+        else if (status != kAudioUnitErr_CannotDoInCurrentContext && ++failures >= 3)
         {
             gone = "It failed three blocks in a row.";
             return false;
@@ -1011,6 +1029,24 @@ private:
         return status;
     }
 
+    // The layouts it says it takes, none if it doesn't say.
+    std::vector<audioUnit::detail::Offer> offers() const
+    {
+        UInt32 size = 0;
+        if (AudioUnitGetPropertyInfo(unit, kAudioUnitProperty_SupportedNumChannels, kAudioUnitScope_Global, 0, &size, nullptr) !=
+                noErr ||
+            size < sizeof(AUChannelInfo))
+            return {};
+        std::vector<AUChannelInfo> said(size / sizeof(AUChannelInfo));
+        if (AudioUnitGetProperty(unit, kAudioUnitProperty_SupportedNumChannels, kAudioUnitScope_Global, 0, said.data(), &size) !=
+            noErr)
+            return {};
+        std::vector<audioUnit::detail::Offer> offered;
+        for (const auto& one : said)
+            offered.push_back({one.inChannels, one.outChannels});
+        return offered;
+    }
+
     // Its listeners, its own window's among them, told every value changed, and the host told to read them again; the
     // host's own listener left out, as the host reads them itself.
     void valuesChanged()
@@ -1133,10 +1169,22 @@ private:
             auto& buffer = into->mBuffers[c];
             if (buffer.mData == nullptr)
             {
-                // A unit that leaves the buffer to the host is given silence it may read but never write to.
-                buffer.mData = self.silence.data();
-                buffer.mDataByteSize =
-                    std::min<UInt32>(frames, static_cast<UInt32>(self.silence.size())) * sizeof(float);
+                // A unit that leaves the buffer to the host is given what there is in room of the host's own, which it
+                // may read but never write to, or silence.
+                const auto room = std::min<UInt32>(frames, static_cast<UInt32>(self.silence.size()));
+                buffer.mDataByteSize = room * sizeof(float);
+                if (static_cast<int>(c) < from.count && c < self.pulledInto.size() && available > 0)
+                {
+                    auto& held = self.pulledInto[c];
+                    const auto copied = std::min(available, room);
+                    std::copy_n(from.channels[c] + at, copied, held.data());
+                    std::fill(held.data() + copied, held.data() + room, 0.0f);
+                    buffer.mData = held.data();
+                }
+                else
+                {
+                    buffer.mData = self.silence.data();
+                }
                 continue;
             }
             auto* to = static_cast<float*>(buffer.mData);

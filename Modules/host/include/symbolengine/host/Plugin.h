@@ -173,12 +173,18 @@ public:
         /** Whether the calling thread is the main thread: ui::messageLoop::isMessageThread in a program with one. */
         std::function<bool()> onMainThread;
 
-        /** How long the main thread waits for the audio thread to leave a plugin it is taking out of processing. */
+        /** How long a plugin may stay in one process call before it is left out for good, whether or not the main thread is
+            waiting for it. A plugin rendering offline may take a minute, if that is longer. */
         std::chrono::milliseconds audioLimit{2000};
 
         /** Told what was wrong when the program calls a plugin on the wrong thread or in the wrong state, which is
             refused. Without it a debug build stops there, so the mistake is seen at once. */
         std::function<void(const std::string&)> misuse;
+
+        /** One turn of the main thread's run loop, for while it waits for the audio thread to leave a plugin, as a plugin's
+            processing that waits on the main thread would otherwise wait for ever. By default the system's own, which
+            ui::messageLoop runs on. */
+        std::function<void()> turn{};
 
         /** A debug mode: finds what each plugin calls on the audio thread that a real-time thread never should, as it
             allocates memory or takes a lock, and names it (Plugin::unsafeCalls), the audio playing on. An offline render

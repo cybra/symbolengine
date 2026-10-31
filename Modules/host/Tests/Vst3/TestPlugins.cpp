@@ -230,7 +230,7 @@ public:
 
     tresult PLUGIN_API process(ProcessData& data) override
     {
-        if (!processing && data.numSamples > 0)
+        if (!processing)
             misuse(plugin, "processed while not processing");
 
         if (data.numSamples > processSetup.maxSamplesPerBlock)

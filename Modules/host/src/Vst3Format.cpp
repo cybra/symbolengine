@@ -1330,9 +1330,17 @@ public:
     // VST3's reset is processing stopped and started again, which the host module does around this.
     void reset() override {}
 
-    void startProcessing() override { processor->setProcessing(true); }
+    void startProcessing() override
+    {
+        processingOn = true;
+        processor->setProcessing(true);
+    }
 
-    void stopProcessing() override { processor->setProcessing(false); }
+    void stopProcessing() override
+    {
+        processingOn = false;
+        processor->setProcessing(false);
+    }
 
     bool process(PluginBlock& block) override
     {
@@ -1378,7 +1386,13 @@ public:
         {
             const auto before = count > 0 ? componentState() : std::string();
             inputChanges.fill(changes, count, 0);
+
+            // A process call is for the processing state, even one with nothing to process.
+            if (!processingOn)
+                processor->setProcessing(true);
             run(0, idleTime());
+            if (!processingOn)
+                processor->setProcessing(false);
 
             if (count == 0 || componentState() != before)
                 return;
@@ -1671,6 +1685,7 @@ private:
     std::vector<std::vector<Sample32*>> channelPointers[2];
     std::vector<std::vector<std::vector<float>>> scratch[2];
     std::vector<float> silence, scratchMain;
+    std::atomic<bool> processingOn{false};
     bool passesOverEmpty = false;
     ChangeList inputChanges, outputChanges;
     EventList inputEvents, outputEvents;

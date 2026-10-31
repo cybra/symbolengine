@@ -64,12 +64,13 @@ struct PluginCrashNote::Impl
     // The calling thread's record, found by the thread's own number. Nothing here is kept per thread by the system, whose
     // storage for that can be made on first use, which an audio thread's first call or a crash's handler mustn't cause.
     // A record whose thread is in no call can be taken over, so threads that have ended leave room for those that come.
-    crashNote::Thread* threadRecord() noexcept
+    crashNote::Thread* threadRecord(std::uint64_t self, bool& fresh) noexcept
     {
-        const auto self = crashNote::native::thisThread();
+        fresh = false;
         for (auto& thread : layout->threads)
             if (ownerOf(thread) == self)
                 return &thread;
+        fresh = true;
         for (auto& thread : layout->threads)
             if (ownerOf(thread) == 0 && takeOver(thread, 0, self))
                 return &thread;
@@ -261,18 +262,34 @@ crashNote::InCall::InCall(PluginCrashNote* note, int slot, const char* call, boo
     if (note == nullptr || slot < 0)
         return;
 
-    record = note->impl->threadRecord();
+    const auto self = native::thisThread();
 
-    if (record == nullptr)
-        return;
+    // Its record can be taken over just as it comes to use it, having been idle until then, which it sees after saying what
+    // it is in, and takes back. Whoever took it has it, and nothing is left saying a call is under way that isn't.
+    for (int tries = 0; tries < 3; ++tries)
+    {
+        bool fresh = false;
+        auto* const found = note->impl->threadRecord(self, fresh);
+        if (found == nullptr)
+            return;
 
-    // The call before it, of a call made from inside it, put back as this one ends.
-    previousSlot = record->slot;
-    previousAudio = record->audio;
-    std::memcpy(previousCall, record->call, sizeof previousCall);
-    put(record->call, call);
-    record->audio = audioThread ? 1 : 0;
-    set(record->slot, static_cast<std::int32_t>(slot));
+        // The call before it, of a call made from inside it, put back as this one ends.
+        previousSlot = fresh ? -1 : found->slot;
+        previousAudio = found->audio;
+        std::memcpy(previousCall, found->call, sizeof previousCall);
+        put(found->call, call);
+        found->audio = audioThread ? 1 : 0;
+        set(found->slot, static_cast<std::int32_t>(slot));
+
+        if (ownerOf(*found) == self)
+        {
+            record = found;
+            return;
+        }
+
+        auto said = static_cast<std::int32_t>(slot);
+        std::atomic_ref(found->slot).compare_exchange_strong(said, -1);
+    }
 }
 
 crashNote::InCall::~InCall()

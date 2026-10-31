@@ -113,6 +113,8 @@ struct PluginHost::Shared : std::enable_shared_from_this<PluginHost::Shared>
     void enqueue(std::weak_ptr<Plugin::Inner> plugin, PluginFormat& format);
     void makeNext();
     void sweepNotices();
+    void sweepStuck();
+    std::int64_t stuckLookedAt = 0;
 
     // The earliest a notice put off is due, on the steady clock, which the watcher looks out for; 0 for none.
     std::atomic<std::int64_t> noticesDue{0};
@@ -260,6 +262,7 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     // Shared with the audio thread.
     std::atomic<State> state{State::making};
     std::atomic<bool> accepting{false}, inProcess{false}, processing{false};
+    std::atomic<std::int64_t> blockBegan{0};   // when the block under way began, on the steady clock; 0 for none
 
     // Whether the main thread holds it off the audio for a call that can't overlap its processing, during which a block
     // is silent, never heard unprocessed.
@@ -593,23 +596,27 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
         // Holding before accepting is left, so no block between the two passes unprocessed.
         holding = true;
         accepting = false;
-        const auto until = std::chrono::steady_clock::now() + host->options.audioLimit;
+        const auto until = std::chrono::steady_clock::now() + blockLimit();
 
+        // The run loop turns meanwhile, as a plugin's processing may wait on this thread, and this marks it busy, so nothing
+        // that comes of that turning overlaps with this.
+        ++busy;
         while (inProcess)
         {
             if (std::chrono::steady_clock::now() > until)
             {
-                problem = {"It didn't return from processing audio within " +
-                               std::to_string(host->options.audioLimit.count()) + " ms.",
-                           "process", 0};
-                state = State::failed;
-                endHold();
-                tell(PluginChange::stuck);
+                --busy;
+                leftOutAsStuck();
                 return false;
             }
 
+            if (host->options.turn)
+                host->options.turn();
+            else
+                mainThread::turn();
             std::this_thread::sleep_for(std::chrono::microseconds(200));
         }
+        --busy;
 
         // Tables the audio thread can no longer be reading.
         std::erase_if(tables, [this](const std::unique_ptr<Table>& old) { return old.get() != table.load(); });
@@ -623,6 +630,26 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
     // Ends a hold that leaves it off the audio, as when it is released, can't be prepared again or has failed: a block
     // passes as it came again.
     void endHold() { holding = false; }
+
+    // How long one block may take: a realtime one the limit, and one being rendered as fast as it can be, however long a
+    // plugin is allowed to take over it, as a slow one is how it is meant to be.
+    std::chrono::milliseconds blockLimit() const
+    {
+        return setup.offline ? std::max(host->options.audioLimit, std::chrono::milliseconds(60'000))
+                             : host->options.audioLimit;
+    }
+
+    void leftOutAsStuck()
+    {
+        if (state == State::failed)
+            return;
+        accepting = false;
+        problem = {"It didn't return from processing audio within " + std::to_string(blockLimit().count()) + " ms.",
+                   "process", 0};
+        state = State::failed;
+        endHold();
+        tell(PluginChange::stuck);
+    }
 
     // Takes values waiting for its processing to hear, at most those there is room for, the rest left for next time.
     std::size_t takeWanted(const Table& from, PluginParameterChange* into, std::size_t room) noexcept
@@ -1159,8 +1186,11 @@ struct Plugin::Inner : PluginFormatClient, std::enable_shared_from_this<Plugin::
             }
         }
 
-        if (has(what, PluginNotice::parameters) || has(what, PluginNotice::values))
+        // Values changing needs only the values read, where the list itself changing needs everything made again.
+        if (has(what, PluginNotice::parameters))
             readParameters();
+        else if (has(what, PluginNotice::values))
+            readValues();
 
         if (has(what, PluginNotice::parameters))
             tell(PluginChange::parameters);
@@ -1272,6 +1302,23 @@ void PluginHost::Shared::makeNext()
     }
 }
 
+void PluginHost::Shared::sweepStuck()
+{
+    std::vector<std::shared_ptr<Plugin::Inner>> live;
+    {
+        const std::lock_guard held(lock);
+        for (const auto& plugin : plugins)
+            if (auto inner = plugin.lock())
+                live.push_back(std::move(inner));
+    }
+
+    const auto now = nanosecondsNow();
+    for (const auto& plugin : live)
+        if (const auto began = plugin->blockBegan.load(std::memory_order_relaxed);
+            began != 0 && now - began > std::chrono::nanoseconds(plugin->blockLimit()).count())
+            plugin->leftOutAsStuck();
+}
+
 void PluginHost::Shared::sweepNotices()
 {
     std::vector<std::shared_ptr<Plugin::Inner>> live;
@@ -1333,6 +1380,14 @@ PluginHost::PluginHost(Options options) : shared(std::make_shared<Shared>())
 
             if (host->audioNotices.exchange(false))
                 host->post([host] { host->sweepNotices(); });
+
+            // A plugin that won't come back from its process call, which nothing else would notice while the audio thread
+            // is inside it. Looked at far less often than this wakes, and from the main thread, where it is safe to say.
+            if (const auto now = nanosecondsNow(); now - host->stuckLookedAt > 200'000'000)
+            {
+                host->stuckLookedAt = now;
+                host->post([host] { host->sweepStuck(); });
+            }
         }
     });
 }
@@ -1824,6 +1879,8 @@ void Plugin::process(float* const* channels, int channelCount, int frames, const
 
     insideProcess = true;
     const auto began = std::chrono::steady_clock::now();
+    held.blockBegan.store(std::chrono::duration_cast<std::chrono::nanoseconds>(began.time_since_epoch()).count(),
+                          std::memory_order_relaxed);
     auto* plugin = held.audioInstance;
     const auto modes = floatingPointModes();
 
@@ -1981,6 +2038,7 @@ void Plugin::process(float* const* channels, int channelCount, int frames, const
     held.timed(began, frames);
     ++held.blocksPlayed;
     insideProcess = false;
+    held.blockBegan.store(0, std::memory_order_relaxed);
     held.inProcess = false;
 }
 
@@ -2106,7 +2164,8 @@ PluginEditor::~PluginEditor()
     // of the run loop later, so whatever the editor's closing started finishes first.
     auto kept = std::make_shared<std::unique_ptr<PluginFormatEditor>>(std::move(editor));
     auto close = [inner, kept, plugin = std::move(held)]() mutable {
-        if (inner->crashed)
+        // Nor is a plugin stuck in its processing called, as closing its editor would very likely wait on the same lock.
+        if (inner->crashed || (inner->state == Plugin::State::failed && inner->inProcess))
             static_cast<void>(kept->release());
         else
             inner->call("closeEditor", [&] { kept->reset(); });

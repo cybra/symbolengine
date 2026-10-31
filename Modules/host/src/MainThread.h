@@ -8,4 +8,7 @@ namespace symbolengine::mainThread
     on the thread; elsewhere nothing. On the main thread. */
 void prepare();
 
+/** Runs what is ready on the run loop, without waiting for more, on the main thread. Nothing where there is no system's run
+    loop to turn. */
+void turn();
 }

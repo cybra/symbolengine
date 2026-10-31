@@ -11,6 +11,10 @@ endif()
 string(REGEX REPLACE "[^\n]* ([^ \n]+)\n" "\\1;" names "${exported}")
 list(REMOVE_ITEM names "_clap_entry")
 list(FILTER names EXCLUDE REGEX "^$")
+
+# The standard library's own inline functions, which some of its versions leave visible whatever is asked, and which
+# each binary resolves to its own copy.
+list(FILTER names EXCLUDE REGEX "^__ZNK?St|^__ZSt")
 if(names)
     message(FATAL_ERROR "${BINARY} makes visible more than its entry point: ${names}")
 endif()

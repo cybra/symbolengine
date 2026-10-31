@@ -20,4 +20,18 @@ void prepare()
     static_cast<void>(prepared);
 }
 
+void turn()
+{
+    MSG message;
+    for (int handled = 0; handled < 16 && PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE); ++handled)
+    {
+        if (message.message == WM_QUIT)
+        {
+            PostQuitMessage(static_cast<int>(message.wParam));
+            return;
+        }
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+}
 }

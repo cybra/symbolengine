@@ -57,6 +57,33 @@
             <key>version</key><integer>66051</integer>
             <key>factoryFunction</key><string>NullRightFactory</string>
         </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>WrFO</string>
+            <key>manufacturer</key><string>SyRw</string>
+            <key>name</key><string>SymbolEngine Raw Tests: WritesFirstOnly</string>
+            <key>description</key><string>SymbolEngine's raw test unit WritesFirstOnly</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>WritesFirstOnlyFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>PlNB</string>
+            <key>manufacturer</key><string>SyRw</string>
+            <key>name</key><string>SymbolEngine Raw Tests: PullsWithNoBuffers</string>
+            <key>description</key><string>SymbolEngine's raw test unit PullsWithNoBuffers</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>PullsWithNoBuffersFactory</string>
+        </dict>
+        <dict>
+            <key>type</key><string>aufx</string>
+            <key>subtype</key><string>NtNw</string>
+            <key>manufacturer</key><string>SyRw</string>
+            <key>name</key><string>SymbolEngine Raw Tests: NotNow</string>
+            <key>description</key><string>SymbolEngine's raw test unit NotNow</string>
+            <key>version</key><integer>66051</integer>
+            <key>factoryFunction</key><string>NotNowFactory</string>
+        </dict>
     </array>
 </dict>
 </plist>

@@ -1322,3 +1322,49 @@ TEST_CASE("An Audio Unit whose view can't be made opens none, saying why, and go
 }
 
 #endif
+
+TEST_CASE("The editor of a plugin stuck in its process call is closed without calling the plugin")
+{
+    FakeRig rig;
+    std::timed_mutex held;
+    std::atomic<bool> stick{false}, running{true};
+    FakePluginFormat::Script stuck;
+    stuck.editor = true;
+    stuck.inside = [&](std::string_view call) {
+        if (call == "process" && stick)
+            std::unique_lock wait(held);
+    };
+    rig.fake.script("stuck", stuck);
+
+    PluginHost quick{{rig.main.post(), rig.main.isCurrent(), 200ms, [](const std::string&) {}}};
+    auto plugin = quick.make(rig.fake, FakePluginFormat::describe("stuck"));
+    REQUIRE(rig.main.turnUntil([&] { return plugin->state() != Plugin::State::making; }));
+    REQUIRE(plugin->prepare({48000.0, 64, false}));
+
+    Frame frame;
+    PluginError error;
+    auto editor = PluginEditor::open(plugin, &frame, frame, error);
+    REQUIRE(editor != nullptr);
+
+    held.lock();
+    stick = true;
+    std::thread audio([&] {
+        std::vector<float> left(64), right(64);
+        float* channels[] = {left.data(), right.data()};
+        while (running)
+        {
+            plugin->process(channels, 2, 64);
+            std::this_thread::sleep_for(1ms);
+        }
+    });
+    CHECK(rig.main.turnUntil([&] { return plugin->state() == Plugin::State::failed; }, 3s));
+
+    editor.reset();
+    rig.main.settle();
+    CHECK(rig.count("stuck", "closeEditor") == 0);
+
+    running = false;
+    stick = false;
+    held.unlock();
+    audio.join();
+}

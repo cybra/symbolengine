@@ -18,12 +18,16 @@ enum class Way
     shortCount,   // The whole block written, while the buffers' sizes say half of it was.
     noRight,      // Both channels written, while it says it gave back only one buffer.
     nullRight,    // A null pointer for the other channel.
+    writesFirstOnly,      // Writes its first block only, saying all went well with those after.
+    pullsWithNoBuffers,   // Pulls its input with null pointers, for the host to give its own.
+    notNow,               // Says it can't render in the present context.
 };
 
 struct Unit
 {
     AudioComponentPlugInInterface interface;
     Way way = Way::ownBuffers;
+    int renders = 0;
     AudioStreamBasicDescription format{};
     UInt32 maximumFrames = 4096;
     AURenderCallbackStruct input{};
@@ -190,8 +194,8 @@ OSStatus render(void* self, AudioUnitRenderActionFlags* flags, const AudioTimeSt
     std::vector<std::byte> room(sizeof(AudioBufferList) + sizeof(AudioBuffer));
     auto* input = reinterpret_cast<AudioBufferList*>(room.data());
     input->mNumberBuffers = 2;
-    input->mBuffers[0] = {1, frames * 4, unit->left.data()};
-    input->mBuffers[1] = {1, frames * 4, unit->right.data()};
+    input->mBuffers[0] = {1, frames * 4, unit->way == Way::pullsWithNoBuffers ? nullptr : unit->left.data()};
+    input->mBuffers[1] = {1, frames * 4, unit->way == Way::pullsWithNoBuffers ? nullptr : unit->right.data()};
     AudioUnitRenderActionFlags pulled = 0;
     if (const auto status = unit->input.inputProc(unit->input.inputProcRefCon, &pulled, time, 0, frames, input);
         status != noErr)
@@ -227,6 +231,20 @@ OSStatus render(void* self, AudioUnitRenderActionFlags* flags, const AudioTimeSt
             write(0, frames);
             output->mBuffers[1].mData = nullptr;
             break;
+        case Way::writesFirstOnly:
+            if (unit->renders++ == 0)
+            {
+                write(0, frames);
+                write(1, frames);
+            }
+            break;
+        case Way::pullsWithNoBuffers:
+            std::copy_n(static_cast<const float*>(input->mBuffers[0].mData), frames,
+                        static_cast<float*>(output->mBuffers[0].mData));
+            std::copy_n(static_cast<const float*>(input->mBuffers[1].mData), frames,
+                        static_cast<float*>(output->mBuffers[1].mData));
+            break;
+        case Way::notNow: return kAudioUnitErr_CannotDoInCurrentContext;
     }
     return noErr;
 }
@@ -297,5 +315,17 @@ extern "C"
     __attribute__((visibility("default"))) void* NullRightFactory(const AudioComponentDescription*)
     {
         return make(Way::nullRight);
+    }
+    __attribute__((visibility("default"))) void* WritesFirstOnlyFactory(const AudioComponentDescription*)
+    {
+        return make(Way::writesFirstOnly);
+    }
+    __attribute__((visibility("default"))) void* PullsWithNoBuffersFactory(const AudioComponentDescription*)
+    {
+        return make(Way::pullsWithNoBuffers);
+    }
+    __attribute__((visibility("default"))) void* NotNowFactory(const AudioComponentDescription*)
+    {
+        return make(Way::notNow);
     }
 }
