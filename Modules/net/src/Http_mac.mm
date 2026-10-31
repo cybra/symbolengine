@@ -2,6 +2,7 @@
 
 #import <Foundation/Foundation.h>
 
+#include <exception>
 #include <string>
 
 using Received = std::function<bool(int, std::string_view)>;
@@ -11,6 +12,7 @@ using Received = std::function<bool(int, std::string_view)>;
     const Received* received;
     symbolengine::http::Answer answer;
     bool stopped;
+    std::exception_ptr thrown;
     dispatch_semaphore_t finished;
 }
 @end
@@ -34,7 +36,18 @@ using Received = std::function<bool(int, std::string_view)>;
       if (stopped)
           return;
 
-      if (!(*received)(answer.status, std::string_view(static_cast<const char*>(bytes), range.length)))
+      // Nothing can catch an exception on this thread, so it waits to be thrown again on the one asking.
+      bool going = false;
+      try
+      {
+          going = (*received)(answer.status, std::string_view(static_cast<const char*>(bytes), range.length));
+      }
+      catch (...)
+      {
+          thrown = std::current_exception();
+      }
+
+      if (!going)
       {
           stopped = true;
           *stop = YES;
@@ -96,9 +109,14 @@ Answer get(const Request& request, const std::function<bool(int status, std::str
         [session finishTasksAndInvalidate];
 
         Answer answer = fetch->answer;
+        const auto thrown = fetch->thrown;
         dispatch_release(fetch->finished);
         [queue release];
         [fetch release];
+
+        if (thrown != nullptr)
+            std::rethrow_exception(thrown);
+
         return answer;
     }
 }

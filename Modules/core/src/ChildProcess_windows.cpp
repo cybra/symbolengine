@@ -1,5 +1,7 @@
 #include "ProcessChannel.h"
 
+#include "symbolengine/core/Paths.h"
+
 #ifndef WIN32_LEAN_AND_MEAN
     #define WIN32_LEAN_AND_MEAN
 #endif
@@ -18,6 +20,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cwchar>
+#include <cwctype>
 #include <string>
 #include <thread>
 #include <vector>
@@ -35,7 +38,7 @@ std::error_code lastError()
 
 std::wstring wide(std::string_view text)
 {
-    return std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(text.data()), text.size())).wstring();
+    return paths::fromUtf8(text).wstring();
 }
 
 HANDLE handleFrom(void* handle)
@@ -144,6 +147,7 @@ bool ProcessLink::Native::write(const char* data, std::size_t size)
 {
     // Counted while writing, so shutting down closes the channel only once no write is under way.
     ++writers;
+    writerThread = GetCurrentThreadId();
 
     while (size > 0 && !shut)
     {
@@ -157,6 +161,7 @@ bool ProcessLink::Native::write(const char* data, std::size_t size)
         size -= written;
     }
 
+    writerThread = 0;
     --writers;
     return size == 0 && !shut;
 }
@@ -210,9 +215,19 @@ void ProcessLink::Native::shutDown()
         Sleep(5);
     }
 
-    // Closing this side's writing end is what tells the other end, once no write is using it.
-    for (int tries = 0; writers > 0 && tries < 40; ++tries)
+    // A write waiting on a child that isn't reading is cancelled too. Closing this side's writing end is what tells the
+    // other end, once no write is using it.
+    for (int tries = 0; writers > 0 && tries < 400; ++tries)
+    {
+        if (const auto id = writerThread.load(); id != 0 && id != GetCurrentThreadId())
+            if (const auto thread = OpenThread(THREAD_TERMINATE, FALSE, id); thread != nullptr)
+            {
+                CancelSynchronousIo(thread);
+                CloseHandle(thread);
+            }
+
         Sleep(5);
+    }
 
     if (writers == 0)
         closeHandle(writeHandle);
@@ -292,6 +307,17 @@ ChildProcess::~ChildProcess()
 std::unique_ptr<ChildProcess> ChildProcess::start(const std::filesystem::path& program, const Options& options,
                                                   std::error_code& error)
 {
+    // Windows runs a batch file through cmd.exe, which reads the arguments again by rules of its own, so a program's
+    // arguments couldn't be relied on to arrive as given, and could run commands.
+    auto extension = program.extension().wstring();
+    for (auto& c : extension)
+        c = static_cast<wchar_t>(towlower(c));
+    if (extension == L".bat" || extension == L".cmd")
+    {
+        error = std::make_error_code(std::errc::not_supported);
+        return nullptr;
+    }
+
     error.clear();
 
     // Every handle the child is to have: standard input, output and error, and its ends of the link, inheritable
@@ -544,7 +570,8 @@ std::optional<ProcessEnding> ChildProcess::wait(std::chrono::milliseconds limit)
 
     if (native->killing && code == killedCode)
         ended = ProcessEnding{ProcessEnding::Kind::exited, code, true};
-    else if (code >= 0xC0000000u)
+    else if (const auto severity = code >> 28; severity == 0xC || severity == 0xE)
+        // What the system says of a fault, and C++ exceptions and the like. A program's own exit(-1) is 0xFFFFFFFF.
         ended = ProcessEnding{ProcessEnding::Kind::exception, code, false};
     else
         ended = ProcessEnding{ProcessEnding::Kind::exited, code, false};

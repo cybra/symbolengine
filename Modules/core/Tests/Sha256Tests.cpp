@@ -8,6 +8,16 @@
 #include <random>
 #include <string>
 
+#if defined(_WIN32)
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
+    #ifndef NOMINMAX
+        #define NOMINMAX
+    #endif
+    #include <windows.h>
+#endif
+
 using namespace symbolengine;
 
 namespace
@@ -82,3 +92,21 @@ TEST_CASE("SHA-256 of a file is the digest of its contents, and a file that can'
     CHECK(error);
     CHECK_THROWS_AS(Sha256::ofFile(scratch.path / "missing.zip"), std::filesystem::filesystem_error);
 }
+
+#if defined(_WIN32)
+TEST_CASE("A file another program has open for writing can still be hashed")
+{
+    ScratchFolder scratch;
+    const auto file = scratch.path / "open.bin";
+    files::writeSafely(file, "abc");
+
+    const auto other = CreateFileW(file.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                   nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    REQUIRE(other != INVALID_HANDLE_VALUE);
+    std::error_code error;
+    const auto digest = Sha256::ofFile(file, error);
+    CloseHandle(other);
+    CHECK_FALSE(error);
+    CHECK(digest == Sha256::of("abc"));
+}
+#endif

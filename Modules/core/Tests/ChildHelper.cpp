@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -301,6 +302,18 @@ int main(int argc, [[maybe_unused]] char** narrowArguments)
 
     if (mode == "no-link-exit")
         return 0;
+
+#if defined(__linux__)
+    // The numbers of the files it has open, each between commas, into the file named.
+    if (mode == "no-link-files")
+    {
+        std::string open = ",";
+        for (const auto& entry : std::filesystem::directory_iterator("/proc/self/fd"))
+            open += entry.path().filename().string() + ",";
+        std::ofstream(argv[2]) << open;
+        return 0;
+    }
+#endif
 
     if (mode == "middle")
     {

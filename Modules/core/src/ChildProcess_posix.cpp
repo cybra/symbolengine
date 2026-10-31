@@ -356,7 +356,7 @@ std::unique_ptr<ChildProcess> ChildProcess::start(const std::filesystem::path& p
         posix_spawn_file_actions_adddup2(&actions, channel[1], linkDescriptor);
 
 #if !defined(__APPLE__) && defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 34))
-    posix_spawn_file_actions_addclosefrom_np(&actions, linkDescriptor + 1);
+    posix_spawn_file_actions_addclosefrom_np(&actions, options.link ? linkDescriptor + 1 : linkDescriptor);
 #endif
 
     // Every signal at its default and none blocked, whatever this program set, such as SIGCHLD ignored.

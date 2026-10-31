@@ -9,7 +9,7 @@ namespace symbolengine
 
 namespace
 {
-constexpr int crossings = 32;
+constexpr int crossings = 64;
 constexpr double beta = 10.0;
 
 // The zeroth-order modified Bessel function, for the Kaiser window.
@@ -31,7 +31,7 @@ Resampler::Resampler(int channels, double ratio, std::size_t maxInput)
     : channelCount(std::max(1, channels)), outputOverInput(ratio), step(1.0 / ratio)
 {
     // Going down, the cut-off follows the output's Nyquist and the kernel widens to keep its zero crossings.
-    const double cutoff = 0.95 * std::min(1.0, ratio);
+    const double cutoff = 0.94 * std::min(1.0, ratio);
     reach = static_cast<int>(std::ceil(crossings / cutoff));
 
     const auto points = static_cast<std::size_t>(2 * reach * resolution + 1);

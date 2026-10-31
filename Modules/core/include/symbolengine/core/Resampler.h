@@ -8,9 +8,10 @@ namespace symbolengine
 {
 
 /** Audio from one rate to another, a stretch at a time, by band-limited interpolation: each output sample is the
-    input's signal at its own instant, from a Kaiser-windowed sinc 32 zero crossings either side, cut off below the
-    lower of the two Nyquist frequencies so going down a rate never aliases. A 1 kHz tone comes out within -110 dB of
-    the ideal, and one at 18 kHz within -100 dB. The ratio can be changed between stretches by small amounts, as
+    input's signal at its own instant, from a Kaiser-windowed sinc 64 zero crossings either side, cut off below the
+    lower of the two Nyquist frequencies, so going down a rate what lies past the new Nyquist is 90 dB down from a
+    quarter of a kilohertz past it at 48 kHz, and what lies at 20 kHz loses less than 0.2 dB. A 1 kHz tone comes out
+    within -110 dB of the ideal, and one at 18 kHz within -100 dB. The ratio can be changed between stretches by small amounts, as
     correcting the drift between two clocks does. Nothing is allocated once it is made, so it runs on an audio thread
     too. */
 class Resampler

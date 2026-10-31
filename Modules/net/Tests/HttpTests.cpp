@@ -1,3 +1,4 @@
+#include "symbolengine/core/Paths.h"
 #include "symbolengine/core/System.h"
 #include "symbolengine/net/Http.h"
 
@@ -135,4 +136,18 @@ TEST_CASE("Stopping partway stops the fetch, with no problem", "[internet]")
     CHECK(pieces == 1);
     CHECK(answer.problem.empty());
     CHECK(answer.status == 200);
+}
+
+TEST_CASE("Only a file address on this computer names a file, with nothing a path can't hold")
+{
+    const auto local = http::fileAt("file://localhost/some/where.wav");
+    REQUIRE(local.has_value());
+    CHECK(paths::toUtf8(*local).ends_with("some/where.wav"));
+    CHECK(local->is_absolute());
+
+    CHECK_FALSE(http::fileAt("file://example.com/some/where.wav").has_value());
+
+    // A name stopping short of what an extension check saw, and bytes that are no text.
+    CHECK_FALSE(http::fileAt("file:///etc/passwd%00.wav").has_value());
+    CHECK_FALSE(http::fileAt("file:///a%FFb").has_value());
 }

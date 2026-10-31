@@ -27,6 +27,8 @@ struct Attribute
     text and elements as running prose does, as XHTML does, can be read but its text no longer interleaves with its
     elements. In an element that has elements inside it, text that is only spaces and line breaks is the document's
     layout and isn't kept. */
+struct ParsedElement;
+
 class Element
 {
 public:
@@ -69,6 +71,8 @@ public:
     bool operator==(const Element&) const = default;
 
 private:
+    friend struct ParsedElement;
+
     std::string tag;
     std::vector<Attribute> attrs;
     std::vector<Element> kids;

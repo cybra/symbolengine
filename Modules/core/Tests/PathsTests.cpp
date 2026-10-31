@@ -142,3 +142,24 @@ TEST_CASE("The executable file is this test program")
     CHECK(std::filesystem::is_regular_file(file));
     CHECK(paths::toUtf8(file.filename()).starts_with("symbolengine_core_tests"));
 }
+
+TEST_CASE("Text that isn't valid in its encoding becomes a replacement, never an exception")
+{
+    // Bytes that are no UTF-8, on every system.
+    CHECK_NOTHROW(paths::fromUtf8("a\xFF"
+                                  "b"));
+    CHECK_NOTHROW(paths::toUtf8(paths::fromUtf8("a\xFF"
+                                                "b")));
+
+#if defined(_WIN32)
+    // A name NTFS allows that no UTF-8 can hold, half of a surrogate pair.
+    const std::filesystem::path half(std::wstring(L"a\xD800"
+                                                  L"b"));
+    CHECK(paths::toUtf8(half) == "a\xEF\xBF\xBD"
+                                 "b");
+    CHECK(paths::fromUtf8("a\xFF"
+                          "b")
+              .wstring() == L"a\xFFFD"
+                            L"b");
+#endif
+}

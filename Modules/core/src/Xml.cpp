@@ -5,11 +5,23 @@
 #include "Utf8.h"
 
 #include <algorithm>
+#include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 namespace symbolengine::xml
 {
+
+// What the parser adds to an element: an attribute it has read and found no other of that name, where setAttribute would
+// look through all of them to find, so a tag's many attributes would take as long as their number squared.
+struct ParsedElement
+{
+    static void addNew(Element& element, std::string_view name, std::string_view value)
+    {
+        element.attrs.push_back({std::string(name), std::string(value)});
+    }
+};
 
 namespace
 {
@@ -369,6 +381,7 @@ private:
         ++position;   // the <
         Element element(name("expected an element's name"));
 
+        std::unordered_set<std::string> names;
         for (;;)
         {
             const bool spaced = skipSpace();
@@ -402,12 +415,12 @@ private:
             ++position;
             auto value = attributeValue(quote);
 
-            if (element.attribute(attribute) != nullptr)
+            if (!names.insert(std::string(attribute)).second)
             {
                 position = start;
                 fail("the attribute " + std::string(attribute) + " is given twice");
             }
-            element.setAttribute(attribute, value);
+            ParsedElement::addNew(element, attribute, value);
         }
     }
 

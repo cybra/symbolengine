@@ -222,7 +222,7 @@ void processBlock(float* const* channels, std::size_t frames)
 }
 ```
 
-`Resampler` takes audio from one rate to another a stretch at a time, a 1 kHz tone coming out within -110 dB of the ideal. It allocates as it is made and never again, so `process` runs on an audio thread too:
+`Resampler` takes audio from one rate to another a stretch at a time, a 1 kHz tone coming out within -110 dB of the ideal, what lies just past a new Nyquist 90 dB down and 20 kHz within 0.2 dB. It allocates as it is made and never again, so `process` runs on an audio thread too:
 
 ```cpp
 Resampler resampler(2, 48000.0 / 44100.0);

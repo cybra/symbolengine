@@ -79,6 +79,15 @@ std::optional<std::filesystem::path> fileAt(std::string_view address)
         return std::nullopt;
 
     address.remove_prefix(scheme.size());
+
+    // A file on another computer isn't one this can name.
+    const auto hostEnd = address.find('/');
+    if (hostEnd == std::string_view::npos)
+        return std::nullopt;
+    if (const auto host = address.substr(0, hostEnd); !host.empty() && host != "localhost")
+        return std::nullopt;
+    address.remove_prefix(hostEnd);
+
     std::string path;
 
     for (std::size_t i = 0; i < address.size(); ++i)
@@ -94,6 +103,10 @@ std::optional<std::filesystem::path> fileAt(std::string_view address)
             path += address[i];
         }
     }
+
+    // A name stopping short of what was checked of it, or that is no text, names nothing.
+    if (path.find('\0') != std::string::npos || text::replaceInvalidUtf8(path) != path)
+        return std::nullopt;
 
 #if defined(_WIN32)
     // /C:/Users is C:/Users.

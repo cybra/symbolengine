@@ -639,3 +639,111 @@ TEST_CASE("A child asked to outlive what started it goes on after its object is 
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     CHECK_FALSE(std::filesystem::exists(killed));
 }
+
+TEST_CASE("A lost link is told on one of its own threads, never on the one sending")
+{
+    for (int attempt = 0; attempt < 20; ++attempt)
+    {
+        auto child = startHelper({"link-echo"}, true);
+        std::atomic<bool> told{false};
+        std::atomic<bool> onSender{false};
+        const auto sender = std::this_thread::get_id();
+        child->link()->onLost([&] {
+            onSender = std::this_thread::get_id() == sender;
+            told = true;
+        });
+        child->link()->start();
+        REQUIRE(child->link()->send("hello"));
+
+        // Sending as the child goes, so a send finds it gone as often as the reader does.
+        child->kill();
+        const std::string message(4096, 'x');
+        const auto until = std::chrono::steady_clock::now() + 5s;
+        while (!told && std::chrono::steady_clock::now() < until)
+            child->link()->send(message);
+
+        CHECK(told);
+        CHECK_FALSE(onSender);
+    }
+}
+
+TEST_CASE("A send to a child that reads nothing ends when the child's object goes, which waits on nothing")
+{
+    auto child = startHelper({"hang"}, true);
+    child->link()->start();
+
+    std::atomic<bool> sending{true}, full{false};
+    auto* const link = child->link();
+    std::thread sender([&, link] {
+        const std::string message(1 << 16, 'x');
+        for (int i = 0; i < 1000 && link->send(message); ++i)
+            full = i > 16;
+        sending = false;
+    });
+
+    // More than any channel between two processes holds is on its way by now, the rest waiting.
+    std::this_thread::sleep_for(500ms);
+    const auto started = std::chrono::steady_clock::now();
+    child.reset();
+    CHECK(std::chrono::steady_clock::now() - started < 5s);
+
+    const auto until = std::chrono::steady_clock::now() + 5s;
+    while (sending && std::chrono::steady_clock::now() < until)
+        std::this_thread::sleep_for(1ms);
+    CHECK_FALSE(sending);
+
+    if (sending)
+        sender.detach();
+    else
+        sender.join();
+}
+
+TEST_CASE("A child exiting with -1 exited, on every system")
+{
+    auto child = startHelper({"exit", "-1"});
+    const auto ending = child->wait(10s);
+    REQUIRE(ending.has_value());
+    CHECK(ending->kind == ProcessEnding::Kind::exited);
+}
+
+#if defined(_WIN32)
+TEST_CASE("A batch file isn't started, as Windows would hand its arguments to cmd.exe to read again")
+{
+    ScratchFolder scratch;
+    for (const char* name : {"update.cmd", "update.bat", "UPDATE.CMD"})
+    {
+        CAPTURE(name);
+        const auto file = scratch.path / name;
+        files::writeSafely(file, "@echo off\n");
+        ChildProcess::Options options;
+        options.arguments = {"a&calc.exe&.wav"};
+        std::error_code error;
+        CHECK(ChildProcess::start(file, options, error) == nullptr);
+        CHECK(error == std::errc::not_supported);
+    }
+}
+#endif
+
+#if defined(__linux__)
+TEST_CASE("A program started without a link inherits nothing open at the lowest number a link would use")
+{
+    ScratchFolder scratch;
+    const auto path = scratch.path / "left open.txt";
+    files::writeSafely(path, "x");
+    const auto list = scratch.path / "open.txt";
+
+    const int opened = ::open(path.c_str(), O_RDONLY);
+    REQUIRE(opened >= 0);
+    const int third = opened == 3 ? 3 : ::dup2(opened, 3);
+    REQUIRE(third == 3);
+
+    auto child = startHelper({"no-link-files", paths::toUtf8(list)});
+    REQUIRE(child->wait(10s).has_value());
+    if (opened != 3)
+        ::close(opened);
+    ::close(3);
+    const auto open = files::read(list);
+    CAPTURE(open);
+    CHECK(open.find(",3,") == std::string::npos);
+}
+#endif

@@ -22,6 +22,11 @@
     #include <fcntl.h>
     #include <sys/stat.h>
     #include <unistd.h>
+    #if defined(__APPLE__)
+        #include <copyfile.h>
+    #elif defined(__linux__)
+        #include <sys/xattr.h>
+    #endif
 #endif
 
 namespace symbolengine::files
@@ -41,11 +46,8 @@ std::filesystem::path temporaryBeside(const std::filesystem::path& file)
     for (int i = 0; i < 12; ++i, mix >>= 4)
         tag += hex[mix & 0xF];
 
-    auto name = file.filename();
-    name += ".";
-    name += tag;
-    name += ".tmp";
-    return file.parent_path() / std::filesystem::path(".").concat(name.native());
+    // Its own name isn't part of this, which would make a name as long as the system allows too long.
+    return file.parent_path() / std::filesystem::path("." + tag + ".tmp");
 }
 
 // Follows symbolic links to the file they lead to, so writing replaces that file and the links stay as they are.
@@ -106,7 +108,13 @@ void replace(const std::filesystem::path& from, const std::filesystem::path& to,
     // open without delete sharing can't be replaced until they let go, so a refusal is tried again for a while.
     for (int attempt = 0;; ++attempt)
     {
-        if (MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+        // What the system holds about a file it has, its attributes, permissions and when it was made, stay with it.
+        if (ReplaceFileW(to.c_str(), from.c_str(), nullptr,
+                         REPLACEFILE_IGNORE_MERGE_ERRORS | REPLACEFILE_IGNORE_ACL_ERRORS, nullptr, nullptr))
+            return;
+
+        if (GetLastError() == ERROR_FILE_NOT_FOUND &&
+            MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
             return;
 
         const DWORD code = GetLastError();
@@ -131,6 +139,38 @@ std::error_code lastError()
     return std::error_code(errno, std::generic_category());
 }
 
+// What the system holds about a file besides its contents, for the file replacing it: its permissions, and its extended
+// attributes, which hold such things as a Mac's color tags. Where it isn't allowed, the contents are what matter.
+void keepWhatIsKnownOf(const std::filesystem::path& from, [[maybe_unused]] const std::filesystem::path& to, int handle)
+{
+    struct stat existing = {};
+    if (::stat(from.c_str(), &existing) != 0)
+        return;
+
+    ::fchmod(handle, existing.st_mode & 07777);
+
+    #if defined(__APPLE__)
+    ::copyfile(from.c_str(), to.c_str(), nullptr, COPYFILE_METADATA);
+    #elif defined(__linux__)
+    const auto listed = ::listxattr(from.c_str(), nullptr, 0);
+    if (listed <= 0)
+        return;
+
+    std::string names(static_cast<std::size_t>(listed), '\0');
+    const auto got = ::listxattr(from.c_str(), names.data(), names.size());
+    for (std::size_t at = 0; got > 0 && at < static_cast<std::size_t>(got); at = names.find('\0', at) + 1)
+    {
+        const auto* const name = names.c_str() + at;
+        const auto size = ::getxattr(from.c_str(), name, nullptr, 0);
+        if (size < 0)
+            continue;
+        std::string value(static_cast<std::size_t>(size), '\0');
+        if (::getxattr(from.c_str(), name, value.data(), value.size()) == size)
+            ::fsetxattr(handle, name, value.data(), value.size(), 0);
+    }
+    #endif
+}
+
 void writeNew(const std::filesystem::path& file, std::string_view contents, std::error_code& error,
               const std::filesystem::path& keepModeOf)
 {
@@ -141,9 +181,7 @@ void writeNew(const std::filesystem::path& file, std::string_view contents, std:
         return;
     }
 
-    struct stat existing = {};
-    if (::stat(keepModeOf.c_str(), &existing) == 0)
-        ::fchmod(handle, existing.st_mode & 07777);
+    keepWhatIsKnownOf(keepModeOf, file, handle);
 
     while (!contents.empty())
     {

@@ -138,3 +138,58 @@ TEST_CASE("Resampler's ratio moved by drift's amounts while it runs makes no cli
     // A 1 kHz tone at half scale steps at most 0.066 a sample at 48 kHz.
     CHECK(largestStep < 0.07);
 }
+
+namespace
+{
+// A tone through a resampler, and how loud what comes out is at the frequency given.
+double levelAt(double from, double to, double tone, double heard)
+{
+    std::vector<float> input(static_cast<std::size_t>(from * 2.0));
+    for (std::size_t i = 0; i < input.size(); ++i)
+        input[i] = static_cast<float>(std::sin(2.0 * std::numbers::pi * tone * static_cast<double>(i) / from));
+
+    Resampler resampler(1, to / from);
+    std::vector<float> output(static_cast<std::size_t>(to * 2.0) + 64);
+    std::size_t taken = 0, given = 0;
+    while (taken < input.size())
+    {
+        const float* in[1]{input.data() + taken};
+        float* out[1]{output.data() + given};
+        const auto done =
+            resampler.process(in, std::min<std::size_t>(4096, input.size() - taken), out, output.size() - given);
+        taken += done.consumed;
+        given += done.produced;
+        if (done.consumed == 0 && done.produced == 0)
+            break;
+    }
+
+    double real = 0.0, imaginary = 0.0, weight = 0.0;
+    const std::size_t first = 4096, last = given - 4096;
+    for (std::size_t i = first; i < last; ++i)
+    {
+        const auto window = 0.5 - 0.5 * std::cos(2.0 * std::numbers::pi * static_cast<double>(i - first) /
+                                                 static_cast<double>(last - first));
+        const auto angle = 2.0 * std::numbers::pi * heard * static_cast<double>(i) / to;
+        real += window * output[i] * std::cos(angle);
+        imaginary += window * output[i] * std::sin(angle);
+        weight += window;
+    }
+    return 20.0 * std::log10(2.0 * std::hypot(real, imaginary) / weight + 1e-30);
+}
+}
+
+TEST_CASE("Going down a rate, what would fold back from just past the new Nyquist is gone")
+{
+    CHECK(levelAt(96000.0, 48000.0, 24250.0, 23750.0) < -90.0);
+    CHECK(levelAt(96000.0, 48000.0, 24500.0, 23500.0) < -100.0);
+    CHECK(levelAt(96000.0, 44100.0, 22250.0, 21850.0) < -90.0);
+    CHECK(levelAt(192000.0, 48000.0, 24500.0, 23500.0) < -100.0);
+}
+
+TEST_CASE("The top of what people hear comes through at its level, whichever way the rate goes")
+{
+    CHECK(levelAt(44100.0, 48000.0, 20000.0, 20000.0) > -0.2);
+    CHECK(levelAt(48000.0, 44100.0, 20000.0, 20000.0) > -0.2);
+    CHECK(levelAt(48000.0, 48001.0, 21000.0, 21000.0) > -0.2);
+    CHECK(levelAt(96000.0, 48000.0, 21000.0, 21000.0) > -0.2);
+}

@@ -21,6 +21,7 @@ struct ProcessLink::Native
     void* readerThread = nullptr;   // the thread reading, so a read it waits in can be cancelled
     std::atomic<bool> reading{false};
     std::atomic<int> writers{0};
+    std::atomic<unsigned long> writerThread{0};   // the thread writing, so a write it waits in can be cancelled
 #else
     int socket = -1;
     std::int64_t parent = 0;   // the ID of the program that started this one, in a child

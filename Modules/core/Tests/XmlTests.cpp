@@ -292,3 +292,21 @@ TEST_CASE("XML written and read again is the same, for any element")
         }
     }
 }
+
+TEST_CASE("An element's many attributes take no longer than their number")
+{
+    std::string text = "<Root";
+    constexpr int many = 200000;
+    for (int i = 0; i < many; ++i)
+        text += " a" + std::to_string(i) + "=\"1\"";
+    text += "/>";
+
+    const auto root = xml::parse(text);
+    CHECK(root.attributes().size() == many);
+    CHECK(root.attribute("a199999") != nullptr);
+
+    // Given twice is still refused, past where any short list would be looked through.
+    text.resize(text.size() - 2);
+    text += " a100=\"2\"/>";
+    CHECK_FALSE(xml::tryParse(text).has_value());
+}

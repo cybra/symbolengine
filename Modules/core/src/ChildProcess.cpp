@@ -34,7 +34,7 @@ struct ProcessLink::State
 
     std::mutex sleeping;
     std::condition_variable wake;
-    std::thread reader, heartbeat, watcher;
+    std::thread reader, heartbeat, beatSender, watcher;
 
     bool sendFrame(Frame kind, std::string_view bytes, bool wait)
     {
@@ -54,14 +54,25 @@ struct ProcessLink::State
         else if (!held.try_lock())
             return true;
 
+        // Failing here is left to the reader to say, which it does as the channel shuts: whoever is sending may hold what
+        // the program's own function for a lost link wants.
         if (!native->write(header, headerSize) || !native->write(bytes.data(), bytes.size()))
         {
             held.unlock();
-            lose();
+            native->shutDown();
             return false;
         }
 
         return true;
+    }
+
+    // Wakes whatever waits on the link's timing, with no chance of its missing this between looking and sleeping.
+    void wakeAll()
+    {
+        {
+            const std::lock_guard held(sleeping);
+        }
+        wake.notify_all();
     }
 
     // The other end has gone: said once, unless this side closed the link itself.
@@ -71,7 +82,7 @@ struct ProcessLink::State
             return;
 
         native->shutDown();
-        wake.notify_all();
+        wakeAll();
 
         if (!closing && lostCallback != nullptr)
             lostCallback();
@@ -131,6 +142,22 @@ struct ProcessLink::State
                 lose();
                 return;
             }
+        }
+    }
+
+    // Sent from a thread of their own, as a channel filled by a child not reading holds up a write, which mustn't stop
+    // the beats being counted.
+    void sendBeats()
+    {
+        while (!lost && !closing)
+        {
+            {
+                std::unique_lock held(sleeping);
+                wake.wait_for(held, timing.heartbeat, [this] { return lost || closing; });
+            }
+
+            if (lost || closing)
+                return;
 
             sendFrame(Frame::heartbeat, {}, false);
         }
@@ -187,6 +214,7 @@ void ProcessLink::start(Timing timing)
     state->timing = timing;
     state->reader = std::thread([held = state] { held->read(); });
     state->heartbeat = std::thread([held = state] { held->beat(); });
+    state->beatSender = std::thread([held = state] { held->sendBeats(); });
 
     if (state->native->watchesParent())
         state->watcher = std::thread([held = state] { held->watch(); });
@@ -211,9 +239,10 @@ void ProcessLink::close()
         return;
 
     state->native->shutDown();
-    state->wake.notify_all();
+    state->wakeAll();
     state->join(state->reader);
     state->join(state->heartbeat);
+    state->join(state->beatSender);
     state->join(state->watcher);
 }
 

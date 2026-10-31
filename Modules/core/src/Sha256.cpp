@@ -7,6 +7,10 @@
 #include <memory>
 #include <vector>
 
+#if defined(_WIN32)
+    #include <share.h>
+#endif
+
 namespace symbolengine
 {
 
@@ -150,8 +154,9 @@ Sha256::Digest Sha256::ofFile(const std::filesystem::path& file, std::error_code
     error.clear();
 
 #if defined(_WIN32)
-    std::FILE* opened = nullptr;
-    const int failure = _wfopen_s(&opened, file.c_str(), L"rb");
+    // Sharing with whoever else has it open, as every other read of a file here does.
+    std::FILE* opened = _wfsopen(file.c_str(), L"rb", _SH_DENYNO);
+    const int failure = opened == nullptr ? errno : 0;
 #else
     std::FILE* opened = std::fopen(file.c_str(), "rb");
     const int failure = opened == nullptr ? errno : 0;

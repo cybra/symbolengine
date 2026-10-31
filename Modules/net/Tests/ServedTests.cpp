@@ -6,6 +6,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 
@@ -222,4 +224,39 @@ TEST_CASE("A server that says nothing runs out the time given", "[served]")
     CHECK_FALSE(got.answer.problem.empty());
     CHECK(took >= 900ms);
     CHECK(took < 20s);
+}
+
+TEST_CASE("A function given the answer that throws reaches the program asking, on every system")
+{
+    if (!http::available())
+        SKIP("This system can't fetch yet");
+
+    TestServer server([](const std::string&, const TestServer::Send& send) {
+        send("HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello");
+    });
+
+    CHECK_THROWS_AS(http::get(http::Request{server.address("/a")},
+                              [](int, std::string_view) -> bool { throw std::runtime_error("the program's own"); }),
+                    std::runtime_error);
+}
+
+TEST_CASE("What follows an address's # stays with the program, never reaching the server")
+{
+    if (!http::available())
+        SKIP("This system can't fetch yet");
+
+    std::mutex lock;
+    std::string asked;
+    TestServer server([&](const std::string& request, const TestServer::Send& send) {
+        {
+            const std::lock_guard hold(lock);
+            asked = request;
+        }
+        send("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    });
+
+    const auto answer = http::get(http::Request{server.address("/a#b")}, [](int, std::string_view) { return true; });
+    CHECK(answer.status == 200);
+    const std::lock_guard hold(lock);
+    CHECK(asked.starts_with("GET /a HTTP/"));
 }

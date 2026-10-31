@@ -20,6 +20,7 @@
     #include <thread>
 #else
     #include <sys/stat.h>
+    #include <sys/xattr.h>
     #include <unistd.h>
 #endif
 
@@ -189,5 +190,63 @@ TEST_CASE("Writing waits for a program holding the file open for a moment")
     CHECK_FALSE(error);
     CHECK(files::read(file) == "new");
     CHECK(namesIn(scratch.path) == std::vector<std::string>{"held.txt"});
+}
+#endif
+
+#if !defined(_WIN32)
+TEST_CASE("A file named as long as a name can be is written like any other")
+{
+    ScratchFolder scratch;
+    const auto file = scratch.path / std::string(250, 'a');
+    files::writeSafely(file, "one");
+    files::writeSafely(file, "two");
+    CHECK(files::read(file) == "two");
+}
+#endif
+
+#if defined(__APPLE__) || defined(__linux__)
+TEST_CASE("Writing keeps what the system holds about a file besides its contents")
+{
+    ScratchFolder scratch;
+    const auto file = scratch.path / "tagged.txt";
+    files::writeSafely(file, "one");
+
+    const char value[] = "kept";
+    #if defined(__APPLE__)
+    const char* const name = "com.example.symbolengine";
+    const auto set = ::setxattr(file.c_str(), name, value, sizeof value, 0, 0);
+    #else
+    const char* const name = "user.symbolengine";
+    const auto set = ::setxattr(file.c_str(), name, value, sizeof value, 0);
+    #endif
+    if (set != 0)
+        SKIP("This folder keeps no extended attributes");
+
+    files::writeSafely(file, "two");
+    CHECK(files::read(file) == "two");
+
+    char back[16]{};
+    #if defined(__APPLE__)
+    const auto got = ::getxattr(file.c_str(), name, back, sizeof back, 0, 0);
+    #else
+    const auto got = ::getxattr(file.c_str(), name, back, sizeof back);
+    #endif
+    CHECK(static_cast<std::size_t>(got) == sizeof value);
+    CHECK(std::string(back) == "kept");
+}
+#endif
+
+#if defined(_WIN32)
+TEST_CASE("Writing keeps a file's attributes")
+{
+    ScratchFolder scratch;
+    const auto file = scratch.path / "hidden.txt";
+    files::writeSafely(file, "one");
+    REQUIRE(SetFileAttributesW(file.c_str(), FILE_ATTRIBUTE_HIDDEN));
+    files::writeSafely(file, "two");
+    CHECK(files::read(file) == "two");
+    const auto attributes = GetFileAttributesW(file.c_str());
+    CHECK((attributes & FILE_ATTRIBUTE_HIDDEN) != 0);
+    SetFileAttributesW(file.c_str(), FILE_ATTRIBUTE_NORMAL);
 }
 #endif

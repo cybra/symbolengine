@@ -1,5 +1,7 @@
 #include "symbolengine/core/System.h"
 
+#include "symbolengine/core/Paths.h"
+
 #if defined(_WIN32)
     #ifndef WIN32_LEAN_AND_MEAN
         #define WIN32_LEAN_AND_MEAN
@@ -41,15 +43,14 @@ std::optional<std::string> environmentVariable(std::string_view name)
 {
 #if defined(_WIN32)
     // Windows keeps the environment in UTF-16; std::getenv would give it in the system's code page.
-    const auto wide = std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(name.data()), name.size()));
+    const auto wide = paths::fromUtf8(name);
     const auto needed = GetEnvironmentVariableW(wide.c_str(), nullptr, 0);
     if (needed == 0)
         return std::nullopt;
 
     std::vector<wchar_t> value(needed);
     const auto length = GetEnvironmentVariableW(wide.c_str(), value.data(), needed);
-    const auto text = std::filesystem::path(std::wstring(value.data(), length)).u8string();
-    return std::string(reinterpret_cast<const char*>(text.data()), text.size());
+    return paths::toUtf8(std::filesystem::path(std::wstring(value.data(), length)));
 #else
     if (const char* value = std::getenv(std::string(name).c_str()))
         return std::string(value);
@@ -71,7 +72,7 @@ bool openInBrowser(std::string_view url)
         return false;
 
 #if defined(_WIN32)
-    const auto wide = std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(url.data()), url.size()));
+    const auto wide = paths::fromUtf8(url);
     const auto result =
         reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", wide.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
     return result > 32;
