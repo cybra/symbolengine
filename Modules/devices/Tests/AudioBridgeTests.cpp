@@ -324,7 +324,7 @@ TEST_CASE("Blocks of any size give a steady bridge, its delay at least what they
         run.inputPace = 48000.0 * (1.0 + 100e-6);
 
         // The loop's steps are the blocks', so the longest take the longest to settle.
-        run.seconds = block >= 8192 ? 120.0 : 45.0;
+        run.seconds = block >= 4096 ? 120.0 : 45.0;
         run.inputBlock = run.outputBlock = block;
         const auto got = measured(bridge, run);
         INFO("delay " << got.end.delaySeconds << " real " << got.realDelay << " drift " << got.driftLow << " to "

@@ -140,7 +140,11 @@ TEST_CASE("Stopping partway stops the fetch, with no problem", "[internet]")
 
 TEST_CASE("Only a file address on this computer names a file, with nothing a path can't hold")
 {
+#if defined(_WIN32)
+    const auto local = http::fileAt("file://localhost/C:/some/where.wav");
+#else
     const auto local = http::fileAt("file://localhost/some/where.wav");
+#endif
     REQUIRE(local.has_value());
     CHECK(paths::toUtf8(*local).ends_with("some/where.wav"));
     CHECK(local->is_absolute());

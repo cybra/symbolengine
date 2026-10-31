@@ -307,9 +307,11 @@ int main(int argc, [[maybe_unused]] char** narrowArguments)
     // The numbers of the files it has open, each between commas, into the file named.
     if (mode == "no-link-files")
     {
-        std::string open = ",";
+        // What each number is open on, as the listing itself holds the lowest number free.
+        std::string open;
+        std::error_code ignored;
         for (const auto& entry : std::filesystem::directory_iterator("/proc/self/fd"))
-            open += entry.path().filename().string() + ",";
+            open += std::filesystem::read_symlink(entry.path(), ignored).string() + "\n";
         std::ofstream(argv[2]) << open;
         return 0;
     }

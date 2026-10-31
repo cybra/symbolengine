@@ -744,6 +744,6 @@ TEST_CASE("A program started without a link inherits nothing open at the lowest 
     ::close(3);
     const auto open = files::read(list);
     CAPTURE(open);
-    CHECK(open.find(",3,") == std::string::npos);
+    CHECK(open.find("left open.txt") == std::string::npos);
 }
 #endif
