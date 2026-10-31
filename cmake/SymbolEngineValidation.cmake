@@ -1,6 +1,8 @@
 include_guard(GLOBAL)
 include(SymbolEngineVst3Sdk)
 
+set(SYMBOLENGINE_VALIDATION_SCRIPTS ${CMAKE_CURRENT_LIST_DIR} CACHE INTERNAL "")
+
 include(ExternalProject)
 
 # Every validator that applies to a plugin built with symbolengine_add_plugin, as tests:
@@ -103,7 +105,7 @@ function(symbolengine_validate_plugin target)
             add_test(NAME "${target}: VST3 validator"
                 COMMAND ${CMAKE_COMMAND} -DPROGRAM=${validator} -DARGUMENT=${vst3_folder}
                     "-DEXPECT=cid = ${validate_VST3_CLASS_ID}"
-                    -P ${PROJECT_SOURCE_DIR}/cmake/RunAndExpect.cmake)
+                    -P ${SYMBOLENGINE_VALIDATION_SCRIPTS}/RunAndExpect.cmake)
         else()
             add_test(NAME "${target}: VST3 validator" COMMAND ${validator} ${vst3_folder})
         endif()
@@ -112,7 +114,7 @@ function(symbolengine_validate_plugin target)
             string(JOIN "," arrangements ${validate_VST3_ARRANGEMENTS})
             add_test(NAME "${target}: VST3 speaker arrangements"
                 COMMAND ${CMAKE_COMMAND} -DVALIDATOR=${validator} -DPLUGIN=${vst3_folder} -DEXPECTED=${arrangements}
-                    -P ${PROJECT_SOURCE_DIR}/cmake/Vst3Arrangements.cmake)
+                    -P ${SYMBOLENGINE_VALIDATION_SCRIPTS}/Vst3Arrangements.cmake)
         endif()
 
         if(SYMBOLENGINE_PLUGINVAL)
@@ -142,7 +144,7 @@ function(symbolengine_validate_plugin target)
         list(GET au_codes 2 manufacturer)
         add_test(NAME "${target}: Audio Unit's Info.plist"
             COMMAND ${CMAKE_COMMAND} -DPLIST=$<TARGET_BUNDLE_CONTENT_DIR:${target}_auv2>/Info.plist
-                -DMANUFACTURER=${manufacturer} "-DNAME=${au_name}" -P ${PROJECT_SOURCE_DIR}/cmake/CheckAudioUnitInfo.cmake)
+                -DMANUFACTURER=${manufacturer} "-DNAME=${au_name}" -P ${SYMBOLENGINE_VALIDATION_SCRIPTS}/CheckAudioUnitInfo.cmake)
     endif()
 
     if(APPLE AND SYMBOLENGINE_AUVAL AND AUV2 IN_LIST formats)
@@ -151,6 +153,6 @@ function(symbolengine_validate_plugin target)
         list(GET au_codes 2 manufacturer)
         add_test(NAME "${target}: auval"
             COMMAND ${CMAKE_COMMAND} -DCOMPONENT=$<TARGET_BUNDLE_DIR:${target}_auv2> -DTYPE=${type} -DSUBTYPE=${subtype}
-                -DMANUFACTURER=${manufacturer} -P ${PROJECT_SOURCE_DIR}/cmake/Auval.cmake)
+                -DMANUFACTURER=${manufacturer} -P ${SYMBOLENGINE_VALIDATION_SCRIPTS}/Auval.cmake)
     endif()
 endfunction()

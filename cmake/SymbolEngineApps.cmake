@@ -11,8 +11,8 @@ set(SYMBOLENGINE_APP_TEMPLATES ${CMAKE_CURRENT_LIST_DIR} CACHE INTERNAL "")
 # own, no console, and its version information, which the file's Properties show. The program's own main() is its
 # entry on both systems, and it has SYMBOLENGINE_APP_NAME and SYMBOLENGINE_APP_VERSION defined as strings.
 #
-# IDENTIFIER is its bundle identifier, such as com.example.editor. VERSION is the project's unless given. COMPANY and
-# COPYRIGHT go in the version information and the Info.plist. ICON_NAME names the icon the program puts in its bundle's
+# IDENTIFIER is its bundle identifier, such as com.example.editor. VERSION is the project's unless given. COMPANY goes
+# in Windows' version information, and COPYRIGHT there and in the Info.plist. ICON_NAME names the icon the program puts in its bundle's
 # Resources itself, as AppIcon.icns or an icon compiled by actool; DOCUMENT_EXTENSIONS lists the kinds of file the
 # program opens, which the Finder then opens with it; MICROPHONE_TEXT is what a Mac shows when the program first asks
 # for the microphone; and PLIST_ENTRIES is further XML for the Info.plist's dictionary.

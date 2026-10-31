@@ -21,6 +21,15 @@ if(SYMBOLENGINE_PLUGIN)
     list(APPEND consumer_options
         -DFETCHCONTENT_SOURCE_DIR_SYMBOLENGINE_CLAP=${symbolengine_clap_SOURCE_DIR}
         -DFETCHCONTENT_SOURCE_DIR_SYMBOLENGINE_CLAP_WRAPPER=${symbolengine_clap_wrapper_SOURCE_DIR})
+
+    foreach(sdk IN ITEMS vst3sdk vst3_base vst3_cmake vst3_pluginterfaces vst3_public_sdk audiounit_sdk)
+        FetchContent_GetProperties(symbolengine_${sdk})
+        if(symbolengine_${sdk}_SOURCE_DIR)
+            string(TOUPPER ${sdk} upper)
+            list(APPEND consumer_options
+                -DFETCHCONTENT_SOURCE_DIR_SYMBOLENGINE_${upper}=${symbolengine_${sdk}_SOURCE_DIR})
+        endif()
+    endforeach()
 else()
     list(APPEND consumer_options -DSYMBOLENGINE_PLUGIN=OFF)
 endif()
@@ -43,7 +52,7 @@ add_test(NAME "consumer: FetchContent"
         ${consumer_generator}
         --build-config $<CONFIG>
         --build-options ${consumer_options} -DCONSUME=fetch -DSYMBOLENGINE_SOURCE=${PROJECT_SOURCE_DIR}
-        --test-command consumer)
+        --test-command ${CMAKE_CTEST_COMMAND} -C $<CONFIG> --output-on-failure)
 
 add_test(NAME "consumer: install"
     COMMAND ${CMAKE_COMMAND} --install ${PROJECT_BINARY_DIR} --prefix ${consumer_build}/prefix --config $<CONFIG>)
@@ -55,7 +64,7 @@ add_test(NAME "consumer: find_package"
         ${consumer_generator}
         --build-config $<CONFIG>
         --build-options ${consumer_options} -DCONSUME=package -DCMAKE_PREFIX_PATH=${consumer_build}/prefix
-        --test-command consumer)
+        --test-command ${CMAKE_CTEST_COMMAND} -C $<CONFIG> --output-on-failure)
 set_tests_properties("consumer: find_package" PROPERTIES FIXTURES_REQUIRED installed)
 
 # A plugin that states its VST3 class ID, as one moved from elsewhere does, found by Steinberg's validator under it,

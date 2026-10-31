@@ -37,5 +37,10 @@ if(SYMBOLENGINE_TESTS)
         target_sources(symbolengine_plugin_tests PRIVATE Tests/EditorTests.cpp)
         target_include_directories(symbolengine_plugin_tests SYSTEM PRIVATE ${symbolengine_choc_SOURCE_DIR})
     endif()
+endif()
+
+# symbolengine_validate_plugin, which a project can have for its own plugins without building SymbolEngine's tests.
+option(SYMBOLENGINE_PLUGIN_VALIDATION "Make symbolengine_validate_plugin available" ${SYMBOLENGINE_TESTS})
+if(SYMBOLENGINE_PLUGIN_VALIDATION)
     include(SymbolEngineValidation)
 endif()

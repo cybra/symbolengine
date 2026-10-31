@@ -22,6 +22,12 @@ FetchContent_MakeAvailable(symbolengine_clap symbolengine_clap_wrapper)
 set(CLAP_SDK_ROOT ${symbolengine_clap_SOURCE_DIR})
 set(CLAP_WRAPPER_DOWNLOAD_DEPENDENCIES OFF)
 
+# clap-wrapper settles its options for the standard of C++ as it is added, which a project that hasn't asked for one
+# leaves it settling for another, and its own code and the SDKs behind it then don't build.
+if(NOT CMAKE_CXX_STANDARD OR CMAKE_CXX_STANDARD LESS 20)
+    set(CMAKE_CXX_STANDARD 20)
+endif()
+
 # clap-wrapper links its own parts with the static C runtime unless a runtime has been chosen, which clashes with
 # everything else in a build left at CMake's default. Choosing CMake's default here keeps them all the same.
 if(NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
@@ -73,6 +79,9 @@ function(symbolengine_add_plugin target)
     if(NOT plugin_VERSION)
         set(plugin_VERSION ${PROJECT_VERSION})
     endif()
+    if(NOT plugin_VERSION)
+        message(FATAL_ERROR "symbolengine_add_plugin(${target}) needs a VERSION, given to it or to the project() it is in")
+    endif()
     if(NOT CLAP IN_LIST plugin_FORMATS)
         list(PREPEND plugin_FORMATS CLAP)
     endif()
@@ -85,6 +94,12 @@ function(symbolengine_add_plugin target)
     if(NOT plugin_AU_NAME)
         set(plugin_AU_NAME ${plugin_OUTPUT_NAME})
     endif()
+    # The formats' own targets are made here, in the calling project, which may not have asked for a standard of C++,
+    # and the SDKs behind them need this one.
+    if(NOT CMAKE_CXX_STANDARD OR CMAKE_CXX_STANDARD LESS 20)
+        set(CMAKE_CXX_STANDARD 20)
+    endif()
+
     if(NOT plugin_BUNDLE_IDENTIFIER)
         message(FATAL_ERROR "symbolengine_add_plugin(${target}) needs a BUNDLE_IDENTIFIER, such as com.example.gain")
     endif()
