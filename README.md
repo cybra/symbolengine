@@ -2,7 +2,7 @@
 
 An open-source C++ framework for audio applications and plugins, free for any use, open or closed source, with no revenue limits, seats or splash screens. It builds plugins in every format, hosts other makers' plugins, runs audio devices and gives desktop apps web-page interfaces. Its first user is Symbol Studio, a commercial audio app in development, so every part is proven in a real product before it is called done.
 
-Status: building the foundations. The first release comes when Symbol Studio runs on SymbolEngine alone. Its license is MIT, its code is at [github.com/cybra/symbolengine](https://github.com/cybra/symbolengine), and its home will be [symbolengine.dev](https://symbolengine.dev). SymbolEngine is a product of Cyberhost LLC.
+Status: Symbol Studio runs on SymbolEngine alone, passing its self-test, scripted checks, plugin checks and continuous integration. What is left before the first release is checking it by hand on real devices and plugins. Its license is MIT, its code is at [github.com/cybra/symbolengine](https://github.com/cybra/symbolengine), and its home will be [symbolengine.dev](https://symbolengine.dev). SymbolEngine is a product of Cyberhost LLC.
 
 ## Using it
 
@@ -75,8 +75,12 @@ It needs CMake 3.25 or later and a C++20 compiler, and runs on macOS 11 or later
 | ui | The message loop, with calls from any thread and timers; pages in the system's own web view, WKWebView on a Mac and WebView2 on Windows, served from files built into the program, calling native functions and receiving events through a script every page is given; a program's own windows to hold them, the system's own dialogs, and the Mac's menu bar |
 | app | A desktop program on a Mac or Windows: its arguments as UTF-8, the system asking it to quit, to open files or to come back, one instance at a time with a second handing over its arguments, the Dock icon, the recent documents, and `symbolengine_add_app`, which builds the application bundle and the Windows program with their version information |
 | plugin | Plugins written once as a class, with parameters, state, buses from mono to 9.1.6, latency and tail, and an editor as a web page on Mac and Windows; built as CLAP, VST3 and Audio Units, keeping the class ID and codes of a plugin released before, and checked by CLAP's validator, Steinberg's, auval and pluginval |
+| host | Other makers' plugins loaded and played, VST3 on Mac, Windows and Linux and Audio Units v2 on a Mac: scanned in worker processes, so a plugin that crashes takes down only a worker, with their editors in windows of the program's, a crash note saying which plugin the last run ended in, each plugin's time per block, and a debug mode that names what a plugin calls on the audio thread that it never should. [Guide](Docs/Guides/host.md), [example](Examples/PluginPlayer/PluginPlayer.cpp). |
+| net | Fetching from web servers through each system's own client, NSURLSession on a Mac and WinHTTP on Windows. |
 
-The [architecture](Docs/02_architecture.md) describes what is to come: the devices module's systems, the host module, and the rest of files, ui and app.
+Each has a guide: [core](Docs/Guides/core.md), [files](Docs/Guides/files.md), [devices](Docs/Guides/devices.md), [net](Docs/Guides/net.md), [ui](Docs/Guides/ui.md), [app](Docs/Guides/app.md), [plugin](Docs/Guides/plugin.md) and [host](Docs/Guides/host.md). Each has a program in [Examples](Examples) that builds with the rest: Hello is a desktop program, Gain and Filter are plugins, PluginPlayer hosts one, AudioConvert converts between audio formats, PlayTone lists devices and plays through them, and Fetch fetches from a web server.
+
+The [architecture](Docs/02_architecture.md) says how each is built and why, with every problem it was built to meet.
 
 ## What a product includes
 

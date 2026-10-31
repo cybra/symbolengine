@@ -184,7 +184,8 @@ const std::error_category& audioFileCategory() noexcept;
     and other MPEG-4 audio, AAC in ADTS and CAF are read by the system's own decoders: on a Mac all three, on Windows
     the first two, through Media Foundation, and on Linux none, which is AudioFileError::unsupported. A WAV or AIFF-C
     whose samples are coded in a way of their own, such as ADPCM or µ-law, is read by the Mac's decoder, and is
-    unsupported elsewhere; so is Windows Media's WMA on Windows. A file of any other kind is read by AudioToolbox
+    unsupported elsewhere. Windows Media's WMA is read on Windows, through Media Foundation, and unsupported elsewhere.
+    A file of any other kind is read by AudioToolbox
     when it knows it, as it knows AC-3, AMR and Sun's AU, and is otherwise AudioFileError::notAudio. */
 std::unique_ptr<AudioFileReader> openAudio(const std::filesystem::path& file);
 std::unique_ptr<AudioFileReader> openAudio(const std::filesystem::path& file, std::error_code& error);

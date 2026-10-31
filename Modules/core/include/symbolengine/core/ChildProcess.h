@@ -37,9 +37,9 @@ struct ProcessEnding
 };
 
 /** A program this one started, held for as long as it may run: its process, how it ended, and a link to it when
-    asked for. The child gets exactly the arguments and environment given, its standard output and error go to a file
-    or nowhere, and it inherits nothing else of this program's: no open files, sockets or handles, and every signal at
-    its default. Nothing about it waits on this program's other threads.
+    asked for. The child gets exactly the arguments given and this program's environment with the changes asked for,
+    its standard output and error go to a file or nowhere, and it inherits nothing else of this program's: no open
+    files, sockets or handles, and every signal at its default. Nothing about it waits on this program's other threads.
 
     Unless it is asked to (Options::outlives), a child never outlives what started it. Destroying the object kills the
     child if it still runs and waits for it to end. On Windows every child is in a job that the system ends with this program, however this program ends, and a
