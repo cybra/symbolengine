@@ -58,7 +58,7 @@
 - [x] files: a recording written from an audio device's thread, its WAV or AIFF header rewritten and put on disk every second so a take survives a crash, a WAV passing 4 GB as RF64 in place, and each stretch given as the file holds it.
 - [x] core's JSON tests on a PC's Visual Studio Build Tools, whose preprocessor takes the tests' raw strings inside Catch2's macros as escapes: those strings are named before each macro.
 - [x] files: on GitHub's Windows runner, reading through Media Foundation sometimes never returns, Apple Lossless as well as AAC, a read it does perfectly well the next time. It now runs on a thread of its own: a reader that goes half a minute without moving is left to it, and a new one goes on from the same place.
-- [ ] files: libvorbis' own `vorbisenc.c` again once Xiph.Org takes the fix for its 5.1 encoder's leak ([the report](Upstream/libvorbis-51-residue-leak.md)).
+- [ ] files: libvorbis' own `vorbisenc.c` and `vorbisfile.c`, and opusfile's own `opusfile.c`, again once Xiph.Org takes the fixes for their leaks ([5.1 encoder](Upstream/libvorbis-51-residue-leak.md), [chained Vorbis](Upstream/libvorbis-chained-open-leak.md), [chained Opus](Upstream/opusfile-chained-tags-leak.md)).
 - [x] ui: the web view on Mac and Windows, with pages served from files built into the program, and calls and events between page and native code.
 - [x] ui: a program's own windows holding a page, sized alike on every screen, their places held to a screen, see-through until the page draws; functions a page calls that answer later; WebView2 given the keyboard with its window.
 - [x] ui: the system's own dialogs, questions with buttons of the program's naming and choosers for files and folders.
@@ -120,7 +120,7 @@ Each item starts as tests that fail without its fix. A suspected fault that can'
 - [x] Pages and plugins: a page goes only where its program allows, a missing WebView2 says so, an editor's changes reach a host that has stopped rendering, an exception from a plugin's code never reaches the host, plugins in one process never share a window class or an Objective-C class, and a build signed for release can be notarized.
 - [x] devices: Core Audio's and Windows Audio's own arithmetic tested apart from them, the fake stream behaving as a system's does; a format change, a slow call and a device changing its channels each handled as the architecture says.
 - [x] host: an Audio Unit's layouts, a stuck plugin's editor, whom the crash note blames, scans across sleep and links, and the format version of the list.
-- [ ] What is still open in Phases 2 and 3.
+- [x] What is still open in Phases 2 and 3: done, or moved to the checks with the owner, but for the copies of Xiph.Org's code waiting on their fixes.
 
 ## With the owner, after Phase 5
 
