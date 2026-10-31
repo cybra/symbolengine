@@ -521,3 +521,50 @@ TEST_CASE("A player stopped between one play and the next isn't left saying it p
 
     CHECK_FALSE(deck.player.playing());
 }
+
+TEST_CASE("A jump while the player holds less than the fade takes still fades, from the last sample it played")
+{
+    // Read as far as a point and no further, as a disk that has fallen behind, so it soon holds next to nothing.
+    class Runs final : public AudioPlayerSource
+    {
+    public:
+        int channels() const override { return 2; }
+        double sampleRate() const override { return 48000.0; }
+        std::int64_t length() const override { return 480000; }
+
+        void read(float* const* into, std::int64_t from, std::size_t frames) override
+        {
+            while (from >= 2048 && stall.load())
+                std::this_thread::sleep_for(1ms);
+            for (int c = 0; c < 2; ++c)
+                std::fill_n(into[c], frames, 0.5f);
+        }
+
+        std::atomic<bool> stall{true};
+    };
+
+    AudioPlayer::Options options;
+    options.fade = 5ms;
+    Deck deck(options);
+    const auto source = std::make_shared<Runs>();
+    deck.player.play(source, 0);
+    deck.waitReady(1024);
+
+    float* channels[2]{deck.left.data(), deck.right.data()};
+    while (deck.player.ready() > 64)
+        deck.player.render(channels, 2, 32);
+
+    // Played up to full level, it now holds a few frames of a fade that takes 240.
+    deck.player.seek(0);
+    deck.player.render(channels, 2, 512);
+    float last = 0.5f;
+    double largest = 0.0;
+    for (int i = 0; i < 512; ++i)
+    {
+        largest = std::max(largest, static_cast<double>(std::abs(deck.left[static_cast<std::size_t>(i)] - last)));
+        last = deck.left[static_cast<std::size_t>(i)];
+    }
+    CHECK(largest < 0.01);
+    source->stall = false;
+    deck.player.stop();
+}

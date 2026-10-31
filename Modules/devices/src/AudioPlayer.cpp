@@ -6,6 +6,7 @@
 #include <symbolengine/core/Resampler.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <condition_variable>
@@ -110,6 +111,8 @@ struct AudioPlayer::Impl
     bool holding = false;  // a chunk taken and not yet played through
     std::int64_t played = 0;
     double gain = 0.0;
+    std::array<float, 64>
+        lastHeard{};   // the last sample of each channel before its fade, for a fade with nothing left
     std::int64_t lackingFrom = -1, lacking = 0;
 
     // The reader's own.
@@ -212,7 +215,16 @@ struct AudioPlayer::Impl
             {
                 if (leaving)
                 {
-                    leave(want);
+                    // It holds less than the fade takes, so the fade goes on from the last sample heard, rather than
+                    // stepping to silence from wherever the sound had got to.
+                    for (; done < frames && gain > 0.0; ++done)
+                    {
+                        gain = std::max(0.0, gain - fadeStep);
+                        for (int c = 0; c < count && c < static_cast<int>(lastHeard.size()); ++c)
+                            outputs[c][done] = lastHeard[static_cast<std::size_t>(c)] * static_cast<float>(gain);
+                    }
+                    if (gain == 0.0)
+                        leave(want);
                     continue;
                 }
                 // Nothing read in time: silence, and the reader moves on by as much.
@@ -272,6 +284,8 @@ struct AudioPlayer::Impl
             }
             playable -= n;
             const double target = leaving ? 0.0 : 1.0;
+            for (int c = 0; c < count && c < static_cast<int>(lastHeard.size()) && n > 0; ++c)
+                lastHeard[static_cast<std::size_t>(c)] = outputs[c][done + n - 1];
             for (std::int64_t i = 0; i < n; ++i)
             {
                 gain = gain < target ? std::min(target, gain + fadeStep) : std::max(target, gain - fadeStep);

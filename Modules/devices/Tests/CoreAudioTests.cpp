@@ -542,6 +542,41 @@ TEST_CASE("What is played into a loopback device comes back as its input sample 
     CHECK(events.count(AudioEvent::Kind::dropout) == 0);
 }
 
+TEST_CASE("A block's input and output times on a loopback device are as far apart as the latencies reported",
+          "[timing]")
+{
+    const auto part = loopback();
+    if (part.empty())
+        SKIP("SYMBOLENGINE_TEST_LOOPBACK names the loopback driver installed, as BlackHole");
+    Events events;
+    AudioDevices devices({.onEvent = events.handler()});
+    const auto hole = deviceCalled(devices, part + " 2ch");
+    REQUIRE(hole.has_value());
+
+    struct Times final : AudioCallback
+    {
+        void process(const AudioBlock& block) noexcept override { apart = block.outputTime - block.inputTime; }
+        std::atomic<std::int64_t> apart{0};
+    } times;
+
+    AudioError error;
+    AudioStreamRequest request;
+    request.inputChannels = {0, 1};
+    request.outputChannels = {0, 1};
+    auto stream = devices.open("Core Audio", hole->id, request, error);
+    REQUIRE(stream != nullptr);
+    REQUIRE(!stream->add(times));
+    REQUIRE(!stream->start());
+    const auto info = stream->info();
+    std::this_thread::sleep_for(500ms);
+    const auto apart = static_cast<double>(times.apart.load());
+    REQUIRE(!stream->stop());
+
+    const auto expected = static_cast<double>(info.inputLatency + info.outputLatency) * 1e9 / info.sampleRate;
+    INFO("apart " << apart << " ns, the latencies " << expected << " ns");
+    CHECK(std::abs(apart - expected) < 1e9 / info.sampleRate);
+}
+
 TEST_CASE("A Multi-Output device of two loopback devices carries what is played to both, and an aggregate each to its own", "[timing]")
 {
     const auto part = loopback();

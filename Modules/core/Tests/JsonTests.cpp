@@ -65,15 +65,36 @@ TEST_CASE("JSON numbers become integers when whole and in range")
 
 TEST_CASE("JSON escapes decode to UTF-8")
 {
-    CHECK(json::parse(R"("\u00e9")").asString() == "\xC3\xA9");
-    CHECK(json::parse(R"("\u20AC")").asString() == "\xE2\x82\xAC");
-    CHECK(json::parse(R"("\ud83d\ude00")").asString() == "\xF0\x9F\x98\x80");
-    CHECK(json::parse(R"("\u0000")").asString() == std::string(1, '\0'));
+    {
+        const char* const text0 = R"("\u00e9")";
+        CHECK(json::parse(text0).asString() == "\xC3\xA9");
+    }
+    {
+        const char* const text0 = R"("\u20AC")";
+        CHECK(json::parse(text0).asString() == "\xE2\x82\xAC");
+    }
+    {
+        const char* const text0 = R"("\ud83d\ude00")";
+        CHECK(json::parse(text0).asString() == "\xF0\x9F\x98\x80");
+    }
+    {
+        const char* const text0 = R"("\u0000")";
+        CHECK(json::parse(text0).asString() == std::string(1, '\0'));
+    }
 
     // A surrogate without its other half reads as U+FFFD, and what follows it is still read.
-    CHECK(json::parse(R"("\ud83dx")").asString() == "\xEF\xBF\xBDx");
-    CHECK(json::parse(R"("\ude00")").asString() == "\xEF\xBF\xBD");
-    CHECK(json::parse(R"("\ud83d\u0041")").asString() == std::string("\xEF\xBF\xBD") + "A");
+    {
+        const char* const text0 = R"("\ud83dx")";
+        CHECK(json::parse(text0).asString() == "\xEF\xBF\xBDx");
+    }
+    {
+        const char* const text0 = R"("\ude00")";
+        CHECK(json::parse(text0).asString() == "\xEF\xBF\xBD");
+    }
+    {
+        const char* const text0 = R"("\ud83d\u0041")";
+        CHECK(json::parse(text0).asString() == std::string("\xEF\xBF\xBD") + "A");
+    }
 
     CHECK(json::parse("\"caf\xC3\xA9 \xF0\x9F\x8E\xA7\"").asString() == "caf\xC3\xA9 \xF0\x9F\x8E\xA7");
 }
@@ -81,7 +102,10 @@ TEST_CASE("JSON escapes decode to UTF-8")
 TEST_CASE("JSON keeps a repeated name's first place and last value")
 {
     const auto value = json::parse(R"({"a": 1, "b": 2, "a": 3})");
-    CHECK(json::write(value) == R"({"a":3,"b":2})");
+    {
+        const char* const text0 = R"({"a":3,"b":2})";
+        CHECK(json::write(value) == text0);
+    }
 }
 
 TEST_CASE("JSON skips a byte order mark")
@@ -138,7 +162,8 @@ TEST_CASE("JSON writes compact and pretty layouts")
     CHECK(json::write(value) ==
           R"({"name":"Take 1","rate":48000,"gain":0.5,"channels":[true,false],"empty":[],"none":{},"missing":null})");
 
-    CHECK(json::write(value, json::Layout::pretty) == R"({
+    {
+        const char* const text0 = R"({
   "name": "Take 1",
   "rate": 48000,
   "gain": 0.5,
@@ -149,14 +174,25 @@ TEST_CASE("JSON writes compact and pretty layouts")
   "empty": [],
   "none": {},
   "missing": null
-})");
+})";
+        CHECK(json::write(value, json::Layout::pretty) == text0);
+    }
 }
 
 TEST_CASE("JSON writes escapes, and broken UTF-8 as U+FFFD")
 {
-    CHECK(json::write("quote \" backslash \\ newline \n tab \t") == R"("quote \" backslash \\ newline \n tab \t")");
-    CHECK(json::write(std::string("nul \0 unit \x1f", 12)) == R"("nul \u0000 unit \u001f")");
-    CHECK(json::write("/ stays") == R"("/ stays")");
+    {
+        const char* const text0 = R"("quote \" backslash \\ newline \n tab \t")";
+        CHECK(json::write("quote \" backslash \\ newline \n tab \t") == text0);
+    }
+    {
+        const char* const text0 = R"("nul \u0000 unit \u001f")";
+        CHECK(json::write(std::string("nul \0 unit \x1f", 12)) == text0);
+    }
+    {
+        const char* const text0 = R"("/ stays")";
+        CHECK(json::write("/ stays") == text0);
+    }
     CHECK(json::write("caf\xC3\xA9") == "\"caf\xC3\xA9\"");
     CHECK(json::write("bad \xC3 byte") == "\"bad \xEF\xBF\xBD byte\"");
     CHECK(json::write(Object{{"\xFF", 1}}) == "{\"\xEF\xBF\xBD\":1}");
